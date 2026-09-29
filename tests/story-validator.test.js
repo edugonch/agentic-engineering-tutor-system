@@ -102,3 +102,41 @@ test("rejects unbounded or non-numeric WU active-time limits", async () => {
     await rm(root, { recursive: true, force: true })
   }
 })
+
+test("rejects duplicate Epic budget fields even when the first value is valid", async () => {
+  const root = await mkdtemp(join(tmpdir(), "harness-validator-"))
+  try {
+    const duplicates = [
+      ["Maximum WU count", "9".repeat(400)],
+      ["Budget approval status", "REJECTED"],
+      ["Approval reference", "DEC-005 / 2026-09-30"],
+    ]
+    for (const [field, contradictoryValue] of duplicates) {
+      await writeFile(join(root, "E01.md"), `${epic}- ${field}: ${contradictoryValue}\n`)
+      const result = await validateStoryFile(root, "E01.md", "epic")
+      assert.equal(result.status, "FAIL", `duplicate ${field} should be rejected`)
+      assert.ok(result.invalid_fields.some((message) => message.includes(`${field} must appear exactly once`)))
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test("rejects duplicate WU budget fields even when the first value is valid", async () => {
+  const root = await mkdtemp(join(tmpdir(), "harness-validator-"))
+  try {
+    const wu = `## Story and Epic connection\n## Single outcome\nOne coherent, indivisible outcome.\n## Acceptance criteria\nThe user sees the saved result.\n## Boundaries\nOnly this outcome.\n## Dependencies\nnone\nCHILD_WORK_UNITS_ALLOWED: NO\n## Approved execution budget\n- Active-time limit: 90 minutes\n- Approval reference: DEC-004 / 2026-09-29\n## Stop condition\nStop after acceptance.\n`
+    const duplicates = [
+      ["Active-time limit", "unlimited"],
+      ["Approval reference", "DEC-005 / 2026-09-30"],
+    ]
+    for (const [field, contradictoryValue] of duplicates) {
+      await writeFile(join(root, "WU.md"), `${wu}- ${field}: ${contradictoryValue}\n`)
+      const result = await validateStoryFile(root, "WU.md", "wu")
+      assert.equal(result.status, "FAIL", `duplicate ${field} should be rejected`)
+      assert.ok(result.invalid_fields.some((message) => message.includes(`${field} must appear exactly once`)))
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
