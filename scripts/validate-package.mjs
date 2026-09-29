@@ -8,11 +8,16 @@ const checks = [
   "index.js",
   "src/bootstrap-command.js",
   "tests/bootstrap-command.test.js",
+  "tests/agent-readiness.test.js",
+  "tests/global-agent-provisioner.test.js",
   "src/turn-guard.js",
   "src/scaffold.js",
   "src/project-analysis.js",
   "src/project-knowledge.js",
   "src/story-validator.js",
+  "src/agent-readiness.js",
+  "src/activation-gate.js",
+  "src/global-agent-provisioner.js",
   "src/knowledge-search.js",
   "src/decision/contracts.js",
   "src/decision/jev-provider.js",
@@ -91,12 +96,21 @@ if (manifest.main !== "./index.js") errors.push('package.json: plugin installer 
 if (manifest.dependencies?.["@opencode/plugin"] !== "latest") errors.push("package.json: V2 plugin dependency must be @opencode/plugin")
 if (manifest.dependencies?.["@opencode-ai/plugin"] || manifest.peerDependencies?.["@opencode-ai/plugin"]) errors.push("package.json: V1 @opencode-ai/plugin must not be included")
 const readme = await readFile(join(root, "README.md"), "utf8")
-for (const marker of ["opencode plugin add 'github:edugonch/agentic-engineering-tutor-system'", "opencode plugin add 'git+https://github.com/edugonch/agentic-engineering-tutor-system.git#jev-shadow-spike'", "run the plugin command `/harness`", "no manual profile installation"]) {
+for (const marker of ["opencode plugin add 'github:edugonch/agentic-engineering-tutor-system'", "opencode plugin add 'git+https://github.com/edugonch/agentic-engineering-tutor-system.git#jev-shadow-spike'", "run the plugin command `/harness`", "no manual profile-copy step", "global specialist profiles"]) {
   if (!readme.includes(marker)) errors.push(`README.md: missing installer/bootstrap instruction ${marker}`)
 }
 const entry = await readFile(join(root, "index.js"), "utf8")
-for (const marker of ["Plugin.define", 'ctx.session.hook("context"', 'ctx.tool.hook("execute.before"', 'ctx.session.hook("retry"', 'name: "harness_search_knowledge"', 'name: "harness_import_project_knowledge"', 'name: "harness_search_project_knowledge"', 'name: "harness_record_knowledge_artifact"', "registerHarnessCommand(ctx)"]) {
+for (const marker of ["Plugin.define", 'ctx.session.hook("context"', 'ctx.tool.hook("execute.before"', 'ctx.permission.hook("evaluate"', 'ctx.session.hook("retry"', 'name: "harness_search_knowledge"', 'name: "harness_import_project_knowledge"', 'name: "harness_search_project_knowledge"', 'name: "harness_record_knowledge_artifact"', 'name: "harness_check_agent_readiness"', "recordArtifactWithActivationGate(", "registerHarnessCommand(ctx)"]) {
   if (!entry.includes(marker)) errors.push(`index.js: missing V2 runtime contract ${marker}`)
+}
+
+for (const marker of ["provisionGlobalHarnessAgents(", "ctx.agent.reload()", "profile_provisioning"]) {
+  if (!entry.includes(marker)) errors.push(`index.js: missing automatic global agent provisioning ${marker}`)
+}
+
+const bootstrap = await readFile(join(root, "src/bootstrap-command.js"), "utf8")
+for (const marker of ["harness_check_agent_readiness", "do not record an activation decision", "this limits files created in the repository"]) {
+  if (!bootstrap.includes(marker)) errors.push(`bootstrap instructions: missing execution preflight rule ${marker}`)
 }
 
 const modelConfig = await readFile(join(root, "templates/.harness/OPENCODE-CONFIG-FRAGMENT.jsonc"), "utf8")

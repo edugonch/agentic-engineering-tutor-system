@@ -1,8 +1,12 @@
 import { Plugin } from "@opencode/plugin"
+import { fileURLToPath } from "node:url"
 import { applyOutputTokenCap, createTurnGuard, readGuardSettings } from "./src/turn-guard.js"
 import { getProjectStatus, initializeProject } from "./src/scaffold.js"
 import { analyzeExistingProject } from "./src/project-analysis.js"
 import { validateStoryFile } from "./src/story-validator.js"
+import { checkWorkUnitAgentReadiness, guardHarnessSubagentPermission } from "./src/agent-readiness.js"
+import { recordArtifactWithActivationGate } from "./src/activation-gate.js"
+import { provisionGlobalHarnessAgents, resolveOpenCodeConfigDir } from "./src/global-agent-provisioner.js"
 import { searchKnowledge } from "./src/knowledge-search.js"
 import { discoverProjectKnowledge, importProjectKnowledge, readProjectKnowledge, recordKnowledgeArtifact, searchProjectKnowledge } from "./src/project-knowledge.js"
 import { registerHarnessCommand } from "./src/bootstrap-command.js"
@@ -34,6 +38,31 @@ export default Plugin.define({
       if (!projectRoot) throw new Error("OpenCode did not provide this plugin location's canonical project root.")
       return projectRoot
     }
+
+    // AgentEditor can update existing agents but cannot add new definitions.
+    // Keep the Harness roles available by managing their global profile files
+    // as part of plugin load/update, then refresh OpenCode's runtime registry.
+    let agentProvisioning
+    try {
+      agentProvisioning = await provisionGlobalHarnessAgents({
+        packageRoot: fileURLToPath(new URL(".", import.meta.url)),
+        configDir: resolveOpenCodeConfigDir(process.env),
+      })
+      if (agentProvisioning.changed) await ctx.agent.reload()
+    } catch (error) {
+      agentProvisioning = {
+        status: "failed",
+        created: [],
+        updated: [],
+        preserved: [],
+        error: error?.message ?? "Global Harness agent provisioning failed.",
+      }
+    }
+
+    const currentWorkUnitAgentReadiness = async () => ({
+      ...(await checkWorkUnitAgentReadiness(ctx.agent)),
+      profile_provisioning: agentProvisioning,
+    })
 
     // Jev shadow-mode decision experiment. Disabled by default; opt-in via
     // HARNESS_JEV_ENABLED=1 and HARNESS_JEV_API_KEY. Jev estimates are audited
@@ -111,6 +140,13 @@ export default Plugin.define({
         { sessionID: event.sessionID, tool: event.tool },
         { args: event.input },
       )
+    })
+
+    // Enforce the runtime prerequisite at the actual OpenCode permission
+    // boundary too. Prompt instructions and a read-only preflight are not a
+    // delegation guard; an unavailable Harness role must be denied here.
+    await ctx.permission.hook("evaluate", async (event) => {
+      await guardHarnessSubagentPermission(event, ctx.agent)
     })
 
     await ctx.tool.transform((editor) => {
@@ -206,7 +242,7 @@ export default Plugin.define({
 
       editor.add({
         name: "harness_record_knowledge_artifact",
-        description: "After the owner authorizes this artifact write, persist a research record, compendium, synthesis, requirement, specification, user story, Epic, WU, decision, or rule as a new immutable artifact with source/parent references. Epics and WUs are written to .harness/epics/ and .harness/work-units/; other artifacts use the knowledge archive. Safe existing project-relative files are valid source references. Requires explicit provenance; APPROVED status requires owner confirmation, and research evidence cannot itself be marked approved.",
+        description: "After the owner authorizes this artifact write, persist a research record, compendium, synthesis, requirement, specification, user story, Epic, WU, decision, or rule as a new immutable artifact with source/parent references. Epics and WUs are written to .harness/epics/ and .harness/work-units/; other artifacts use the knowledge archive. Safe existing project-relative files are valid source references. Requires explicit provenance; APPROVED status requires owner confirmation, and research evidence cannot itself be marked approved. Approved WU activation decisions are rejected unless harness-builder and harness-reviewer are available in OpenCode's runtime registry.",
         input: objectInput({
           artifact_type: { type: "string", enum: ["raw-research", "research-compendium", "research-synthesis", "requirement", "specification", "user-story", "epic", "work-unit", "decision", "rule"] },
           artifact_id: { type: "string", minLength: 1, maxLength: 181 },
@@ -217,14 +253,33 @@ export default Plugin.define({
           parent_refs: { type: "array", items: { type: "string" }, maxItems: 100 },
           owner_confirmed: { type: "boolean" },
         }, ["artifact_type", "artifact_id", "title", "content", "status", "owner_confirmed"]),
-        execute: async (input) => json(await recordKnowledgeArtifact(requireProjectRoot(), input)),
+        execute: async (input) => json(await recordArtifactWithActivationGate(
+          requireProjectRoot(), input, ctx.agent, recordKnowledgeArtifact,
+        )),
       })
 
       editor.add({
         name: "harness_project_status",
-        description: "Read the current canonical project's Harness scaffold and report missing files, story state, and a conservative next step. Never edits files.",
+        description: "Read the current canonical project's Harness scaffold and check whether the required builder and reviewer are currently loaded by OpenCode. Missing or unknown roles block Work Unit activation and delegation. Never edits files.",
         input: objectInput({}),
-        execute: async () => json(await getProjectStatus(requireProjectRoot())),
+        execute: async () => {
+          const projectStatus = await getProjectStatus(requireProjectRoot())
+          const workUnitAgentReadiness = await currentWorkUnitAgentReadiness()
+          return json({
+            ...projectStatus,
+            work_unit_agent_readiness: workUnitAgentReadiness,
+            next: workUnitAgentReadiness.ready
+              ? projectStatus.next
+              : "Work Unit execution is blocked: review the global profile provisioning result and restore required agent availability before proposing or recording activation. Do not manually copy project profiles or widen the approved project initialization scope.",
+          })
+        },
+      })
+
+      editor.add({
+        name: "harness_check_agent_readiness",
+        description: "Read-only preflight of OpenCode's currently loaded agent registry. Call before proposing/recording Work Unit activation and again before delegation. Requires harness-builder and harness-reviewer to be available as subagents. A blocked or unknown result means do not activate or delegate; a permission hook also denies attempts to launch either role. This tool never installs agents or edits files.",
+        input: objectInput({}),
+        execute: async () => json(await currentWorkUnitAgentReadiness()),
       })
 
       editor.add({

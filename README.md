@@ -9,6 +9,8 @@ The Harness treats the whole project as a continuing story, Epics as finite chap
 This is an early implementation, not a production automation system. Version 0.1 provides:
 
 - OpenCode plugin tools to initialize new or imported projects, inventory existing projects and knowledge archives, preserve local/external research snapshots with provenance, search/read project knowledge selectively, record linked research/spec/story artifacts, validate Epic/WU contracts, and search the packaged reference library.
+- Automatic global provisioning of the four specialist profiles (`harness-builder`, `harness-researcher`, `harness-reviewer`, `harness-designer`) when the plugin loads after install/update. Managed profiles are refreshed on plugin updates only when unchanged; user-owned or customized profiles are preserved. Provisioning changes OpenCode's global `agents/` directory, not project files.
+- A read-only runtime preflight that checks `harness-builder` and `harness-reviewer` are loaded as subagents before activation. The plugin also hard-gates approved activation records and denies actual launches of those Harness roles through OpenCode's permission hook when readiness is missing or unknown.
 - OpenCode-native orchestrator, builder, researcher, designer, and reviewer profiles, installed into the target project on explicit initialization. The designer is selected only for user-facing UI work within an activated WU.
 - OpenCode-native skills for new-project intake, existing-project import, architecture decisions, story/Epic design, bounded research, and WU authoring.
 - A bounded, read-only existing-project inventory that helps the orchestrator find current project markers and likely governance sources before it proposes a migration.
@@ -19,17 +21,17 @@ This is an early implementation, not a production automation system. Version 0.1
 
 It does not publish to npm, create GitHub issues, create branches, commit, merge, or deploy. Human ownership and merge policy remain project decisions. No Claude Code files or integrations are included.
 
-The harness_validate_story tool checks contract structure separately from permission to execute. A well-formed DRAFT / NON-EXECUTABLE Epic or WU may return PASS_WITH_WARNINGS while activation_ready remains false and activation_blockers lists missing owner approvals or execution budgets. A non-draft WU with an unbounded or unapproved execution budget still fails validation.
+The `harness_validate_story` tool checks contract structure separately from permission to execute. A well-formed DRAFT / NON-EXECUTABLE Epic or WU may return PASS_WITH_WARNINGS while `activation_ready` remains false and `activation_blockers` lists missing owner approvals or execution budgets. A non-draft WU with an unbounded or unapproved execution budget still fails validation. Separately, `harness_check_agent_readiness` inspects OpenCode's loaded runtime registry; missing or unknown builder/reviewer roles block activation and delegation. A file on disk alone does not prove that OpenCode loaded the role. The artifact writer also refuses to record an approved WU activation decision while the runtime role preflight is blocked.
 
 ## Install with OpenCode's plugin installer
 
-Install the plugin through OpenCode, without adding local plugin paths or copying agent profiles by hand:
+Install the plugin through OpenCode. On the next server load, the plugin provisions its global specialist agents; there is no manual profile-copy step:
 
 ```sh
 opencode plugin add 'github:edugonch/agentic-engineering-tutor-system'
 ```
 
-Restart OpenCode after installation. To test the unmerged Jev spike branch with the same plugin installer:
+The plugin provisions or updates its global specialist profiles when its setup runs. After an update, restart or reload the OpenCode server if it has not reloaded the package. To test the unmerged Jev spike branch with the same plugin installer:
 
 ```sh
 opencode plugin add 'git+https://github.com/edugonch/agentic-engineering-tutor-system.git#jev-shadow-spike'
@@ -39,11 +41,12 @@ Confirm the package appears with `opencode plugin list`. If it does not, inspect
 
 ## Start a new project
 
-1. Start OpenCode in the project and run the plugin command `/harness` with the project idea. This command starts intake before any Harness agent profiles exist; it is registered by the plugin and requires no manual profile installation.
+1. Start OpenCode in the project and run the plugin command `/harness` with the project idea. The plugin command and global Harness specialists are registered by the plugin; no project-local agent installation is needed for governance-only projects.
 2. The orchestrator conducts adaptive intake about the problem, intended outcome, MVP, constraints, users, and success evidence.
 3. Review the proposed project story and charter. The plugin must not initialize files until you approve the summary.
-4. After approval, the orchestrator calls `harness_initialize_project` with `project_type: new` and `owner_confirmed: true`. The default `initialization_scope: full` creates the complete scaffold, only where files are missing. If the owner authorized project governance but not supporting roles, use `initialization_scope: governance_only`; this creates only the project story, charter, state, and Epic/Work Unit indexes and templates, without agents, skills, engineering references, or OpenCode configuration.
-5. Restart OpenCode or start a new session, select `harness-orchestrator`, and review the generated governance. Then define a finite first Epic with an owner-approved WU count and terminal demo/acceptance condition.
+4. After approval, the orchestrator calls `harness_initialize_project` with `project_type: new` and `owner_confirmed: true`. The default `initialization_scope: full` creates the complete project-local scaffold, only where files are missing. If the owner authorized project governance but not project-local supporting files, use `initialization_scope: governance_only`; the plugin's global specialists remain available independently.
+5. Restart OpenCode or start a new session, select `harness-orchestrator`, and review the generated governance. Before asking to activate a WU, run `harness_check_agent_readiness`. If a required specialist is still absent or the runtime inventory is unknown, keep the WU unactivated and report the provisioning error. Recheck immediately before delegation.
+6. Define a finite first Epic with an owner-approved WU count and terminal demo/acceptance condition.
 
 ## Bring an existing project under governance
 
