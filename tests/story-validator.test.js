@@ -36,7 +36,7 @@ test("rejects an Epic with a placeholder budget, missing closure evidence, or mo
     await writeFile(join(root, "E01.md"), epic.replace("Maximum WU count: 3", "Maximum WU count: [OWNER-APPROVED INTEGER]"))
     const placeholderResult = await validateStoryFile(root, "E01.md", "epic")
     assert.equal(placeholderResult.status, "FAIL")
-    assert.ok(placeholderResult.invalid_fields.some((field) => field.includes("positive integer")))
+    assert.ok(placeholderResult.invalid_fields.some((field) => field.includes("positive safe integer")))
   } finally {
     await rm(root, { recursive: true, force: true })
   }
@@ -70,4 +70,35 @@ test("reports missing WU atomicity and recursively generated work", async () => 
 
 test("rejects document paths outside the project", async () => {
   await assert.rejects(() => validateStoryFile("/tmp/project", "../secret.md", "epic"), /escapes the project root/)
+})
+
+test("rejects Epic WU budgets that exceed JavaScript's safe integer range", async () => {
+  const root = await mkdtemp(join(tmpdir(), "harness-validator-"))
+  try {
+    await writeFile(join(root, "E01.md"), epic.replace("Maximum WU count: 3", `Maximum WU count: ${"9".repeat(400)}`))
+    const result = await validateStoryFile(root, "E01.md", "epic")
+    assert.equal(result.status, "FAIL")
+    assert.ok(result.invalid_fields.some((field) => field.includes("positive safe integer")))
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test("rejects unbounded or non-numeric WU active-time limits", async () => {
+  const root = await mkdtemp(join(tmpdir(), "harness-validator-"))
+  try {
+    const wu = `## Story and Epic connection\n## Single outcome\nOne coherent, indivisible outcome.\n## Acceptance criteria\nThe user sees the saved result.\n## Boundaries\nOnly this outcome.\n## Dependencies\nnone\nCHILD_WORK_UNITS_ALLOWED: NO\n## Approved execution budget\n- Active-time limit: 90 minutes\n- Approval reference: DEC-004 / 2026-09-29\n## Stop condition\nStop after acceptance.\n`
+    for (const duration of ["forever", "unlimited", "1e999 hours", "0 minutes"]) {
+      await writeFile(join(root, "WU.md"), wu.replace("90 minutes", duration))
+      const result = await validateStoryFile(root, "WU.md", "wu")
+      assert.equal(result.status, "FAIL", `${duration} should be rejected`)
+      assert.ok(result.invalid_fields.some((field) => field.includes("finite positive active-time limit")))
+    }
+
+    await writeFile(join(root, "WU.md"), wu)
+    const validResult = await validateStoryFile(root, "WU.md", "wu")
+    assert.equal(validResult.status, "PASS")
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
 })
