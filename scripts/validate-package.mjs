@@ -6,6 +6,8 @@ const root = new URL("../", import.meta.url).pathname
 const errors = []
 const checks = [
   "index.js",
+  "src/bootstrap-command.js",
+  "tests/bootstrap-command.test.js",
   "src/turn-guard.js",
   "src/scaffold.js",
   "src/project-analysis.js",
@@ -74,10 +76,11 @@ for (const path of await filesIn("templates/.opencode/agents")) {
 }
 
 const manifest = JSON.parse(await readFile(join(root, "package.json"), "utf8"))
+if (manifest.main !== "./index.js") errors.push('package.json: plugin installer entry point must be "./index.js"')
 if (manifest.dependencies?.["@opencode/plugin"] !== "latest") errors.push("package.json: V2 plugin dependency must be @opencode/plugin")
 if (manifest.dependencies?.["@opencode-ai/plugin"] || manifest.peerDependencies?.["@opencode-ai/plugin"]) errors.push("package.json: V1 @opencode-ai/plugin must not be included")
 const entry = await readFile(join(root, "index.js"), "utf8")
-for (const marker of ["Plugin.define", 'ctx.session.hook("context"', 'ctx.tool.hook("execute.before"', 'ctx.session.hook("retry"', 'name: "harness_search_knowledge"']) {
+for (const marker of ["Plugin.define", 'ctx.session.hook("context"', 'ctx.tool.hook("execute.before"', 'ctx.session.hook("retry"', 'name: "harness_search_knowledge"', "registerHarnessCommand(ctx)"]) {
   if (!entry.includes(marker)) errors.push(`index.js: missing V2 runtime contract ${marker}`)
 }
 
