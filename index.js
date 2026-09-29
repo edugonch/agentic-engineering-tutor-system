@@ -156,19 +156,23 @@ export default Plugin.define({
 
       editor.add({
         name: "harness_import_project_knowledge",
-        description: "After explicit owner approval, archive discovered local project knowledge and exact-revision external source snapshots (such as Google Drive documents retrieved through the project's required One CLI/MCP route). Preserves bytes, hashes, IDs, revisions, retrieval time, classifications, declared authority, and relationships. Snapshots are unverified references and do not replace live authority.",
+        description: "After explicit owner approval, archive discovered local project knowledge, transfer an existing Harness knowledge archive from another local project, and import exact-revision external source snapshots. Preserves bytes, hashes, IDs, revisions, retrieval time, classifications, declared authority, and remapped relationships. Snapshots are unverified references and do not replace live authority.",
         input: objectInput({
           owner_confirmed: { type: "boolean" },
+          source_project_root: { type: "string", minLength: 1 },
+          source_project_id: { type: "string", minLength: 1, maxLength: 181 },
           external_sources: {
             type: "array", maxItems: 20,
             items: objectInput({
               source_id: { type: "string", minLength: 1, maxLength: 181 },
+              source_record_key: { type: "string", minLength: 1, maxLength: 181 },
               title: { type: "string", minLength: 1 },
               source_system: { type: "string", enum: ["google-drive", "github", "other"] },
               source_ref: { type: "string", minLength: 1 },
               source_revision: { type: "string", minLength: 1 },
               retrieved_at: { type: "string" },
               classification: { type: "string", enum: ["PROJECT_STATE", "GOVERNANCE_RULE", "APPROVED_DECISION", "REQUIREMENT", "SPECIFICATION", "EPIC", "USER_STORY", "WORK_UNIT", "RAW_RESEARCH", "RESEARCH_COMPENDIUM", "RESEARCH_SYNTHESIS", "DESIGN_HANDOFF", "REFERENCE", "OTHER"] },
+              disposition: { type: "string", enum: ["UNASSESSED", "APPLIED", "NOT_APPLIED", "TANGENTIAL", "DISCARDED", "DEFERRED", "SUPERSEDED"] },
               declared_authority: { type: "string", enum: ["CANONICAL", "APPROVED", "DERIVED", "RAW", "HISTORICAL", "UNKNOWN"] },
               content: { type: "string", minLength: 1, maxLength: 1048576 },
               related_sources: { type: "array", items: { type: "string" }, maxItems: 100 },
@@ -180,7 +184,7 @@ export default Plugin.define({
 
       editor.add({
         name: "harness_search_project_knowledge",
-        description: "Search the project's imported research and governance snapshots on demand. Returns short excerpts with source ID, exact revision, authority declaration, hash, and relationships. Search is a navigation aid; verify current authority before relying on a result.",
+        description: "Search the project's imported research and governance snapshots on demand. Returns short excerpts with source ID, exact revision, authority declaration, hash, resolved relationships, and unresolved source references. Search is a navigation aid; verify current authority before relying on a result.",
         input: objectInput({
           query: { type: "string", minLength: 3, maxLength: 500 },
           max_results: { type: "integer", minimum: 1, maximum: 10, default: 5 },

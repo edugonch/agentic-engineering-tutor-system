@@ -1,8 +1,10 @@
-import { createHash } from "node:crypto"
-import { copyFile, lstat, mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises"
-import { dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path"
+import { createHash, randomUUID } from "node:crypto"
+import { lstat, mkdir, open, readFile, readdir, rename, unlink, writeFile } from "node:fs/promises"
+import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path"
 
 const INDEX_PATH = ".harness/knowledge/index.json"
+const INDEX_LOCK_PATH = ".harness/knowledge/index.lock"
+const INDEX_LOCK_TIMEOUT_MS = 15000
 const MAX_SCAN_DEPTH = 10
 const MAX_SCANNED_FILES = 12000
 const MAX_IMPORTED_FILES = 3000
@@ -33,6 +35,7 @@ const CLASSIFICATIONS = new Set([
   "DESIGN_HANDOFF", "REFERENCE", "OTHER",
 ])
 const DECLARED_AUTHORITIES = new Set(["CANONICAL", "APPROVED", "DERIVED", "RAW", "HISTORICAL", "UNKNOWN"])
+const KNOWLEDGE_DISPOSITIONS = new Set(["UNASSESSED", "APPLIED", "NOT_APPLIED", "TANGENTIAL", "DISCARDED", "DEFERRED", "SUPERSEDED"])
 const ARTIFACT_TYPES = new Set([
   "raw-research", "research-compendium", "research-synthesis", "requirement", "specification",
   "user-story", "epic", "work-unit", "decision", "rule",
@@ -157,7 +160,9 @@ async function readIndex(root) {
 }
 
 function sourceKey(record) {
-  return record.record_key ?? sha256(JSON.stringify([record.source_system, record.source_id, record.source_revision]))
+  if (record.record_key) return record.record_key
+  const identity = [record.source_system, record.source_id, record.source_revision]
+  return sha256(JSON.stringify(record.origin_project_id ? [record.origin_project_id, ...identity] : identity))
 }
 
 function withRecordKey(record) {
@@ -169,24 +174,30 @@ function archiveRelativePath(record) {
     const cleanPath = record.source_ref.split("/").map((part) => part.replace(/[^A-Za-z0-9._-]/g, "_")).join("/")
     const extension = extname(cleanPath)
     const base = extension ? cleanPath.slice(0, -extension.length) : cleanPath
-    const pathKey = sha256(record.source_ref).slice(0, 8)
+    const pathKey = sha256(`${record.origin_project_id ?? ""}\0${record.source_ref}`).slice(0, 8)
     const revisionKey = record.sha256.slice(0, 16)
     return `.harness/knowledge/snapshots/local/${base}.${pathKey}.rev-${revisionKey}${extension}`
   }
-  const key = sha256(`${record.source_system}\0${record.source_ref}\0${record.source_revision}`).slice(0, 20)
+  const key = sha256(`${record.origin_project_id ?? ""}\0${record.source_system}\0${record.source_ref}\0${record.source_revision}`).slice(0, 20)
   return `.harness/knowledge/snapshots/external/${key}.md`
 }
 
 function metadataFromText(text) {
   const title = text.match(/^\s*#\s+(.+?)\s*$/m)?.[1]?.trim()
   const status = text.match(/^\s*(?:status|approval status|state):\s*(.+?)\s*$/im)?.[1]?.trim()
-  const references = [...text.matchAll(/(?:https?:\/\/[^\s)\]>"']+|(?:SRC|ADR|REQ|DEC|WU|E\d{2})[-_:][A-Za-z0-9._-]+)/g)]
+  const disposition = text.match(/^\s*(?:disposition|application status):\s*(.+?)\s*$/im)?.[1]?.trim()?.toUpperCase().replace(/[ -]+/g, "_")
+  const urlAndIdReferences = [...text.matchAll(/(?:https?:\/\/[^\s)\]>"']+|\b[A-Z][A-Z0-9]{1,20}[-_:][A-Za-z0-9][A-Za-z0-9._-]*)/g)]
     .map((match) => match[0].replace(/[.,;]+$/, ""))
-  return { declared_title: title, declared_status: status, embedded_references: [...new Set(references)].slice(0, 100) }
+  const markdownPathReferences = [...text.matchAll(/\[[^\]]+\]\(([^)]+)\)/g)]
+    .map((match) => match[1].trim().replace(/^<|>$/g, "").split(/\s+['"]?/)[0])
+    .filter((reference) => reference && !/^(?:https?:|mailto:|#)/i.test(reference))
+  const references = [...new Set([...urlAndIdReferences, ...markdownPathReferences])]
+  return { declared_title: title, declared_status: status, declared_disposition: disposition, embedded_references: references.slice(0, 100) }
 }
 
 function validateExternalSource(source, index) {
   if (!safeId(source.source_id)) throw new Error(`external_sources[${index}].source_id must be a stable ID using letters, numbers, dot, underscore, colon, or hyphen.`)
+  if (source.source_record_key !== undefined && !safeId(source.source_record_key)) throw new Error(`external_sources[${index}].source_record_key must be an exact source-project record key.`)
   if (!String(source.title ?? "").trim() || String(source.title).length > 1000) throw new Error(`external_sources[${index}].title is required and must be at most 1000 characters.`)
   if (!new Set(["google-drive", "github", "other"]).has(source.source_system)) throw new Error(`external_sources[${index}].source_system is invalid.`)
   if (!String(source.source_ref ?? "").trim() || String(source.source_ref).length > 4000 || !String(source.source_revision ?? "").trim() || String(source.source_revision).length > 300) {
@@ -194,6 +205,7 @@ function validateExternalSource(source, index) {
   }
   if (!CLASSIFICATIONS.has(source.classification)) throw new Error(`external_sources[${index}].classification is invalid.`)
   if (!DECLARED_AUTHORITIES.has(source.declared_authority)) throw new Error(`external_sources[${index}].declared_authority is invalid.`)
+  if (source.disposition !== undefined && !KNOWLEDGE_DISPOSITIONS.has(source.disposition)) throw new Error(`external_sources[${index}].disposition is invalid.`)
   if (!String(source.content ?? "").trim()) throw new Error(`external_sources[${index}].content is empty.`)
   if (Buffer.byteLength(source.content, "utf8") > MAX_EXTERNAL_SOURCE_BYTES) throw new Error(`external_sources[${index}] exceeds the 1 MiB per-source limit; split it into clearly linked source sections.`)
   if (!Array.isArray(source.related_sources ?? [])) throw new Error(`external_sources[${index}].related_sources must be an array.`)
@@ -202,10 +214,16 @@ function validateExternalSource(source, index) {
 
 export async function importProjectKnowledge(projectRoot, input) {
   if (!input?.owner_confirmed) throw new Error("Knowledge import stopped: explicit owner confirmation is required before files are written.")
-  const root = await import("node:fs/promises").then(({ realpath }) => realpath(assertRoot(projectRoot)))
-  const discovered = await walkKnowledgeFiles(root)
+  const { realpath } = await import("node:fs/promises")
+  const root = await realpath(assertRoot(projectRoot))
+  const sourceRoot = input.source_project_root ? await realpath(assertRoot(input.source_project_root)) : root
+  const crossProject = sourceRoot !== root
+  const sourceProjectId = crossProject ? String(input.source_project_id ?? "") : undefined
+  if (crossProject && !safeId(sourceProjectId)) throw new Error("Cross-project import needs a stable source_project_id using letters, numbers, dot, underscore, colon, or hyphen.")
+  const discovered = await walkKnowledgeFiles(sourceRoot)
   if (discovered.truncated) throw new Error("Knowledge import stopped because the source scan exceeded its safety limit. Narrow the source set or raise the limit in a reviewed change.")
   if (discovered.files.length > MAX_IMPORTED_FILES) throw new Error(`Knowledge import stopped: found ${discovered.files.length} documents, above the ${MAX_IMPORTED_FILES}-document review limit.`)
+  const sourceIndex = crossProject ? await readIndex(sourceRoot) : { records: [] }
   const external = input.external_sources ?? []
   if (!Array.isArray(external) || external.length > 20) throw new Error("Provide at most 20 external sources per import batch.")
   external.forEach(validateExternalSource)
@@ -213,59 +231,96 @@ export async function importProjectKnowledge(projectRoot, input) {
   const plans = []
   let totalBytes = 0
   for (const candidate of discovered.files) {
-    const sourcePath = resolve(root, candidate.path)
-    if (!inside(root, sourcePath)) throw new Error(`Knowledge source escaped the project root: ${candidate.path}`)
+    const sourcePath = resolve(sourceRoot, candidate.path)
+    if (!inside(sourceRoot, sourcePath)) throw new Error(`Knowledge source escaped the project root: ${candidate.path}`)
     const info = await lstat(sourcePath)
     if (!info.isFile() || info.isSymbolicLink()) continue
     if (info.size > MAX_SINGLE_FILE_BYTES) throw new Error(`Knowledge import stopped: ${candidate.path} is larger than the ${MAX_SINGLE_FILE_BYTES}-byte per-file limit.`)
+    const sourceBytes = await readFile(sourcePath)
+    const checksum = sha256(sourceBytes)
+    if (sourceIndex.records.some((record) => record.source_system === "filesystem" && record.source_ref === candidate.path && record.sha256 === checksum)) continue
     totalBytes += info.size
-    const checksum = sha256(await readFile(sourcePath))
+    const metadata = TEXT_EXTENSIONS.has(extname(candidate.path).toLowerCase()) && info.size <= 2 * 1024 * 1024
+      ? metadataFromText(sourceBytes.toString("utf8"))
+      : { embedded_references: [] }
     const record = {
-      source_id: `local-${sha256(candidate.path).slice(0, 20)}`,
+      source_id: `local-${sha256(`${sourceProjectId ?? ""}\0${candidate.path}`).slice(0, 20)}`,
       source_system: "filesystem",
       source_ref: candidate.path,
+      ...(crossProject ? { origin_project_id: sourceProjectId } : {}),
       source_revision: checksum,
       retrieved_at: new Date().toISOString(),
       classification: candidate.classification,
+      disposition: KNOWLEDGE_DISPOSITIONS.has(metadata.declared_disposition) ? metadata.declared_disposition : "UNASSESSED",
       declared_authority: "UNKNOWN",
       import_status: "SNAPSHOT_UNVERIFIED",
       sha256: checksum,
       byte_size: info.size,
       media_type: TEXT_EXTENSIONS.has(extname(candidate.path).toLowerCase()) ? "text" : "binary-preserved",
-      relationships: [],
+      relationships: metadata.embedded_references,
+      source_relationships: metadata.embedded_references,
       original_modified_at: info.mtime.toISOString(),
     }
-    if (record.media_type === "text" && info.size <= 2 * 1024 * 1024) {
-      Object.assign(record, metadataFromText(await readFile(sourcePath, "utf8")))
+    if (record.media_type === "text" && info.size <= 2 * 1024 * 1024) Object.assign(record, metadata)
+    record.archive_path = archiveRelativePath(record)
+    plans.push({ record: withRecordKey(record), bytes: sourceBytes, kind: "write" })
+  }
+
+  for (const sourceRecord of sourceIndex.records) {
+    const sourceArchive = resolve(sourceRoot, sourceRecord.archive_path)
+    if (!inside(sourceRoot, sourceArchive)) throw new Error(`Indexed knowledge source escaped its project: ${sourceRecord.archive_path}`)
+    await ensureSafeParents(sourceRoot, sourceArchive)
+    const info = await lstat(sourceArchive)
+    if (!info.isFile() || info.isSymbolicLink()) throw new Error(`Indexed knowledge snapshot is not a regular file: ${sourceRecord.archive_path}`)
+    if (info.size > MAX_SINGLE_FILE_BYTES) throw new Error(`Indexed knowledge snapshot exceeds the ${MAX_SINGLE_FILE_BYTES}-byte per-file limit.`)
+    const bytes = await readFile(sourceArchive)
+    if (sha256(bytes) !== sourceRecord.sha256) throw new Error(`Indexed knowledge snapshot failed hash verification: ${sourceRecord.source_ref}`)
+    totalBytes += bytes.byteLength
+    const { record_key: sourceRecordKey, archive_path: _sourceArchivePath, ...sourceMetadata } = sourceRecord
+    const record = {
+      ...sourceMetadata,
+      ...(sourceRecord.origin_project_id ? { upstream_origin_project_id: sourceRecord.origin_project_id } : {}),
+      ...(sourceRecord.source_record_key ? { upstream_source_record_key: sourceRecord.source_record_key } : {}),
+      origin_project_id: sourceProjectId,
+      source_record_key: sourceRecordKey,
+      source_relationships: sourceRecord.source_relationships ?? sourceRecord.relationships ?? [],
+      retrieved_at: new Date().toISOString(),
+      import_status: "SNAPSHOT_UNVERIFIED",
+      relationships: sourceRecord.source_relationships ?? sourceRecord.relationships ?? [],
     }
     record.archive_path = archiveRelativePath(record)
-    plans.push({ record: withRecordKey(record), sourcePath, kind: "copy" })
+    plans.push({ record: withRecordKey(record), bytes, kind: "write" })
   }
 
   for (const source of external) {
     const bytes = Buffer.from(source.content, "utf8")
     totalBytes += bytes.byteLength
+    const metadata = metadataFromText(source.content)
     const record = {
       source_id: source.source_id,
       source_system: source.source_system,
       source_ref: String(source.source_ref),
+      ...(source.source_record_key ? { source_record_key: String(source.source_record_key) } : {}),
       source_revision: String(source.source_revision),
       retrieved_at: source.retrieved_at || new Date().toISOString(),
       classification: source.classification,
+      disposition: source.disposition ?? (KNOWLEDGE_DISPOSITIONS.has(metadata.declared_disposition) ? metadata.declared_disposition : "UNASSESSED"),
       declared_authority: source.declared_authority,
       import_status: "SNAPSHOT_UNVERIFIED",
       sha256: sha256(bytes),
       byte_size: bytes.byteLength,
       media_type: "retrieved-text",
       relationships: [...new Set(source.related_sources ?? [])],
+      source_relationships: [...new Set(source.related_sources ?? [])],
+      ...metadata,
       declared_title: String(source.title),
-      ...metadataFromText(source.content),
     }
     record.archive_path = archiveRelativePath(record)
     plans.push({ record: withRecordKey(record), bytes, kind: "write" })
   }
   if (totalBytes > MAX_IMPORTED_BYTES) throw new Error(`Knowledge import stopped: the ${totalBytes}-byte archive exceeds the ${MAX_IMPORTED_BYTES}-byte batch limit.`)
 
+  return withKnowledgeIndexLock(root, async () => {
   const index = await readIndex(root)
   const existing = new Map(index.records.map((record) => [sourceKey(record), record]))
   const accepted = []
@@ -292,38 +347,77 @@ export async function importProjectKnowledge(projectRoot, input) {
   }
   if (conflicts.length) throw new Error(`Knowledge import stopped before writing: source IDs/revisions or archive paths conflict: ${[...new Set(conflicts)].join(", ")}. Preserve each version with an exact distinct source_revision.`)
 
+  const newRecords = accepted.map((plan) => plan.record)
+  const allRecords = [...index.records, ...newRecords]
+  const aliases = new Map()
+  const addAlias = (value, record) => {
+    const alias = String(value ?? "").trim()
+    if (!alias) return
+    if (!aliases.has(alias)) aliases.set(alias, new Set())
+    aliases.get(alias).add(record)
+  }
+  for (const record of allRecords) {
+    const sourceName = basename(String(record.source_ref ?? ""))
+    for (const alias of [
+      record.record_key,
+      record.source_record_key,
+      record.source_id,
+      `${record.source_id}@${record.source_revision}`,
+      record.source_ref,
+      sourceName,
+      sourceName.replace(/\.[^.]+$/, ""),
+      record.declared_title,
+    ]) addAlias(alias, record)
+  }
+  const resolveRelationship = (reference) => {
+    const ref = String(reference ?? "").trim()
+    const withoutAnchor = ref.split("#", 1)[0]
+    const fileName = basename(withoutAnchor)
+    const candidates = new Set()
+    for (const alias of [ref, withoutAnchor, fileName, fileName.replace(/\.[^.]+$/, "")]) {
+      for (const match of aliases.get(alias) ?? []) candidates.add(match)
+    }
+    return candidates.size === 1 ? [...candidates][0] : undefined
+  }
+  const indexedRecords = [...index.records, ...newRecords]
+  for (const record of indexedRecords) {
+    const sourceRelationships = [...new Set(record.source_relationships ?? record.relationships ?? [])]
+    const relationships = []
+    const unresolved = []
+    for (const ref of sourceRelationships) {
+      const target = resolveRelationship(ref)
+      if (target) relationships.push(target.record_key)
+      else {
+        relationships.push(ref)
+        unresolved.push(ref)
+      }
+    }
+    record.source_relationships = sourceRelationships
+    record.relationships = [...new Set(relationships)]
+    record.unresolved_relationships = [...new Set(unresolved)]
+  }
+
   for (const plan of accepted) {
     const destination = resolve(root, plan.record.archive_path)
     if (!inside(root, destination)) throw new Error(`Knowledge archive path escaped the project root: ${plan.record.archive_path}`)
     await ensureSafeParents(root, destination)
     await mkdir(dirname(destination), { recursive: true })
-    if (plan.kind === "copy") {
-      try { await copyFile(plan.sourcePath, destination, 1) } catch (error) {
-        if (error.code !== "EEXIST") throw error
-        const destInfo = await lstat(destination)
-        if (!destInfo.isFile() || destInfo.isSymbolicLink()) throw new Error(`Refusing to read a non-regular archive destination: ${plan.record.archive_path}`)
-        const priorHash = sha256(await readFile(destination))
-        if (priorHash !== plan.record.sha256) throw new Error(`Archive path already contains different content: ${plan.record.archive_path}`)
-      }
-      if (sha256(await readFile(destination)) !== plan.record.sha256) throw new Error(`Source changed during import; snapshot verification failed: ${plan.record.source_ref}`)
-    } else {
-      try { await writeFile(destination, plan.bytes, { flag: "wx" }) } catch (error) {
-        if (error.code !== "EEXIST") throw error
-        const destInfo = await lstat(destination)
-        if (!destInfo.isFile() || destInfo.isSymbolicLink()) throw new Error(`Refusing to read a non-regular archive destination: ${plan.record.archive_path}`)
-        const priorHash = sha256(await readFile(destination))
-        if (priorHash !== plan.record.sha256) throw new Error(`Archive path already contains different content: ${plan.record.archive_path}`)
-      }
+    try { await writeFile(destination, plan.bytes, { flag: "wx" }) } catch (error) {
+      if (error.code !== "EEXIST") throw error
+      const destInfo = await lstat(destination)
+      if (!destInfo.isFile() || destInfo.isSymbolicLink()) throw new Error(`Refusing to read a non-regular archive destination: ${plan.record.archive_path}`)
+      const priorHash = sha256(await readFile(destination))
+      if (priorHash !== plan.record.sha256) throw new Error(`Archive path already contains different content: ${plan.record.archive_path}`)
     }
+    if (sha256(await readFile(destination)) !== plan.record.sha256) throw new Error(`Snapshot verification failed during import: ${plan.record.source_ref}`)
   }
 
-  const newRecords = accepted.map((plan) => plan.record)
   const nextIndex = {
     schema_version: 1,
     project: root.split(sep).at(-1),
     updated_at: new Date().toISOString(),
     authority_rule: "Imported material is an immutable snapshot. The archive preserves declared authority and source revision but does not promote a source or replace live project authority.",
-    records: [...index.records, ...newRecords].sort((a, b) => sourceKey(a).localeCompare(sourceKey(b))),
+    records: indexedRecords.sort((a, b) => sourceKey(a).localeCompare(sourceKey(b))),
   }
   const indexFile = join(root, INDEX_PATH)
   await ensureSafeParents(root, indexFile)
@@ -340,11 +434,13 @@ export async function importProjectKnowledge(projectRoot, input) {
     unchanged: plans.length - newRecords.length,
     index_path: INDEX_PATH,
     total_bytes: totalBytes,
-    records: newRecords.map(({ record_key, source_id, source_system, source_revision, classification, declared_authority, archive_path, sha256: digest, byte_size }) => ({
-      record_key, source_id, source_system, source_revision, classification, declared_authority, import_status: "SNAPSHOT_UNVERIFIED", archive_path, sha256: digest, byte_size,
+    ...(crossProject ? { source_project_id: sourceProjectId } : {}),
+    records: newRecords.map(({ record_key, source_record_key, origin_project_id, source_id, source_system, source_revision, classification, declared_authority, archive_path, sha256: digest, byte_size }) => ({
+      record_key, source_record_key, origin_project_id, source_id, source_system, source_revision, classification, declared_authority, import_status: "SNAPSHOT_UNVERIFIED", archive_path, sha256: digest, byte_size,
     })),
     next: "Review the complete index, confirm canonical IDs/revisions against each source registry or authority, and keep the snapshots as reference until a separate owner-approved mapping assigns their role.",
   }
+  })
 }
 
 async function ensureSafeParents(root, destination) {
@@ -357,6 +453,53 @@ async function ensureSafeParents(root, destination) {
       const info = await lstat(cursor)
       if (info.isSymbolicLink()) throw new Error(`Refusing to write through a symlinked directory: ${relative(root, cursor)}`)
       if (!info.isDirectory()) throw new Error(`Expected a directory at ${relative(root, cursor)}`)
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error
+    }
+  }
+}
+
+async function withKnowledgeIndexLock(root, operation) {
+  const lockPath = join(root, INDEX_LOCK_PATH)
+  await ensureSafeParents(root, lockPath)
+  await mkdir(dirname(lockPath), { recursive: true })
+  const token = randomUUID()
+  const deadline = Date.now() + INDEX_LOCK_TIMEOUT_MS
+
+  while (true) {
+    try {
+      const handle = await open(lockPath, "wx", 0o600)
+      try { await handle.writeFile(JSON.stringify({ pid: process.pid, token, created_at: new Date().toISOString() })) }
+      finally { await handle.close() }
+      break
+    } catch (error) {
+      if (error.code !== "EEXIST") throw error
+      let stale = false
+      try {
+        const info = await lstat(lockPath)
+        if (!info.isFile() || info.isSymbolicLink()) throw new Error("Refusing to use an unsafe project knowledge lock.")
+        let owner
+        try { owner = JSON.parse(await readFile(lockPath, "utf8")) } catch {}
+        const age = Date.now() - info.mtimeMs
+        if (!Number.isInteger(owner?.pid)) stale = age > 5000
+        else {
+          try { process.kill(owner.pid, 0) }
+          catch (probeError) { if (probeError.code === "ESRCH") stale = true }
+        }
+        if (stale) await unlink(lockPath)
+      } catch (lockError) {
+        if (lockError.code !== "ENOENT") throw lockError
+      }
+      if (Date.now() >= deadline) throw new Error("Project knowledge index is busy in another session; retry after that write completes.")
+      await new Promise((resolveDelay) => setTimeout(resolveDelay, stale ? 0 : 30 + Math.floor(Math.random() * 40)))
+    }
+  }
+
+  try { return await operation() }
+  finally {
+    try {
+      const owner = JSON.parse(await readFile(lockPath, "utf8"))
+      if (owner.token === token) await unlink(lockPath)
     } catch (error) {
       if (error.code !== "ENOENT") throw error
     }
@@ -403,12 +546,14 @@ export async function searchProjectKnowledge(projectRoot, query, maxResults = 5)
         source_system: record.source_system,
         source_revision: record.source_revision,
         classification: record.classification,
+        disposition: record.disposition ?? "UNASSESSED",
         declared_authority: record.declared_authority,
         import_status: record.import_status,
         source_ref: record.source_ref,
         archive_path: record.archive_path,
         sha256: record.sha256,
         related_sources: record.relationships,
+        unresolved_relationships: record.unresolved_relationships ?? [],
         relevance: score,
         excerpt,
       })),
@@ -474,6 +619,7 @@ export async function recordKnowledgeArtifact(projectRoot, input) {
   if (["raw-research", "research-compendium", "research-synthesis"].includes(input.artifact_type) && input.status === "APPROVED") {
     throw new Error("Research evidence remains RAW or PROPOSED; record the owner-approved consequence as a separate decision, requirement, or rule.")
   }
+  return withKnowledgeIndexLock(root, async () => {
   const index = await readIndex(root)
   const resolveReferences = (ref) => index.records.filter((record) => record.record_key === ref || record.source_id === ref || record.source_ref === ref || `${record.source_id}@${record.source_revision}` === ref)
   if (input.artifact_type === "user-story") {
@@ -528,6 +674,8 @@ export async function recordKnowledgeArtifact(projectRoot, input) {
     byte_size: Buffer.byteLength(envelope, "utf8"),
     media_type: "text",
     relationships: [...new Set([...sourceRefs, ...parentRefs])],
+    source_relationships: [...new Set([...sourceRefs, ...parentRefs])],
+    unresolved_relationships: [],
     archive_path: path,
     declared_title: String(input.title).trim(),
   })
@@ -541,4 +689,5 @@ export async function recordKnowledgeArtifact(projectRoot, input) {
   await writeFile(tempIndex, `${JSON.stringify(index, null, 2)}\n`, { flag: "wx" })
   await rename(tempIndex, indexPath)
   return { status: "RECORDED", record_key: record.record_key, artifact_id: input.artifact_id, artifact_type: input.artifact_type, approval_status: input.status, path, source_refs: sourceRefs, parent_refs: parentRefs, sha256: record.sha256 }
+  })
 }

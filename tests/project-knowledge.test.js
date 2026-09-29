@@ -114,6 +114,128 @@ test("keeps updated local research as a new immutable revision", async () => {
   } finally { await rm(root, { recursive: true, force: true }) }
 })
 
+test("resolves local research links and remaps a Harness archive when transferred to another project", async () => {
+  const sourceRoot = await mkdtemp(join(tmpdir(), "harness-knowledge-source-project-"))
+  const targetRoot = await mkdtemp(join(tmpdir(), "harness-knowledge-target-project-"))
+  try {
+    await mkdir(join(sourceRoot, "docs", "research"), { recursive: true })
+    await writeFile(join(sourceRoot, "docs", "research", "RAW-1.md"), "# RAW-1\n\nEvidence from the source project.\n")
+    await writeFile(join(sourceRoot, "docs", "research", "SYN-1.md"), "# Synthesis\n\nSee [RAW-1](RAW-1.md) and DEC-18.\n")
+    await writeFile(join(sourceRoot, "docs", "research", "RAW-2.md"), "Disposition: NOT_APPLIED\n\n# Tangential research\n\nRetained but not applied.\n")
+    await importProjectKnowledge(sourceRoot, { owner_confirmed: true })
+
+    const sourceIndex = JSON.parse(await readFile(join(sourceRoot, ".harness/knowledge/index.json"), "utf8"))
+    const sourceRaw = sourceIndex.records.find((record) => record.source_ref.endsWith("RAW-1.md"))
+    const sourceNotApplied = sourceIndex.records.find((record) => record.source_ref.endsWith("RAW-2.md"))
+    const sourceSynthesis = sourceIndex.records.find((record) => record.source_ref.endsWith("SYN-1.md"))
+    assert.deepEqual(sourceSynthesis.relationships, [sourceRaw.record_key, "DEC-18"])
+    assert.deepEqual(sourceSynthesis.unresolved_relationships, ["DEC-18"])
+    assert.equal(sourceNotApplied.disposition, "NOT_APPLIED")
+    await assert.rejects(importProjectKnowledge(targetRoot, {
+      owner_confirmed: true,
+      source_project_root: sourceRoot,
+    }), /needs a stable source_project_id/)
+
+    const transfer = await importProjectKnowledge(targetRoot, {
+      owner_confirmed: true,
+      source_project_root: sourceRoot,
+      source_project_id: "llm-learning",
+    })
+    assert.equal(transfer.imported, 3)
+    assert.equal(transfer.source_project_id, "llm-learning")
+    const targetIndex = JSON.parse(await readFile(join(targetRoot, ".harness/knowledge/index.json"), "utf8"))
+    const targetRaw = targetIndex.records.find((record) => record.source_record_key === sourceRaw.record_key)
+    const targetNotApplied = targetIndex.records.find((record) => record.source_record_key === sourceNotApplied.record_key)
+    const targetSynthesis = targetIndex.records.find((record) => record.source_record_key === sourceSynthesis.record_key)
+    assert.notEqual(targetRaw.record_key, sourceRaw.record_key)
+    assert.deepEqual(targetSynthesis.relationships, [targetRaw.record_key, "DEC-18"])
+    assert.deepEqual(targetSynthesis.unresolved_relationships, ["DEC-18"])
+    assert.equal(targetNotApplied.disposition, "NOT_APPLIED")
+    assert.equal(await readFile(join(targetRoot, targetRaw.archive_path), "utf8"), "# RAW-1\n\nEvidence from the source project.\n")
+
+    const repeated = await importProjectKnowledge(targetRoot, {
+      owner_confirmed: true,
+      source_project_root: sourceRoot,
+      source_project_id: "llm-learning",
+    })
+    assert.equal(repeated.imported, 0)
+    assert.equal(repeated.unchanged, 3)
+  } finally {
+    await rm(sourceRoot, { recursive: true, force: true })
+    await rm(targetRoot, { recursive: true, force: true })
+  }
+})
+
+test("serializes concurrent imports so neither index update is lost", async () => {
+  const root = await mkdtemp(join(tmpdir(), "harness-knowledge-concurrent-"))
+  const source = (id) => ({
+    source_id: id,
+    title: `Decision ${id}`,
+    source_system: "github",
+    source_ref: `github:owner/repo/${id}`,
+    source_revision: "rev-1",
+    classification: "REFERENCE",
+    declared_authority: "UNKNOWN",
+    content: `Content for ${id}`,
+  })
+  try {
+    await Promise.all([
+      importProjectKnowledge(root, { owner_confirmed: true, external_sources: [source("DOC-1")] }),
+      importProjectKnowledge(root, { owner_confirmed: true, external_sources: [source("DOC-2")] }),
+      recordKnowledgeArtifact(root, {
+        artifact_type: "raw-research", artifact_id: "RAW-1", title: "Raw capture 1", content: "Source one.",
+        status: "RAW", source_refs: ["https://example.org/source/1"], owner_confirmed: true,
+      }),
+      recordKnowledgeArtifact(root, {
+        artifact_type: "raw-research", artifact_id: "RAW-2", title: "Raw capture 2", content: "Source two.",
+        status: "RAW", source_refs: ["https://example.org/source/2"], owner_confirmed: true,
+      }),
+    ])
+    const index = JSON.parse(await readFile(join(root, ".harness/knowledge/index.json"), "utf8"))
+    assert.deepEqual(index.records.map((record) => record.source_id).sort(), ["DOC-1", "DOC-2", "RAW-1", "RAW-2"])
+    assert.equal(await readdir(join(root, ".harness/knowledge")).then((files) => files.includes("index.lock")), false)
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+test("preserves binary snapshots byte-for-byte and identifies them as non-text", async () => {
+  const root = await mkdtemp(join(tmpdir(), "harness-knowledge-binary-"))
+  const targetRoot = await mkdtemp(join(tmpdir(), "harness-knowledge-binary-target-"))
+  try {
+    await mkdir(join(root, "docs", "research", "raw"), { recursive: true })
+    const bytes = Buffer.from([0x25, 0x50, 0x44, 0x46, 0x00, 0xff, 0x0a])
+    await writeFile(join(root, "docs", "research", "raw", "scan.pdf"), bytes)
+    await importProjectKnowledge(root, { owner_confirmed: true })
+    const index = JSON.parse(await readFile(join(root, ".harness/knowledge/index.json"), "utf8"))
+    const record = index.records[0]
+    assert.equal(record.media_type, "binary-preserved")
+    assert.deepEqual(await readFile(join(root, record.archive_path)), bytes)
+    assert.equal((await readProjectKnowledge(root, record.record_key)).status, "BINARY_SOURCE")
+    await importProjectKnowledge(targetRoot, { owner_confirmed: true, source_project_root: root, source_project_id: "binary-source" })
+    const targetIndex = JSON.parse(await readFile(join(targetRoot, ".harness/knowledge/index.json"), "utf8"))
+    const targetRecord = targetIndex.records.find((item) => item.source_record_key === record.record_key)
+    assert.deepEqual(await readFile(join(targetRoot, targetRecord.archive_path)), bytes)
+    assert.equal((await readProjectKnowledge(targetRoot, targetRecord.record_key)).status, "BINARY_SOURCE")
+  } finally {
+    await rm(root, { recursive: true, force: true })
+    await rm(targetRoot, { recursive: true, force: true })
+  }
+})
+
+test("rejects unsafe transferred record keys before writing", async () => {
+  const root = await mkdtemp(join(tmpdir(), "harness-knowledge-bad-source-key-"))
+  try {
+    await assert.rejects(importProjectKnowledge(root, {
+      owner_confirmed: true,
+      external_sources: [{
+        source_id: "DOC-1", source_record_key: "../../outside", title: "Document", source_system: "github",
+        source_ref: "github:owner/repo/doc", source_revision: "rev-1", classification: "REFERENCE",
+        declared_authority: "UNKNOWN", content: "A source document.",
+      }],
+    }), /source_record_key must be an exact source-project record key/)
+    assert.deepEqual(await readdir(root), [])
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+
 test("records provenance and requires an approved parent for stories", async () => {
   const root = await mkdtemp(join(tmpdir(), "harness-knowledge-artifact-"))
   try {
