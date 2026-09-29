@@ -12,8 +12,19 @@ export function readGuardSettings(env = {}) {
     maxToolCalls: positiveInteger(env.HARNESS_MAX_TOOL_CALLS, 40),
     maxDelegations: positiveInteger(env.HARNESS_MAX_DELEGATIONS, 3),
     maxIdenticalMutations: positiveInteger(env.HARNESS_MAX_IDENTICAL_MUTATIONS, 4),
-    maxOutputTokens: positiveInteger(env.HARNESS_MAX_OUTPUT_TOKENS, 4096),
+    // A provider-agnostic default can break model adapters that reject the
+    // output-token parameter OpenCode derives from this option. Keep the
+    // request untouched unless the owner explicitly opts in.
+    maxOutputTokens: positiveInteger(env.HARNESS_MAX_OUTPUT_TOKENS, null),
   }
+}
+
+export function applyOutputTokenCap(options, maxOutputTokens) {
+  if (!maxOutputTokens) return options
+  if (!options.maxTokens || options.maxTokens > maxOutputTokens) {
+    options.maxTokens = maxOutputTokens
+  }
+  return options
 }
 
 function stableStringify(value) {

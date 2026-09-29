@@ -1,5 +1,5 @@
 import { Plugin } from "@opencode/plugin"
-import { createTurnGuard, readGuardSettings } from "./src/turn-guard.js"
+import { applyOutputTokenCap, createTurnGuard, readGuardSettings } from "./src/turn-guard.js"
 import { getProjectStatus, initializeProject } from "./src/scaffold.js"
 import { analyzeExistingProject } from "./src/project-analysis.js"
 import { validateStoryFile } from "./src/story-validator.js"
@@ -96,9 +96,7 @@ export default Plugin.define({
 
     // V2 calls this hook before every agent-loop request, including tool continuations.
     await ctx.session.hook("context", (event) => {
-      if (!event.options.maxTokens || event.options.maxTokens > settings.maxOutputTokens) {
-        event.options.maxTokens = settings.maxOutputTokens
-      }
+      applyOutputTokenCap(event.options, settings.maxOutputTokens)
     })
 
     // Allow at most one retry after the initial provider request.
