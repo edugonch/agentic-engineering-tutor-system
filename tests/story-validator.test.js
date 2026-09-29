@@ -19,6 +19,63 @@ test("accepts an Epic contract with finite story sections", async () => {
   }
 })
 
+test("separates draft Epic structure from owner approval to activate its chapter", async () => {
+  const root = await mkdtemp(join(tmpdir(), "harness-validator-draft-epic-"))
+  try {
+    const draft = epic
+      .replace("# E01\n", "# E01\n\nStatus: DRAFT / NON-EXECUTABLE\n")
+      .replace("Maximum WU count: 3", "Maximum WU count: 4")
+      .replace("Budget approval status: APPROVED", "Budget approval status: APPROVED para cantidad; ejecución NOT AUTHORIZED")
+      .replace("Approval reference: DEC-004 / 2026-09-29", "Approval reference: owner approved the four-WU ceiling; execution budget pending")
+    await writeFile(join(root, "E01.md"), draft)
+    const result = await validateStoryFile(root, "E01.md", "epic")
+    assert.equal(result.status, "PASS_WITH_WARNINGS")
+    assert.deepEqual(result.invalid_fields, [])
+    assert.equal(result.activation_ready, false)
+    assert.ok(result.activation_blockers.some((item) => item.includes("DRAFT / NON-EXECUTABLE")))
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+test("allows pending execution budget only on a non-executable WU draft", async () => {
+  const root = await mkdtemp(join(tmpdir(), "harness-validator-draft-wu-"))
+  try {
+    const draft = [
+      "# WU-01",
+      "",
+      "Status: DRAFT / NON-EXECUTABLE / NOT AUTHORIZED",
+      "",
+      "## Story and Epic connection",
+      "One coherent outcome in E01.",
+      "## Single outcome",
+      "One coherent, indivisible outcome.",
+      "## Acceptance criteria",
+      "The user sees the saved result.",
+      "## Boundaries",
+      "Only this outcome.",
+      "## Dependencies",
+      "none",
+      "CHILD_WORK_UNITS_ALLOWED: NO",
+      "## Approved execution budget",
+      "- Active-time limit: PENDING — owner approval required",
+      "- Approval reference: execution budget pending",
+      "## Stop condition",
+      "Stop after acceptance.",
+      "",
+    ].join("\n")
+    await writeFile(join(root, "WU.md"), draft)
+    const result = await validateStoryFile(root, "WU.md", "wu")
+    assert.equal(result.status, "PASS_WITH_WARNINGS")
+    assert.deepEqual(result.invalid_fields, [])
+    assert.equal(result.activation_ready, false)
+    assert.ok(result.activation_blockers.some((item) => item.includes("active-time limit")))
+
+    await writeFile(join(root, "WU.md"), draft.replace("DRAFT / NON-EXECUTABLE / NOT AUTHORIZED", "APPROVED / EXECUTABLE"))
+    const executableWithPendingBudget = await validateStoryFile(root, "WU.md", "wu")
+    assert.equal(executableWithPendingBudget.status, "FAIL")
+    assert.ok(executableWithPendingBudget.invalid_fields.some((item) => item.includes("finite positive active-time limit")))
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+
 test("rejects an Epic with a placeholder budget, missing closure evidence, or more WUs than approved", async () => {
   const root = await mkdtemp(join(tmpdir(), "harness-validator-"))
   try {

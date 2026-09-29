@@ -229,7 +229,7 @@ export default Plugin.define({
 
       editor.add({
         name: "harness_validate_story",
-        description: "Validate an Epic or Work Unit Markdown contract for required finite boundaries and story relationships. The path must be relative to the canonical project root. Never edits files.",
+        description: "Validate an Epic or Work Unit Markdown contract for required finite boundaries and story relationships. PASS is structural only; inspect activation_ready and activation_blockers for owner approvals and execution budgets. The path must be relative to the canonical project root. Never edits files.",
         input: objectInput({
           document_path: { type: "string", minLength: 1 },
           document_type: { type: "string", enum: ["epic", "wu"] },

@@ -34,6 +34,10 @@ export async function validateStoryFile(projectRoot, documentPath, documentType)
   const missing = REQUIRED[documentType].filter(([, pattern]) => !pattern.test(content)).map(([label]) => label)
   const invalid = []
   const warnings = []
+  const activationBlockers = []
+  const statusLine = content.match(/^\s*Status:\s*(.*?)\s*$/im)?.[1] ?? ""
+  const nonExecutableDraft = /\bDRAFT\b/i.test(statusLine) && /NON[- ]EXECUTABLE|NOT AUTHORIZED/i.test(statusLine)
+  if (nonExecutableDraft) activationBlockers.push("Contract is DRAFT / NON-EXECUTABLE; owner review, approval, and explicit activation are still required.")
   if (documentType === "epic") {
     const maxCountValue = readBudgetField(content, "Maximum WU count", invalid)
     const maxCount = maxCountValue?.match(/^(\d+)$/)
@@ -44,8 +48,14 @@ export async function validateStoryFile(projectRoot, documentPath, documentType)
 
     const approval = readBudgetField(content, "Approval reference", invalid)
     const approvalStatus = readBudgetField(content, "Budget approval status", invalid)
-    if (approvalStatus?.toUpperCase() !== "APPROVED") invalid.push("Epic WU budget must have explicit APPROVED status before validation can pass.")
-    if (!isConcreteValue(approval)) invalid.push("Epic WU budget needs a concrete owner-approved decision reference.")
+    if (!approvalStatus?.toUpperCase().startsWith("APPROVED")) {
+      if (nonExecutableDraft) activationBlockers.push("Epic WU count approval is pending; execution cannot be activated.")
+      else invalid.push("Epic WU budget must have explicit APPROVED status before validation can pass.")
+    }
+    if (!isConcreteValue(approval) || hasPendingLanguage(approval)) {
+      if (nonExecutableDraft) activationBlockers.push("Epic WU budget needs a concrete owner approval reference before activation.")
+      else invalid.push("Epic WU budget needs a concrete owner-approved decision reference.")
+    }
 
     for (const field of ["Demo scenario", "Acceptance evidence", "End condition"]) {
       const value = content.match(new RegExp(`^\\s*-\\s*${field}:\\s*(.*?)\\s*$`, "im"))?.[1]
@@ -62,8 +72,14 @@ export async function validateStoryFile(projectRoot, documentPath, documentType)
   if (documentType === "wu") {
     const activeTime = readBudgetField(content, "Active-time limit", invalid)
     const approval = readBudgetField(content, "Approval reference", invalid)
-    if (!isFiniteDuration(activeTime)) invalid.push("WU needs a finite positive active-time limit, such as '90 minutes' or '2 hours'.")
-    if (!isConcreteValue(approval)) invalid.push("WU execution budget needs a concrete owner-approved decision reference.")
+    if (!isFiniteDuration(activeTime)) {
+      if (nonExecutableDraft) activationBlockers.push("WU needs a finite positive owner-approved active-time limit before activation.")
+      else invalid.push("WU needs a finite positive active-time limit, such as '90 minutes' or '2 hours'.")
+    }
+    if (!isConcreteValue(approval) || hasPendingLanguage(approval)) {
+      if (nonExecutableDraft) activationBlockers.push("WU execution budget needs a concrete owner approval reference before activation.")
+      else invalid.push("WU execution budget needs a concrete owner-approved decision reference.")
+    }
   }
   const recursiveLines = content.split(/\r?\n/).filter((line) =>
     /create (a )?(child|successor|follow-up) (work unit|wu)|spawn (a )?new wu/i.test(line)
@@ -72,14 +88,20 @@ export async function validateStoryFile(projectRoot, documentPath, documentType)
   if (recursiveLines.length) warnings.push("Possible instruction to create recursive or automatic follow-up work; review this contract.")
 
   return {
-    status: missing.length || invalid.length ? "FAIL" : warnings.length ? "PASS_WITH_WARNINGS" : "PASS",
+    status: missing.length || invalid.length ? "FAIL" : warnings.length || activationBlockers.length ? "PASS_WITH_WARNINGS" : "PASS",
     document: documentPath,
     type: documentType,
     missing_required_sections: missing,
     invalid_fields: invalid,
     warnings,
-    note: "Structural validation cannot approve product scope, user value, or authority. Owner review remains required.",
+    activation_ready: missing.length === 0 && invalid.length === 0 && activationBlockers.length === 0,
+    activation_blockers: activationBlockers,
+    note: "PASS measures contract structure and finite boundaries. It does not approve product scope or activate work; inspect activation_ready and activation_blockers separately.",
   }
+}
+
+function hasPendingLanguage(value) {
+  return /\b(pending|not authorized|not approved|awaiting)\b/i.test(String(value ?? ""))
 }
 
 function isConcreteValue(value) {

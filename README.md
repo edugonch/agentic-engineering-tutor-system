@@ -19,6 +19,8 @@ This is an early implementation, not a production automation system. Version 0.1
 
 It does not publish to npm, create GitHub issues, create branches, commit, merge, or deploy. Human ownership and merge policy remain project decisions. No Claude Code files or integrations are included.
 
+The harness_validate_story tool checks contract structure separately from permission to execute. A well-formed DRAFT / NON-EXECUTABLE Epic or WU may return PASS_WITH_WARNINGS while activation_ready remains false and activation_blockers lists missing owner approvals or execution budgets. A non-draft WU with an unbounded or unapproved execution budget still fails validation.
+
 ## Install with OpenCode's plugin installer
 
 Install the plugin through OpenCode, without adding local plugin paths or copying agent profiles by hand:
