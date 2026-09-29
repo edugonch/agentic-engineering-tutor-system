@@ -52,6 +52,20 @@ const checks = [
   "docs/reference-library/SHA256SUMS",
   "docs/third-party/README.md",
   "docs/third-party/licenses/OpenDesign-Apache-2.0.txt",
+  "src/execution/constants.js",
+  "src/execution/serialize.js",
+  "src/execution/fsync.js",
+  "src/execution/event-log.js",
+  "src/execution/state.js",
+  "src/execution/lease.js",
+  "src/execution/mutex.js",
+  "src/execution/candidate.js",
+  "src/execution/execution.js",
+  "src/execution/probe.js",
+  "src/execution/continuation-driver.js",
+  "src/execution/index.js",
+  "docs/execution-control-plane.md",
+  "docs/phase-0-continuation-spike.md",
 ]
 
 for (const path of checks) {
@@ -100,7 +114,7 @@ for (const marker of ["opencode plugin add 'github:edugonch/agentic-engineering-
   if (!readme.includes(marker)) errors.push(`README.md: missing installer/bootstrap instruction ${marker}`)
 }
 const entry = await readFile(join(root, "index.js"), "utf8")
-for (const marker of ["Plugin.define", 'ctx.session.hook("context"', 'ctx.tool.hook("execute.before"', 'ctx.permission.hook("evaluate"', 'ctx.session.hook("retry"', 'name: "harness_search_knowledge"', 'name: "harness_import_project_knowledge"', 'name: "harness_search_project_knowledge"', 'name: "harness_record_knowledge_artifact"', 'name: "harness_check_agent_readiness"', "recordArtifactWithActivationGate(", "registerHarnessCommand(ctx)"]) {
+for (const marker of ["Plugin.define", 'ctx.session.hook("context"', 'ctx.tool.hook("execute.before"', 'ctx.permission.hook("evaluate"', 'ctx.session.hook("retry"', 'name: "harness_search_knowledge"', 'name: "harness_import_project_knowledge"', 'name: "harness_search_project_knowledge"', 'name: "harness_record_knowledge_artifact"', 'name: "harness_check_agent_readiness"', 'name: "harness_continuation_probe"', 'name: "harness_continuation_spike"', "createContinuationDriver(", "recordArtifactWithActivationGate(", "registerHarnessCommand(ctx)"]) {
   if (!entry.includes(marker)) errors.push(`index.js: missing V2 runtime contract ${marker}`)
 }
 

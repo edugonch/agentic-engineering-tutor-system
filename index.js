@@ -19,6 +19,7 @@ import {
   isJevReady,
   readJevSettings,
 } from "./src/decision/index.js"
+import { runContinuationProbe, createContinuationDriver } from "./src/execution/index.js"
 
 const json = (value) => ({ content: JSON.stringify(value, null, 2) })
 const objectInput = (properties, required = []) => ({
@@ -33,6 +34,8 @@ export default Plugin.define({
   async setup(ctx) {
     const settings = readGuardSettings(process.env)
     const guard = createTurnGuard(settings)
+    const continuation = createContinuationDriver(ctx)
+    const eventSubscription = new AbortController()
     const projectRoot = ctx.location?.project?.canonical
     const requireProjectRoot = () => {
       if (!projectRoot) throw new Error("OpenCode did not provide this plugin location's canonical project root.")
@@ -111,7 +114,9 @@ export default Plugin.define({
 
     // A fresh user prompt starts a new per-session action budget.
     await ctx.session.hook("prompt", (event) => {
-      guard.reset(event.sessionID)
+      if (!continuation.isInternalPrompt(event.sessionID)) {
+        guard.reset(event.sessionID)
+      }
 
       // Shadow-mode Jev: one best-effort estimate per admitted user prompt.
       // Prompt hooks are not an exactly-once boundary; we key by messageID to
@@ -127,6 +132,7 @@ export default Plugin.define({
     // V2 calls this hook before every agent-loop request, including tool continuations.
     await ctx.session.hook("context", (event) => {
       applyOutputTokenCap(event.options, settings.maxOutputTokens)
+      continuation.onContext(event)
     })
 
     // Allow at most one retry after the initial provider request.
@@ -302,8 +308,67 @@ export default Plugin.define({
         }, ["query"]),
         execute: async (input) => json(await searchKnowledge(input.query, input)),
       })
+
+      editor.add({
+        name: "harness_continuation_probe",
+        description: "Phase 0 spike instrument. Drives an isolated continuation experiment under .harness/execution/probe/<probe_id>/: init approves an execution mandate and records a checkpoint; checkpoint settles billable phase time; verify reports the invariant matrix (stable execution/mandate/WU identity, non-resetting budget, no duplicate dispatch, monotonic fencing token, no synthesized approval, no unexpected blocker). It never edits OpenCode config, permissions, or agents, and never simulates the model.",
+        input: objectInput({
+          action: { type: "string", enum: ["init", "checkpoint", "verify"], default: "verify" },
+          probe_id: { type: "string", minLength: 1 },
+          session_id: { type: "string", minLength: 1, description: "OpenCode session ID holding the execution lease." },
+          mandate_id: { type: "string", minLength: 1 },
+          mandate_revision: { type: "string", minLength: 1 },
+          max_wus: { type: "integer", minimum: 1 },
+          total_seconds: { type: "number", exclusiveMinimum: 0 },
+          note: { type: "string" },
+        }, ["action", "probe_id"]),
+        execute: async (input) => json(await runContinuationProbe(requireProjectRoot(), input)),
+      })
+
+      editor.add({
+        name: "harness_continuation_spike",
+        description: "Phase 0 spike instrument for the continuation driver. Registers a probe session (steps + optional sentinel), marks a permission blocker, or reports the driver's per-session state (step count, continuations used, blocked). Mutates only the in-memory driver; never touches files or OpenCode config. Env-gated: reports disabled unless HARNESS_CONTINUATION_ENABLED=1.",
+        input: objectInput({
+          action: { type: "string", enum: ["register", "block", "status"] },
+          session_id: { type: "string", minLength: 1 },
+          steps: { type: "integer", minimum: 1 },
+          sentinel: { type: "string" },
+        }, ["action"]),
+        execute: async (input) => {
+          if (!continuation.enabled) {
+            return json({ enabled: false, note: "Continuation driver is disabled; set HARNESS_CONTINUATION_ENABLED=1 to enable the spike." })
+          }
+          if (input.action === "register") {
+            if (!input.session_id || !input.steps) throw new Error("register requires session_id and steps.")
+            return json(continuation.registerProbe({ sessionID: input.session_id, steps: input.steps, sentinel: input.sentinel }))
+          }
+          if (input.action === "block") {
+            if (!input.session_id) throw new Error("block requires session_id.")
+            return json(continuation.markBlocked(input.session_id))
+          }
+          return json({
+            enabled: true,
+            max_continuations: continuation.maxContinuations,
+            probes: input.session_id
+              ? [continuation.getProbe(input.session_id)].filter(Boolean)
+              : continuation.listProbes(),
+          })
+        },
+      })
     })
 
+    if (continuation.enabled) {
+      ;(async () => {
+        for await (const event of ctx.event.subscribe({ signal: eventSubscription.signal })) {
+          await continuation.onEvent(event).catch(() => {})
+        }
+      })().catch(() => {})
+    }
+
     await registerHarnessCommand(ctx)
+
+    return () => {
+      eventSubscription.abort()
+    }
   },
 })
