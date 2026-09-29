@@ -10,6 +10,7 @@ const checks = [
   "src/scaffold.js",
   "src/project-analysis.js",
   "src/story-validator.js",
+  "src/knowledge-search.js",
   "templates/.opencode/agents/harness-orchestrator.md",
   "templates/.opencode/agents/harness-builder.md",
   "templates/.opencode/agents/harness-researcher.md",
@@ -17,12 +18,16 @@ const checks = [
   "templates/.opencode/skills/project-intake/SKILL.md",
   "templates/.opencode/skills/project-import/SKILL.md",
   "templates/.opencode/skills/architecture-decision/SKILL.md",
+  "templates/.opencode/skills/reference-library-search/SKILL.md",
   "templates/.opencode/skills/story-governance/SKILL.md",
   "templates/.opencode/skills/research-gating/SKILL.md",
   "templates/.opencode/skills/work-unit-authoring/SKILL.md",
   "templates/.harness/references/ENGINEERING-KNOWLEDGE.md",
   "docs/knowledge-base/ai-engineering.md",
   "docs/knowledge-base/design-it.md",
+  "docs/reference-library/README.md",
+  "docs/reference-library/manifest.json",
+  "docs/reference-library/SHA256SUMS",
 ]
 
 for (const path of checks) {
@@ -66,7 +71,7 @@ const manifest = JSON.parse(await readFile(join(root, "package.json"), "utf8"))
 if (manifest.dependencies?.["@opencode/plugin"] !== "latest") errors.push("package.json: V2 plugin dependency must be @opencode/plugin")
 if (manifest.dependencies?.["@opencode-ai/plugin"] || manifest.peerDependencies?.["@opencode-ai/plugin"]) errors.push("package.json: V1 @opencode-ai/plugin must not be included")
 const entry = await readFile(join(root, "index.js"), "utf8")
-for (const marker of ["Plugin.define", 'ctx.session.hook("context"', 'ctx.tool.hook("execute.before"', 'ctx.session.hook("retry"']) {
+for (const marker of ["Plugin.define", 'ctx.session.hook("context"', 'ctx.tool.hook("execute.before"', 'ctx.session.hook("retry"', 'name: "harness_search_knowledge"']) {
   if (!entry.includes(marker)) errors.push(`index.js: missing V2 runtime contract ${marker}`)
 }
 

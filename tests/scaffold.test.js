@@ -22,6 +22,7 @@ test("initializes missing files and preserves existing owner files", async () =>
     assert.ok(result.skipped.includes("AGENTS.md"))
     assert.ok(result.created.includes(".opencode/agents/harness-orchestrator.md"))
     assert.ok(result.created.includes(".opencode/skills/architecture-decision/SKILL.md"))
+    assert.ok(result.created.includes(".opencode/skills/reference-library-search/SKILL.md"))
     assert.ok(result.created.includes(".harness/references/ENGINEERING-KNOWLEDGE.md"))
     assert.equal(await readFile(join(root, "AGENTS.md"), "utf8"), "Owner-authored rules\n")
     const story = await readFile(join(root, ".harness/PROJECT_STORY.md"), "utf8")

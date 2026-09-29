@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "title": "User-supplied Claude Code skill, agent, command, plugin, and testing references",
+  "status": "raw_reference",
+  "authority": "non_authoritative",
+  "language": "en",
+  "provenance": "Copied without edits from the user-supplied project_sources attachments in this workspace.",
+  "license_status": "not established from the supplied bundle",
+  "documents": [
+    {"id":"SRC-01","path":"raw/01-skill-development.txt","title":"Skill Development for Claude Code Plugins","topics":["skills","progressive disclosure","skill structure","references","assets"]},
+    {"id":"SRC-02","path":"raw/02-skill-creator-original.txt","title":"Skill Creator","topics":["skills","skill creation","workflow","validation"]},
+    {"id":"SRC-03","path":"raw/03-agent-development.txt","title":"Agent Development for Claude Code Plugins","topics":["agents","frontmatter","system prompts","triggering","tools"]},
+    {"id":"SRC-04","path":"raw/04-validate-agent.sh.txt","title":"Agent File Validator","topics":["agents","shell script","validation","frontmatter"]},
+    {"id":"SRC-05","path":"raw/05-agent-creation-system-prompt.md.txt","title":"Agent Creation System Prompt","topics":["agents","prompt design","agent generation","requirements"]},
+    {"id":"SRC-06","path":"raw/06-system-prompt-design.md.txt","title":"System Prompt Design Patterns","topics":["agents","prompt design","boundaries","quality standards"]},
+    {"id":"SRC-07","path":"raw/07-triggering-examples.md.txt","title":"Agent Triggering Examples: Best Practices","topics":["agents","triggering","examples","routing"]},
+    {"id":"SRC-08","path":"raw/08-example-agent-creation-prompt.md.txt","title":"AI-Assisted Agent Generation Template","topics":["agents","prompt template","creation"]},
+    {"id":"SRC-09","path":"raw/09-example-complete-agent-examples.md.txt","title":"Complete Agent Examples","topics":["agents","examples","code review","research"]},
+    {"id":"SRC-10","path":"raw/10-command-development.txt","title":"Command Development for Claude Code","topics":["commands","frontmatter","arguments","workflows"]},
+    {"id":"SRC-11","path":"raw/11-advanced-workflows.md.txt","title":"Advanced Workflow Patterns","topics":["workflows","composition","state","sequences"]},
+    {"id":"SRC-12","path":"raw/12-documentation-patterns.md.txt","title":"Command Documentation Patterns","topics":["documentation","commands","usability","maintenance"]},
+    {"id":"SRC-13","path":"raw/13-frontmatter-reference.md.txt","title":"Command Frontmatter Reference","topics":["frontmatter","metadata","commands","configuration"]},
+    {"id":"SRC-14","path":"raw/14-interactive-commands.md.txt","title":"Interactive Command Patterns","topics":["commands","user interaction","questions","decisions"]},
+    {"id":"SRC-15","path":"raw/15-marketplace-considerations.md.txt","title":"Marketplace Considerations for Commands","topics":["distribution","compatibility","marketplace","safety"]},
+    {"id":"SRC-16","path":"raw/16-plugin-features-reference.md.txt","title":"Plugin-Specific Command Features Reference","topics":["plugins","commands","discovery","validation"]},
+    {"id":"SRC-17","path":"raw/17-testing-strategies.md.txt","title":"Command Testing Strategies","topics":["testing","validation","integration","edge cases"]}
+  ]
+}

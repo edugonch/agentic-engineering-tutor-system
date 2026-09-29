@@ -26,6 +26,7 @@ const TEMPLATE_FILES = [
   ".opencode/skills/project-intake/SKILL.md",
   ".opencode/skills/project-import/SKILL.md",
   ".opencode/skills/architecture-decision/SKILL.md",
+  ".opencode/skills/reference-library-search/SKILL.md",
   ".opencode/skills/story-governance/SKILL.md",
   ".opencode/skills/research-gating/SKILL.md",
   ".opencode/skills/work-unit-authoring/SKILL.md",

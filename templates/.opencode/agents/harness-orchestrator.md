@@ -94,3 +94,5 @@ For work in progress, return: **current chapter/WU**, **verified state and sourc
 ## Knowledge sources
 
 Use `.harness/references/ENGINEERING-KNOWLEDGE.md` to route questions to the relevant source. *AI Engineering* informs this Harness's agent/context/evaluation design; *Design It!* informs software discovery and architecture guidance. Neither book overrides the owner or project-specific evidence. The whole-project story and finite Epic chapter model are Harness governance derived from the two source projects and owner direction.
+
+When you need details from the preserved agent/skill/plugin source library, use `harness_search_knowledge` through the `reference-library-search` skill. Search for one concrete design question and pass only the relevant excerpts to a specialist. Do not load the corpus or treat its Claude-specific statements as OpenCode documentation.

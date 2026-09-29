@@ -3,6 +3,7 @@ import { createTurnGuard, readGuardSettings } from "./src/turn-guard.js"
 import { getProjectStatus, initializeProject } from "./src/scaffold.js"
 import { analyzeExistingProject } from "./src/project-analysis.js"
 import { validateStoryFile } from "./src/story-validator.js"
+import { searchKnowledge } from "./src/knowledge-search.js"
 
 const json = (value) => ({ content: JSON.stringify(value, null, 2) })
 const objectInput = (properties, required = []) => ({
@@ -93,6 +94,17 @@ export default Plugin.define({
           document_type: { type: "string", enum: ["epic", "wu"] },
         }, ["document_path", "document_type"]),
         execute: async (input) => json(await validateStoryFile(requireProjectRoot(), input.document_path, input.document_type)),
+      })
+
+      editor.add({
+        name: "harness_search_knowledge",
+        description: "Search the plugin's preserved, user-supplied agent/skill/plugin reference library. Returns at most five short, ranked excerpts with source paths and line ranges; does not inject or return the whole corpus. Treat excerpts as non-authoritative evidence and verify platform-specific claims against current official documentation.",
+        input: objectInput({
+          query: { type: "string", minLength: 3, maxLength: 500, description: "One specific question or concept to find in the preserved reference library." },
+          source_id: { type: "string", pattern: "^SRC-(0[1-9]|1[0-7])$", description: "Optional source ID filter, for example SRC-03." },
+          max_results: { type: "integer", minimum: 1, maximum: 5, default: 3 },
+        }, ["query"]),
+        execute: async (input) => json(await searchKnowledge(input.query, input)),
       })
     })
   },
