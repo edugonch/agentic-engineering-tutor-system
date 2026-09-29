@@ -15,6 +15,7 @@ const checks = [
   "templates/.opencode/agents/harness-builder.md",
   "templates/.opencode/agents/harness-researcher.md",
   "templates/.opencode/agents/harness-reviewer.md",
+  "templates/.opencode/agents/harness-designer.md",
   "templates/.opencode/skills/project-intake/SKILL.md",
   "templates/.opencode/skills/project-import/SKILL.md",
   "templates/.opencode/skills/architecture-decision/SKILL.md",
@@ -30,6 +31,8 @@ const checks = [
   "docs/reference-library/README.md",
   "docs/reference-library/manifest.json",
   "docs/reference-library/SHA256SUMS",
+  "docs/third-party/README.md",
+  "docs/third-party/licenses/OpenDesign-Apache-2.0.txt",
 ]
 
 for (const path of checks) {

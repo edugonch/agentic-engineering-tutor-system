@@ -8,10 +8,11 @@ const root = fileURLToPath(new URL("../", import.meta.url))
 const read = (path) => readFile(join(root, path), "utf8")
 
 test("architecture guidance maps uncertainty to bounded verification and owner authority", async () => {
-  const [skill, orchestrator, reviewer, adr] = await Promise.all([
+  const [skill, orchestrator, reviewer, designer, adr] = await Promise.all([
     read("templates/.opencode/skills/architecture-decision/SKILL.md"),
     read("templates/.opencode/agents/harness-orchestrator.md"),
     read("templates/.opencode/agents/harness-reviewer.md"),
+    read("templates/.opencode/agents/harness-designer.md"),
     read("templates/.harness/templates/ADR.md"),
   ])
 
@@ -19,8 +20,14 @@ test("architecture guidance maps uncertainty to bounded verification and owner a
     assert.ok(skill.includes(marker), `architecture skill must include ${marker}`)
   }
   assert.match(orchestrator, /ask `harness-reviewer` for one independent read-only architecture challenge/i)
+  assert.match(orchestrator, /resource: harness-designer\s+effect: allow/)
   assert.match(reviewer, /DESIGN_SOUND.*DESIGN_CONCERNS.*BLOCKED/s)
   assert.match(reviewer, /cannot choose a product trade-off or approve an ADR/)
+  assert.match(orchestrator, /harness-designer/)
+  assert.match(designer, /activated Work Unit/)
+  assert.match(designer, /five critique scores/)
+  assert.match(designer, /one focused corrective pass/)
+  assert.match(designer, /Apache-2\.0/)
   assert.match(adr, /Verification plan and evidence/)
   assert.match(adr, /Approval reference and date/)
 })
