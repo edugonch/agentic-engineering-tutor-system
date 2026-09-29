@@ -1,0 +1,74 @@
+import { readdir, readFile, stat } from "node:fs/promises"
+import { join, relative } from "node:path"
+import process from "node:process"
+
+const root = new URL("../", import.meta.url).pathname
+const errors = []
+const checks = [
+  "index.js",
+  "src/turn-guard.js",
+  "src/scaffold.js",
+  "src/project-analysis.js",
+  "src/story-validator.js",
+  "templates/.opencode/agents/harness-orchestrator.md",
+  "templates/.opencode/agents/harness-builder.md",
+  "templates/.opencode/agents/harness-researcher.md",
+  "templates/.opencode/agents/harness-reviewer.md",
+  "templates/.opencode/skills/project-intake/SKILL.md",
+  "templates/.opencode/skills/project-import/SKILL.md",
+  "templates/.opencode/skills/story-governance/SKILL.md",
+  "templates/.opencode/skills/research-gating/SKILL.md",
+  "templates/.opencode/skills/work-unit-authoring/SKILL.md",
+]
+
+for (const path of checks) {
+  try {
+    const info = await stat(join(root, path))
+    if (!info.isFile() || info.size === 0) errors.push(`${path}: missing or empty`)
+  } catch {
+    errors.push(`${path}: missing`)
+  }
+}
+
+async function filesIn(dir) {
+  const result = []
+  for (const entry of await readdir(join(root, dir), { withFileTypes: true })) {
+    const path = join(dir, entry.name)
+    if (entry.isDirectory()) result.push(...await filesIn(path))
+    else result.push(path)
+  }
+  return result
+}
+
+for (const path of await filesIn("templates/.opencode/skills")) {
+  const content = await readFile(join(root, path), "utf8")
+  const match = content.match(/^---\s*\n([\s\S]*?)\n---/)
+  const name = match?.[1].match(/^name:\s*([a-z0-9-]+)\s*$/m)?.[1]
+  const description = match?.[1].match(/^description:\s*(.+)$/m)?.[1]
+  const directory = path.split("/").at(-2)
+  if (!name || name !== directory) errors.push(`${relative(root, path)}: skill name must match its directory`)
+  if (!description || description.length < 20) errors.push(`${relative(root, path)}: missing actionable description`)
+  if (!content.slice(match?.[0].length ?? 0).trim()) errors.push(`${relative(root, path)}: missing instructions`)
+}
+
+for (const path of await filesIn("templates/.opencode/agents")) {
+  const content = await readFile(join(root, path), "utf8")
+  if (!content.startsWith("---\n") || !/^mode:\s*(primary|subagent)\s*$/m.test(content)) errors.push(`${relative(root, path)}: missing OpenCode agent frontmatter/mode`)
+  if (!/^steps:\s*[1-9][0-9]*\s*$/m.test(content)) errors.push(`${relative(root, path)}: missing finite steps limit`)
+  if (/^permission:/m.test(content)) errors.push(`${relative(root, path)}: V2 agent permissions must use "permissions" (plural)`)
+}
+
+const manifest = JSON.parse(await readFile(join(root, "package.json"), "utf8"))
+if (manifest.dependencies?.["@opencode/plugin"] !== "latest") errors.push("package.json: V2 plugin dependency must be @opencode/plugin")
+if (manifest.dependencies?.["@opencode-ai/plugin"] || manifest.peerDependencies?.["@opencode-ai/plugin"]) errors.push("package.json: V1 @opencode-ai/plugin must not be included")
+const entry = await readFile(join(root, "index.js"), "utf8")
+for (const marker of ["Plugin.define", 'ctx.session.hook("context"', 'ctx.tool.hook("execute.before"', 'ctx.session.hook("retry"']) {
+  if (!entry.includes(marker)) errors.push(`index.js: missing V2 runtime contract ${marker}`)
+}
+
+if (errors.length) {
+  console.error(errors.map((error) => `FAIL ${error}`).join("\n"))
+  process.exitCode = 1
+} else {
+  console.log(`Validated ${checks.length} core paths, V2 plugin hooks, OpenCode agent profiles, and skill metadata.`)
+}

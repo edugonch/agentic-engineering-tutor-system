@@ -1,0 +1,6 @@
+// Merge these settings into the project's opencode.json or opencode.jsonc.
+// The Harness initializer leaves existing OpenCode config untouched.
+{
+  "$schema": "https://opencode.ai/config.json",
+  "default_agent": "harness-orchestrator"
+}

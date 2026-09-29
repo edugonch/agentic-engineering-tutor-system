@@ -8,7 +8,7 @@ The Harness treats the whole project as a continuing story, Epics as finite chap
 
 This is an early implementation, not a production automation system. Version 0.1 provides:
 
-- OpenCode plugin tools to initialize a project, inspect Harness files, and validate Epic/WU contracts.
+- OpenCode plugin tools to initialize new or imported projects, inventory existing projects, inspect Harness files, and validate Epic/WU contracts.
 - OpenCode-native orchestrator, builder, researcher, and reviewer profiles, installed into the target project on explicit initialization.
 - OpenCode-native skills for new-project intake, existing-project import, story/Epic design, bounded research, and WU authoring.
 - A bounded, read-only existing-project inventory that helps the orchestrator find current project markers and likely governance sources before it proposes a migration.
@@ -32,7 +32,7 @@ Then restart OpenCode. The package entry point uses the OpenCode V2 plugin API (
 1. Start OpenCode in the project and choose `harness-orchestrator` as the primary agent (or set it as `default_agent` in `opencode.json[c]`).
 2. Describe the project in ordinary language. The orchestrator conducts a short, adaptive intake before creating files: problem, intended outcome, MVP, constraints, users, and success evidence.
 3. Review the proposed project story and charter. Ask the orchestrator to initialize only after approving that summary.
-4. The orchestrator calls `harness_initialize_project` with `owner_confirmed: true`. The tool creates only missing files and reports any paths it left untouched.
+4. The orchestrator calls `harness_initialize_project` with `project_type: "new"` and `owner_confirmed: true`. The tool creates only missing files and reports any paths it left untouched.
 5. Define a finite first Epic with an owner-approved WU count and terminal demo/acceptance condition. Do not treat the full project roadmap as one Epic.
 
 ## Bring an existing project under governance
@@ -67,21 +67,21 @@ Merge these keys into an existing config; do not replace it. The scaffold create
 | Researcher | Answers one exact blocking question from named sources | Read-only; no code or backlog changes; returns evidence and uncertainty |
 | Reviewer | Independently reviews a defined diff/contract | Read-only; findings go back to the orchestrator; no self-approval or merge |
 
-The orchestrator delegates at most one level deep and a bounded number of times per assistant turn. Research is optional and must resolve a decision that blocks the next authorized step.
+The orchestrator can delegate only to its named Harness specialists, each of which is denied further subagent use. Research is optional and must resolve a decision that blocks the next authorized step.
 
 ## Cost and loop controls
 
 OpenCode provides a `steps` limit per agent. The orchestrator's permissions allow only the named Harness subagents; each specialist is denied subagent use. The plugin adds a maximum number of tool calls per session run, a delegation ceiling, a repeated mutation/delegation-call detector, a pre-request cap on output tokens per agent-loop request, and a retry ceiling.
 
-These controls reduce runaway work; they do **not** guarantee a maximum token or dollar cost. The current documented plugin API does not expose a reliable pre-inference hook to account for all providers' input/output charges. Set provider-side spending limits as a second control. See [`docs/architecture.md`](docs/architecture.md).
+These controls reduce runaway work; they do **not** guarantee a maximum token or dollar cost. V2's request hook can cap agent-loop output tokens, but this plugin cannot reliably account for provider-specific input usage and total USD across agents and auxiliary requests. Set provider-side spending limits as a second control. See [`docs/architecture.md`](docs/architecture.md).
 
 Environment overrides:
 
 | Variable | Default | Effect |
 |---|---:|---|
 | `HARNESS_MAX_TOOL_CALLS` | `40` | Tool executions allowed in one OpenCode session run |
-| `HARNESS_MAX_DELEGATIONS` | `3` | Calls to OpenCode's `task` tool allowed in one session run |
-| `HARNESS_MAX_IDENTICAL_MUTATIONS` | `4` | Consecutive identical `task`, `bash`, `write`, `edit`, or `apply_patch` calls before the circuit breaker trips |
+| `HARNESS_MAX_DELEGATIONS` | `3` | Calls to OpenCode's `subagent` tool allowed in one session run |
+| `HARNESS_MAX_IDENTICAL_MUTATIONS` | `4` | Consecutive identical `subagent`, `bash`, `write`, `edit`, `patch`, or `apply_patch` calls before the circuit breaker trips |
 | `HARNESS_MAX_OUTPUT_TOKENS` | `4096` | Upper bound for each agent-loop response; set higher to allow longer responses |
 
 Each OpenCode session, including each subagent session, has its own counters; a new prompt resets that session's action budget. The per-session call ceiling and orchestrator delegation ceiling give a finite action bound, while agent `steps` limits usually stop earlier. This is not a precise dollar ceiling: input-token use and provider-side retries/cost reporting can vary. Configure provider spending limits as a second control.
