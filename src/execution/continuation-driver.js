@@ -8,8 +8,9 @@
 //   continuing past a permission denial?
 //
 // The design is deliberately narrow (maxContinuations defaults to 1). It does
-// NOT build the full Epic loop. It is env-gated (HARNESS_CONTINUATION_ENABLED=1)
-// so it changes nothing when disabled.
+// NOT build the full Epic loop. It is inert unless a probe session is
+// explicitly registered via harness_continuation_spike; set
+// HARNESS_CONTINUATION_ENABLED=0 to force it off.
 //
 // Two parts are split so the pure logic is unit-testable without a runtime:
 //   - shouldContinue(probe, maxContinuations)  (pure, exported)
@@ -22,8 +23,11 @@ function positiveInt(value, fallback) {
 }
 
 export function readContinuationSettings(env = {}) {
+  // Enabled by default; the driver is inert unless a probe session is
+  // registered. HARNESS_CONTINUATION_ENABLED=0 is the force-off kill switch.
+  const disabled = env.HARNESS_CONTINUATION_ENABLED === "0" || env.HARNESS_CONTINUATION_ENABLED === "false"
   return {
-    enabled: env.HARNESS_CONTINUATION_ENABLED === "1" || env.HARNESS_CONTINUATION_ENABLED === "true",
+    enabled: !disabled,
     maxContinuations: positiveInt(env.HARNESS_CONTINUATION_MAX, 1),
   }
 }

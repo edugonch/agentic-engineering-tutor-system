@@ -2,11 +2,12 @@ import test from "node:test"
 import assert from "node:assert/strict"
 import { createContinuationDriver, readContinuationSettings, shouldContinue } from "../../src/execution/continuation-driver.js"
 
-test("readContinuationSettings is disabled by default and parses overrides", () => {
-  assert.deepEqual(readContinuationSettings({}), { enabled: false, maxContinuations: 1 })
+test("readContinuationSettings is enabled by default with a force-off kill switch", () => {
+  assert.deepEqual(readContinuationSettings({}), { enabled: true, maxContinuations: 1 })
   assert.equal(readContinuationSettings({ HARNESS_CONTINUATION_ENABLED: "1" }).enabled, true)
   assert.equal(readContinuationSettings({ HARNESS_CONTINUATION_ENABLED: "true" }).enabled, true)
   assert.equal(readContinuationSettings({ HARNESS_CONTINUATION_ENABLED: "0" }).enabled, false)
+  assert.equal(readContinuationSettings({ HARNESS_CONTINUATION_ENABLED: "false" }).enabled, false)
   assert.equal(readContinuationSettings({ HARNESS_CONTINUATION_MAX: "2" }).maxContinuations, 2)
   assert.equal(readContinuationSettings({ HARNESS_CONTINUATION_MAX: "0" }).maxContinuations, 1)
 })

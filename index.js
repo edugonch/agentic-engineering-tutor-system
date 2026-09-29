@@ -327,7 +327,7 @@ export default Plugin.define({
 
       editor.add({
         name: "harness_continuation_spike",
-        description: "Phase 0 spike instrument for the continuation driver. Registers a probe session (steps + optional sentinel), marks a permission blocker, or reports the driver's per-session state (step count, continuations used, blocked). Mutates only the in-memory driver; never touches files or OpenCode config. Env-gated: reports disabled unless HARNESS_CONTINUATION_ENABLED=1.",
+        description: "Phase 0 spike instrument for the continuation driver. Registers a probe session (steps + optional sentinel), marks a permission blocker, or reports the driver's per-session state (step count, continuations used, blocked). Mutates only the in-memory driver; never touches files or OpenCode config. Enabled by default; set HARNESS_CONTINUATION_ENABLED=0 to force off.",
         input: objectInput({
           action: { type: "string", enum: ["register", "block", "status"] },
           session_id: { type: "string", minLength: 1 },
@@ -336,7 +336,7 @@ export default Plugin.define({
         }, ["action"]),
         execute: async (input) => {
           if (!continuation.enabled) {
-            return json({ enabled: false, note: "Continuation driver is disabled; set HARNESS_CONTINUATION_ENABLED=1 to enable the spike." })
+            return json({ enabled: false, note: "Continuation driver is disabled (HARNESS_CONTINUATION_ENABLED=0)." })
           }
           if (input.action === "register") {
             if (!input.session_id || !input.steps) throw new Error("register requires session_id and steps.")
