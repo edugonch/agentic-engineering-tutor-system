@@ -169,6 +169,10 @@ function withRecordKey(record) {
   return { ...record, record_key: sourceKey(record) }
 }
 
+function referencesInIndex(index, ref) {
+  return index.records.filter((record) => record.record_key === ref || record.source_id === ref || record.source_ref === ref || record.source_id + "@" + record.source_revision === ref)
+}
+
 function archiveRelativePath(record) {
   if (record.source_system === "filesystem") {
     const cleanPath = record.source_ref.split("/").map((part) => part.replace(/[^A-Za-z0-9._-]/g, "_")).join("/")
@@ -459,6 +463,29 @@ async function ensureSafeParents(root, destination) {
   }
 }
 
+async function isExistingSafeLocalReference(root, ref) {
+  if (isAbsolute(ref) || /^[A-Za-z]:[\\/]/.test(ref)) return false
+  const normalized = ref.replaceAll("\\", "/")
+  const parts = normalized.split("/")
+  if (!normalized || normalized.startsWith("/") || parts.some((part) => !part || part === "." || part === "..")) return false
+  const target = resolve(root, normalized)
+  if (!inside(root, target) || target === root) return false
+  await ensureSafeParents(root, target)
+  try {
+    const info = await lstat(target)
+    return info.isFile() && !info.isSymbolicLink()
+  } catch (error) {
+    if (error.code === "ENOENT") return false
+    throw error
+  }
+}
+
+function artifactPath(type, artifactId) {
+  if (type === "epic") return `.harness/epics/${artifactId}.md`
+  if (type === "work-unit") return `.harness/work-units/${artifactId}.md`
+  return `.harness/knowledge/artifacts/${type}/${artifactId}.md`
+}
+
 async function withKnowledgeIndexLock(root, operation) {
   const lockPath = join(root, INDEX_LOCK_PATH)
   await ensureSafeParents(root, lockPath)
@@ -619,6 +646,16 @@ export async function recordKnowledgeArtifact(projectRoot, input) {
   if (["raw-research", "research-compendium", "research-synthesis"].includes(input.artifact_type) && input.status === "APPROVED") {
     throw new Error("Research evidence remains RAW or PROPOSED; record the owner-approved consequence as a separate decision, requirement, or rule.")
   }
+  const preflightIndex = await readIndex(root)
+  for (const ref of sourceRefs) {
+    const matches = referencesInIndex(preflightIndex, ref)
+    if (matches.length > 1) throw new Error("source_ref " + ref + " is ambiguous across revisions; use the exact record_key.")
+    const externalReference = /^(https?:\/\/|drive:[A-Za-z0-9_-]+(?:@[^\s]+)?$|github:[^\s]+$)/i.test(ref)
+    const pathLikeReference = ref.startsWith(".") || ref.includes("/") || /\\/.test(ref) || /\.[A-Za-z0-9]{1,8}$/.test(ref)
+    if (!matches.length && !externalReference && !(pathLikeReference && await isExistingSafeLocalReference(root, ref))) {
+      throw new Error("source_ref " + ref + " is not present in the project knowledge index and is not an exact URL/Drive/GitHub reference.")
+    }
+  }
   return withKnowledgeIndexLock(root, async () => {
   const index = await readIndex(root)
   const resolveReferences = (ref) => index.records.filter((record) => record.record_key === ref || record.source_id === ref || record.source_ref === ref || `${record.source_id}@${record.source_revision}` === ref)
@@ -632,11 +669,14 @@ export async function recordKnowledgeArtifact(projectRoot, input) {
   for (const ref of sourceRefs) {
     const matches = resolveReferences(ref)
     if (matches.length > 1) throw new Error(`source_ref ${ref} is ambiguous across revisions; use the exact record_key.`)
-    if (!matches.length && !/^(https?:\/\/|drive:[A-Za-z0-9_-]+(?:@[^\s]+)?$|github:[^\s]+$)/i.test(ref)) {
+    const externalReference = /^(https?:\/\/|drive:[A-Za-z0-9_-]+(?:@[^\s]+)?$|github:[^\s]+$)/i.test(ref)
+    const pathLikeReference = ref.startsWith(".") || ref.includes("/") || /\\/.test(ref) || /\.[A-Za-z0-9]{1,8}$/.test(ref)
+    const localReference = !matches.length && pathLikeReference && await isExistingSafeLocalReference(root, ref)
+    if (!matches.length && !externalReference && !localReference) {
       throw new Error(`source_ref ${ref} is not present in the project knowledge index and is not an exact URL/Drive/GitHub reference.`)
     }
   }
-  const path = `.harness/knowledge/artifacts/${input.artifact_type}/${input.artifact_id}.md`
+  const path = artifactPath(input.artifact_type, input.artifact_id)
   const destination = resolve(root, path)
   if (!inside(root, destination)) throw new Error("Artifact path escapes the project root.")
   await ensureSafeParents(root, destination)

@@ -271,3 +271,45 @@ test("records provenance and requires an approved parent for stories", async () 
     assert.deepEqual(index.records.map((record) => record.source_id).sort(), ["RAW-1", "REQ-1", "STORY-1", "SYN-1"])
   } finally { await rm(root, { recursive: true, force: true }) }
 })
+
+test("records Epic and WU contracts in their canonical folders and resolves safe local source references", async () => {
+  const root = await mkdtemp(join(tmpdir(), "harness-knowledge-governance-artifacts-"))
+  try {
+    await mkdir(join(root, ".harness"), { recursive: true })
+    await writeFile(join(root, ".harness", "PROJECT_STORY.md"), "Approved Workshop Waitlist story.\n")
+    await writeFile(join(root, ".harness", "IMPORT_ASSESSMENT.md"), "Owner approved one Epic and four WUs.\n")
+    const epic = await recordKnowledgeArtifact(root, {
+      artifact_type: "epic", artifact_id: "E01", title: "Workshop Waitlist",
+      content: "Finite Epic contract.", status: "DRAFT",
+      source_refs: [".harness/PROJECT_STORY.md", ".harness/IMPORT_ASSESSMENT.md"], owner_confirmed: true,
+    })
+    assert.equal(epic.path, ".harness/epics/E01.md")
+    assert.match(await readFile(join(root, epic.path), "utf8"), /Finite Epic contract/)
+
+    const wu = await recordKnowledgeArtifact(root, {
+      artifact_type: "work-unit", artifact_id: "WU-01", title: "Accessible capacity view",
+      content: "One bounded outcome.", status: "DRAFT",
+      parent_refs: [epic.record_key], source_refs: [".harness/IMPORT_ASSESSMENT.md"], owner_confirmed: true,
+    })
+    assert.equal(wu.path, ".harness/work-units/WU-01.md")
+    assert.match(await readFile(join(root, wu.path), "utf8"), /One bounded outcome/)
+    const index = JSON.parse(await readFile(join(root, ".harness/knowledge/index.json"), "utf8"))
+    assert.deepEqual(index.records.map((record) => record.source_id).sort(), ["E01", "WU-01"])
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+test("rejects missing or unsafe local artifact source references", async () => {
+  const root = await mkdtemp(join(tmpdir(), "harness-knowledge-local-ref-safety-"))
+  try {
+    await writeFile(join(root, "outside.md"), "outside project")
+    await assert.rejects(recordKnowledgeArtifact(root, {
+      artifact_type: "epic", artifact_id: "E01", title: "Unsafe", content: "No write.",
+      status: "DRAFT", source_refs: ["../outside.md"], owner_confirmed: true,
+    }), /source_ref \.\.\/outside\.md is not present/)
+    await assert.rejects(recordKnowledgeArtifact(root, {
+      artifact_type: "epic", artifact_id: "E01", title: "Missing", content: "No write.",
+      status: "DRAFT", source_refs: [".harness/MISSING.md"], owner_confirmed: true,
+    }), /source_ref \.harness\/MISSING\.md is not present/)
+    assert.deepEqual(await readdir(root), ["outside.md"])
+  } finally { await rm(root, { recursive: true, force: true }) }
+})

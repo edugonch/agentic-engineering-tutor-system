@@ -206,7 +206,7 @@ export default Plugin.define({
 
       editor.add({
         name: "harness_record_knowledge_artifact",
-        description: "After the owner authorizes this artifact write, persist a research record, compendium, synthesis, requirement, specification, user story, Epic, WU, decision, or rule as a new immutable artifact with source/parent references. Requires explicit provenance; APPROVED status requires owner confirmation, and research evidence cannot itself be marked approved.",
+        description: "After the owner authorizes this artifact write, persist a research record, compendium, synthesis, requirement, specification, user story, Epic, WU, decision, or rule as a new immutable artifact with source/parent references. Epics and WUs are written to .harness/epics/ and .harness/work-units/; other artifacts use the knowledge archive. Safe existing project-relative files are valid source references. Requires explicit provenance; APPROVED status requires owner confirmation, and research evidence cannot itself be marked approved.",
         input: objectInput({
           artifact_type: { type: "string", enum: ["raw-research", "research-compendium", "research-synthesis", "requirement", "specification", "user-story", "epic", "work-unit", "decision", "rule"] },
           artifact_id: { type: "string", minLength: 1, maxLength: 181 },
