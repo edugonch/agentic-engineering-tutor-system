@@ -21,7 +21,7 @@ Research is admitted when one exact unresolved question blocks the next authoriz
 
 ## Human gates and future automation
 
-The initial Harness keeps owner authority explicit and keeps merge, release, and deployment outside plugin automation. This supports trying bounded Work Units first and measuring the workflow before moving review to an Epic boundary. Any later Epic-level automation needs a separate release policy with verified per-WU evidence, isolated changes, recovery behavior, and an owner-controlled final gate.
+The current workflow keeps independent human review and merge per WU; the plugin does not merge, release, or deploy. Moving the human gate to the end of an Epic is a future aspiration, not the initial/default policy. It requires validated bounded automation, verified per-WU evidence, isolated changes, recovery behavior, and an explicit owner-approved release policy. The perception that Alfran felt more fluent remains an owner-reported observation; the available project records do not establish it as a comparative outcome.
 
 ## What must remain generic
 
