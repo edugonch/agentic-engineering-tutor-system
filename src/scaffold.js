@@ -24,6 +24,7 @@ const TEMPLATE_FILES = [
   ".opencode/agents/harness-builder.md",
   ".opencode/agents/harness-researcher.md",
   ".opencode/agents/harness-reviewer.md",
+  ".opencode/agents/harness-designer.md",
   ".opencode/skills/project-intake/SKILL.md",
   ".opencode/skills/project-import/SKILL.md",
   ".opencode/skills/architecture-decision/SKILL.md",
