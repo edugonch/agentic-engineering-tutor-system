@@ -18,12 +18,15 @@ Describe one cohesive user-facing result. Keep implementation detail secondary t
 
 ## Terminal demo and acceptance
 
-Define the demo, acceptance evidence, and explicit end condition that closes this chapter.
+- Demo scenario: [USER-VISIBLE SCENARIO]
+- Acceptance evidence: [OBSERVABLE RESULT OR TEST EVIDENCE]
+- End condition: [EXPLICIT CONDITION THAT CLOSES THIS CHAPTER]
 
 ## Approved WU budget
 
-- Maximum WU count: [OWNER-APPROVED NUMBER]
-- Approval reference: [DECISION / DATE]
+- Maximum WU count: [POSITIVE OWNER-APPROVED INTEGER]
+- Budget approval status: [PENDING]
+- Approval reference: [APPROVED DECISION ID / DATE]
 - If exhausted before the terminal condition: stop with `EPIC_REBASE_REQUIRED`; no automatic extension.
 
 ## Work Unit sequence

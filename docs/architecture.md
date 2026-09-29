@@ -41,7 +41,7 @@ Each subagent gets a separate OpenCode session and therefore a separate tool-cal
 
 ## Merge autonomy
 
-The scaffold records merge/release policy as an owner decision, with human review at the Epic boundary suggested as an initial target. This version never merges, deploys, or creates external backlog items. Future Epic-level automation needs a separate tested release protocol with per-WU verification, branch isolation, rollback, and an explicit owner-controlled final gate.
+The current workflow keeps independent human review and merge at each WU. The plugin never merges, deploys, or creates external backlog items. Moving the human gate to the end of an Epic is a future option, not the initial policy: it requires validated bounded automation, per-WU verification, branch isolation, recovery behavior, and explicit Product Owner approval of a separate release policy.
 
 ## Reference library retrieval
 
