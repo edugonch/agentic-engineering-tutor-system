@@ -120,6 +120,7 @@ export default Plugin.define({
         input: objectInput({
           project_type: { type: "string", enum: ["new", "existing"] },
           project_name: { type: "string", minLength: 1 },
+          initialization_scope: { type: "string", enum: ["full", "governance_only"], default: "full", description: "Use governance_only when the owner authorized project governance but not the supporting Harness agents, skills, or OpenCode config." },
           problem: { type: "string", minLength: 1 },
           desired_outcome: { type: "string", minLength: 1 },
           mvp: { type: "string", minLength: 1 },

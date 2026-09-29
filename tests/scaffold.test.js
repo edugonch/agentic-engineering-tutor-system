@@ -52,6 +52,43 @@ test("initializes missing files and preserves existing owner files", async () =>
   }
 })
 
+test("governance_only initializes project and Epic/WU governance without support agents, skills, or config", async () => {
+  const root = await mkdtemp(join(tmpdir(), "harness-governance-only-"))
+  try {
+    await writeFile(join(root, ".opencode-placeholder"), "existing project file")
+    const result = await initializeProject(root, { ...input, initialization_scope: "governance_only" })
+    assert.equal(result.initialization_scope, "governance_only")
+    assert.deepEqual(result.created.sort(), [
+      ".harness/PROJECT_CHARTER.md",
+      ".harness/PROJECT_STATE.md",
+      ".harness/PROJECT_STORY.md",
+      ".harness/epics/README.md",
+      ".harness/templates/EPIC.md",
+      ".harness/templates/WORK_UNIT.md",
+      ".harness/work-units/README.md",
+    ].sort())
+    assert.equal(result.created.some((path) => path.startsWith(".opencode/")), false)
+    assert.equal(result.created.includes(".harness/OPENCODE-CONFIG-FRAGMENT.jsonc"), false)
+    assert.equal(result.openCodeConfig, "not created; governance_only scope excludes OpenCode configuration")
+    const status = await getProjectStatus(root)
+    assert.equal(status.governance_initialized, true)
+    assert.ok(status.full_scaffold_missing.includes(".opencode/agents/harness-builder.md"))
+    assert.match(status.next, /governance_only initialization/)
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test("rejects unknown initialization scopes before writing", async () => {
+  const root = await mkdtemp(join(tmpdir(), "harness-invalid-scope-"))
+  try {
+    await assert.rejects(initializeProject(root, { ...input, initialization_scope: "agents_only" }), /initialization_scope must be/)
+    assert.deepEqual(await readdir(root), [])
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
 test("leaves an existing OpenCode model configuration untouched", async () => {
   const root = await mkdtemp(join(tmpdir(), "harness-opencode-config-"))
   const config = '{"model":"owner/provider-model","agents":{"harness-builder":{"model":"owner/builder"}}}\n'

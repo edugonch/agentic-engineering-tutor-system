@@ -39,6 +39,20 @@ const TEMPLATE_FILES = [
   ".opencode/skills/work-unit-authoring/SKILL.md",
 ]
 
+// A project owner may authorize only the governance foundation before
+// deciding whether the supporting Harness roles and skills belong in that
+// repository. Keep this set explicit so the narrower scope cannot grow
+// accidentally when the full scaffold gains new files.
+const GOVERNANCE_TEMPLATE_FILES = [
+  ".harness/PROJECT_STORY.md",
+  ".harness/PROJECT_CHARTER.md",
+  ".harness/PROJECT_STATE.md",
+  ".harness/epics/README.md",
+  ".harness/work-units/README.md",
+  ".harness/templates/EPIC.md",
+  ".harness/templates/WORK_UNIT.md",
+]
+
 const CONFIG_CANDIDATES = ["opencode.json", "opencode.jsonc"]
 const STORY_AUTHORITY_CANDIDATES = ["PROJECT_STORY.md", "docs/PROJECT_STORY.md", "docs/product/PROJECT_STORY.md", "docs/product/EPIC_STORY.md", ".harness/PROJECT_STORY.md"]
 const STATE_AUTHORITY_CANDIDATES = ["PROJECT_STATE.md", "docs/PROJECT_STATE.md", "docs/product/PROJECT_STATE.md", ".harness/PROJECT_STATE.md"]
@@ -97,6 +111,10 @@ export async function initializeProject(projectRoot, values) {
   if (values.project_type && !["new", "existing"].includes(values.project_type)) {
     throw new Error('project_type must be "new" or "existing". No files were written.')
   }
+  const initializationScope = values.initialization_scope ?? "full"
+  if (!["full", "governance_only"].includes(initializationScope)) {
+    throw new Error('initialization_scope must be "full" or "governance_only". No files were written.')
+  }
   if (values.project_type === "existing" && !String(values.import_assessment ?? "").trim()) {
     throw new Error("Importing an existing project requires an owner-approved import_assessment. No files were written.")
   }
@@ -119,7 +137,8 @@ export async function initializeProject(projectRoot, values) {
   const existingState = stateCandidates[0] ?? null
   const storyRef = String(values.project_story_ref ?? existingStory ?? "").trim()
   const stateRef = String(values.project_state_ref ?? existingState ?? "").trim()
-  const paths = TEMPLATE_FILES.filter((path) => {
+  const templateFiles = initializationScope === "governance_only" ? GOVERNANCE_TEMPLATE_FILES : TEMPLATE_FILES
+  const paths = templateFiles.filter((path) => {
     if (values.project_type !== "existing") return true
     if (path === ".harness/PROJECT_STORY.md" && storyRef) return false
     if (path === ".harness/PROJECT_STATE.md" && stateRef) return false
@@ -185,7 +204,9 @@ export async function initializeProject(projectRoot, values) {
     }
   }
 
-  let openCodeConfig = "not changed; replace the model placeholders in .harness/OPENCODE-CONFIG-FRAGMENT.jsonc with IDs from `opencode models`, then merge it into the project config"
+  let openCodeConfig = initializationScope === "governance_only"
+    ? "not created; governance_only scope excludes OpenCode configuration"
+    : "not changed; replace the model placeholders in .harness/OPENCODE-CONFIG-FRAGMENT.jsonc with IDs from `opencode models`, then merge it into the project config"
   for (const candidate of CONFIG_CANDIDATES) {
     if (await exists(join(root, candidate))) {
       openCodeConfig = `left unchanged (${candidate} already exists)`
@@ -196,13 +217,16 @@ export async function initializeProject(projectRoot, values) {
   return {
     status: "initialized",
     project: values.project_name,
+    initialization_scope: initializationScope,
     created,
     skipped,
     openCodeConfig,
     authority_references: { project_story: storyRef || null, project_state: stateRef || null },
     next: values.project_type === "existing"
       ? "Review the import assessment, knowledge index, and every authority reference against its live source. Reuse current research by exact ID/revision before collecting it again; then draft one finite next Epic only after owner approval."
-      : "Review PROJECT_STORY.md and PROJECT_CHARTER.md; then draft one finite first Epic and owner-approved WU budget.",
+      : initializationScope === "governance_only"
+        ? "Review the governance-only scaffold. Create only the owner-approved Epic and Work Unit governance documents; do not install agents, skills, or OpenCode configuration unless separately approved."
+        : "Review PROJECT_STORY.md and PROJECT_CHARTER.md; then draft one finite first Epic and owner-approved WU budget.",
     warning: "Initialization writes only missing scaffold files. Review every generated file before execution; no issue, branch, commit, merge, or deployment was created.",
   }
 }
@@ -227,14 +251,26 @@ export async function getProjectStatus(projectRoot) {
   if (storyRefExists) storyReference = (await readFile(targetPath(root, ".harness/PROJECT_STORY_REF.md"), "utf8")).slice(0, 2000)
   let stateReference = null
   if (stateRefExists) stateReference = (await readFile(targetPath(root, ".harness/PROJECT_STATE_REF.md"), "utf8")).slice(0, 2000)
+  const governanceMissing = GOVERNANCE_TEMPLATE_FILES.filter((path) => !present.includes(path))
+  const fullScaffoldMissing = TEMPLATE_FILES.filter((path) => !present.includes(path))
+  const governanceComplete = governanceMissing.length === 0
   return {
     initialized: present.includes(".harness/PROJECT_STORY.md") || present.includes(".harness/PROJECT_STORY_REF.md"),
+    governance_initialized: governanceComplete,
+    governance_missing: governanceMissing,
+    full_scaffold_missing: fullScaffoldMissing,
     present,
     missing,
     story_excerpt: story,
     story_reference_excerpt: storyReference,
     state_reference_excerpt: stateReference,
-    next: missing.length ? "Review missing scaffold files; initialize only after explicit owner approval." : storyReference ? "Review the linked canonical project story and current state, then define a finite, owner-approved next Epic." : "Review the project story and define a finite, owner-approved first Epic.",
+    next: governanceComplete
+      ? "Governance foundation is present. Review the story and charter, then draft only an owner-approved finite Epic and its Work Units. Missing agent, skill, or configuration files may be an intentional governance_only initialization."
+      : missing.length
+        ? "Review missing scaffold files; initialize only after explicit owner approval. A governance_only scope can create the project story, charter, state, and Epic/Work Unit templates without installing agents, skills, or OpenCode configuration."
+        : storyReference
+          ? "Review the linked canonical project story and current state, then define a finite, owner-approved next Epic."
+          : "Review the project story and define a finite, owner-approved first Epic.",
   }
 }
 

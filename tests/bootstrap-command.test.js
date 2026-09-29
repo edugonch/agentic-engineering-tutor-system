@@ -8,6 +8,8 @@ test("bootstrap prompt preserves the owner's request and keeps intake approval-g
   assert.match(prompt, /Do not write files, initialize the Harness, implement code/)
   assert.match(prompt, /harness_analyze_existing_project/)
   assert.match(prompt, /harness_initialize_project/)
+  assert.match(prompt, /initialization_scope="governance_only"/)
+  assert.match(prompt, /do not widen scope/)
   assert.match(prompt, /If the Harness tools are unavailable, stop/)
 })
 

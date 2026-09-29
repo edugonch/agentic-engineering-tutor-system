@@ -40,7 +40,7 @@ Confirm the package appears with `opencode plugin list`. If it does not, inspect
 1. Start OpenCode in the project and run the plugin command `/harness` with the project idea. This command starts intake before any Harness agent profiles exist; it is registered by the plugin and requires no manual profile installation.
 2. The orchestrator conducts adaptive intake about the problem, intended outcome, MVP, constraints, users, and success evidence.
 3. Review the proposed project story and charter. The plugin must not initialize files until you approve the summary.
-4. After approval, the orchestrator calls `harness_initialize_project` with `project_type: new` and `owner_confirmed: true`. The tool creates only missing files and reports paths it left untouched, including the native agent profiles and skills.
+4. After approval, the orchestrator calls `harness_initialize_project` with `project_type: new` and `owner_confirmed: true`. The default `initialization_scope: full` creates the complete scaffold, only where files are missing. If the owner authorized project governance but not supporting roles, use `initialization_scope: governance_only`; this creates only the project story, charter, state, and Epic/Work Unit indexes and templates, without agents, skills, engineering references, or OpenCode configuration.
 5. Restart OpenCode or start a new session, select `harness-orchestrator`, and review the generated governance. Then define a finite first Epic with an owner-approved WU count and terminal demo/acceptance condition.
 
 ## Bring an existing project under governance
