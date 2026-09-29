@@ -35,14 +35,15 @@ export async function validateStoryFile(projectRoot, documentPath, documentType)
   const invalid = []
   const warnings = []
   if (documentType === "epic") {
-    const maxCount = content.match(/^\s*-\s*Maximum WU count:\s*(\d+)\s*$/im)
+    const maxCountValue = readBudgetField(content, "Maximum WU count", invalid)
+    const maxCount = maxCountValue?.match(/^(\d+)$/)
     const maximumWus = maxCount ? Number(maxCount[1]) : NaN
     if (!Number.isSafeInteger(maximumWus) || maximumWus < 1) {
       invalid.push("Maximum WU count must be a positive safe integer approved for this Epic.")
     }
 
-    const approval = content.match(/^\s*-\s*Approval reference:\s*(.*?)\s*$/im)?.[1]
-    const approvalStatus = content.match(/^\s*-\s*Budget approval status:\s*(.*?)\s*$/im)?.[1]
+    const approval = readBudgetField(content, "Approval reference", invalid)
+    const approvalStatus = readBudgetField(content, "Budget approval status", invalid)
     if (approvalStatus?.toUpperCase() !== "APPROVED") invalid.push("Epic WU budget must have explicit APPROVED status before validation can pass.")
     if (!isConcreteValue(approval)) invalid.push("Epic WU budget needs a concrete owner-approved decision reference.")
 
@@ -59,8 +60,8 @@ export async function validateStoryFile(projectRoot, documentPath, documentType)
   }
   if (documentType === "wu" && !/one coherent outcome|single outcome|indivisible outcome/i.test(content)) warnings.push("Confirm explicitly that the WU is indivisible and represents one coherent outcome.")
   if (documentType === "wu") {
-    const activeTime = content.match(/^\s*-\s*Active-time limit:\s*(.*?)\s*$/im)?.[1]
-    const approval = content.match(/^\s*-\s*Approval reference:\s*(.*?)\s*$/im)?.[1]
+    const activeTime = readBudgetField(content, "Active-time limit", invalid)
+    const approval = readBudgetField(content, "Approval reference", invalid)
     if (!isFiniteDuration(activeTime)) invalid.push("WU needs a finite positive active-time limit, such as '90 minutes' or '2 hours'.")
     if (!isConcreteValue(approval)) invalid.push("WU execution budget needs a concrete owner-approved decision reference.")
   }
@@ -95,4 +96,13 @@ function isFiniteDuration(value) {
   if (!match) return false
   const amount = Number(match[1])
   return Number.isFinite(amount) && amount > 0
+}
+
+function readBudgetField(content, field, invalid) {
+  const escapedField = field.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+  const matches = [...content.matchAll(new RegExp(`^\\s*-\\s*${escapedField}:\\s*(.*?)\\s*$`, "gim"))]
+  if (matches.length > 1) {
+    invalid.push(`${field} must appear exactly once; duplicate entries make the approved budget ambiguous.`)
+  }
+  return matches.length === 1 ? matches[0][1] : undefined
 }
