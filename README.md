@@ -101,6 +101,32 @@ npm run validate
 
 Requires a modern Node.js runtime for the pure-JavaScript test and validation suite. Loading the plugin itself requires OpenCode.
 
+## Jev shadow-mode experiment (opt-in)
+
+The plugin can call OpenCode Zen / TypeSafe Jev in **shadow mode** to collect structured decision signals for evaluation. Jev estimates; the deterministic Harness policy still decides. The signals are never used to select agents, change context, approve work, or execute actions.
+
+To enable the experiment:
+
+```sh
+export HARNESS_JEV_ENABLED=1
+export HARNESS_JEV_API_KEY="your-opencode-console-api-key"
+```
+
+Optional overrides:
+
+| Variable | Default | Effect |
+|---|---|---|
+| `HARNESS_JEV_MODEL` | `jev-1.13-free` | Jev model ID; configure another model if the free tier changes |
+| `HARNESS_JEV_ENDPOINT` | `https://opencode.ai/zen/v1/systemone` | System One evaluation endpoint |
+| `HARNESS_JEV_TIMEOUT_MS` | `5000` | Per-request timeout |
+| `HARNESS_JEV_MAX_RETRIES` | `1` | At most one retry; values above `1` are capped to `1` |
+| `HARNESS_JEV_AUDIT` | unset | Set to `1` to persist redacted audit records |
+| `HARNESS_JEV_AUDIT_PATH` | `.harness/audit/jev-decisions.ndjson` | NDJSON audit path relative to the project root |
+
+When Jev is disabled or misconfigured, or when Jev returns an error or times out, the orchestrator behaves exactly as before. Audit records contain only a non-sensitive task identifier, schema version, model, signals, latency, and a sanitized status or error. They never include prompts, source code, secrets, or repository contents.
+
+The Jev integration uses the OpenCode V2 `prompt` admission hook, keyed by `messageID` to avoid duplicate calls when admission is retried. Prompt hooks are not an exactly-once boundary, so the implementation limits Jev to at most one in-flight request per admitted message and never awaits the call in the hook.
+
 ## Compatibility
 
 This initial implementation targets OpenCode V2. OpenCode documents V1 and V2 as separate plugin APIs; V1 plugin implementations do not run in V2. Verify the installed OpenCode release against the official [V2 plugin](https://opencode.ai/v2/docs/build/plugins), [agent](https://opencode.ai/v2/docs/agents), [skill](https://opencode.ai/v2/docs/skills), and [configuration](https://opencode.ai/v2/docs/config) references before production use.

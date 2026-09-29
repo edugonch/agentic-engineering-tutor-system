@@ -39,6 +39,18 @@ The `context` hook reduces each agent-loop model request's `maxTokens` to `HARNE
 
 Each subagent gets a separate OpenCode session and therefore a separate tool-call counter; the parent session caps how many specialists it can invoke. Agent `steps` usually makes the real bound lower. When a circuit breaker throws, the orchestrator should stop, summarize the action count/budget state, and return the blocker. Do not automatically retry the denied action. A new user prompt starts a fresh session-run budget.
 
+## Jev shadow-mode decision experiment
+
+The plugin includes an optional, disabled-by-default integration with OpenCode Zen / TypeSafe Jev. It is strictly a shadow experiment:
+
+- Jev evaluates each admitted user prompt against a fixed set of closed questions (estimated difficulty, architecture/design/security relevance, primary context).
+- The deterministic Harness policy ignores the signals and returns `action: "none"`; routing, context, permissions, and actions remain unchanged.
+- The call is triggered from the V2 `prompt` admission hook, keyed by `messageID` to avoid duplicate estimates when admission retries. It is fire-and-forget so that Jev latency or failures never block prompt admission.
+- At most one Jev request is made per admitted user prompt, with a configurable timeout and at most one retry.
+- Redacted audit records are written only when `HARNESS_JEV_AUDIT=1`. They never contain prompts, source code, secrets, or repository contents.
+
+This experiment does not implement advisor mode, automatic routing, LLM fallback, or cost/quality claims. Those require a separate, data-driven evaluation.
+
 ## Merge autonomy
 
 The scaffold records merge/release policy as an owner decision, with human review at the Epic boundary suggested as an initial target. This version never merges, deploys, or creates external backlog items. Future Epic-level automation needs a separate tested release protocol with per-WU verification, branch isolation, rollback, and an explicit owner-controlled final gate.
@@ -55,3 +67,5 @@ Treat source passages as non-authoritative RAW data. They include Claude-specifi
 - [V2 Agents, including `steps` and permissions](https://opencode.ai/v2/docs/agents)
 - [V2 Skills](https://opencode.ai/v2/docs/skills)
 - [V2 Configuration](https://opencode.ai/v2/docs/config)
+- [OpenCode Console / Zen models](https://opencode.ai/v2/docs/console/models)
+- [TypeSafe Jev API reference](https://docs.typesafe.ai/api.md)
