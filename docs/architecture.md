@@ -21,6 +21,12 @@ The orchestrator is the only primary Harness role. It conducts adaptive project 
 
 The orchestrator's V2 `subagent` permission rules allow only the named Harness specialists, and each specialist is denied subagent use. Per-agent `steps` put a ceiling on agentic iterations. The plugin caps V2 `subagent` delegations and all tool calls per user-prompt session run.
 
+## Architecture uncertainty and verification
+
+The `architecture-decision` skill classifies uncertainty before selecting a check: current project facts are checked against approved records/code/tests; external platform facts may use one bounded primary-source research assignment; empirical behavior needs a scenario/test/prototype; design trade-offs are compared against owner constraints and quality scenarios; product or policy preferences return to the owner. Code-changing validation must be an explicitly approved WU within a finite Epic.
+
+For consequential choices, the orchestrator drafts an ADR using `.harness/templates/ADR.md`, records the exact claims, evidence, verification criteria, stop condition, and limitations, and separates evidence status from owner approval. When risk, irreversibility, or material dispute warrants it, the existing reviewer performs one read-only challenge for counterexamples and unsupported assumptions. Reviewer agreement is not verification; unresolved evidence or preference goes back to the owner without a review loop.
+
 ## Loop and spend controls
 
 Three layers are used:

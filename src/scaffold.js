@@ -18,6 +18,7 @@ const TEMPLATE_FILES = [
   ".harness/work-units/README.md",
   ".harness/templates/EPIC.md",
   ".harness/templates/WORK_UNIT.md",
+  ".harness/templates/ADR.md",
   ".harness/OPENCODE-CONFIG-FRAGMENT.jsonc",
   ".opencode/agents/harness-orchestrator.md",
   ".opencode/agents/harness-builder.md",

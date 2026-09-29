@@ -14,6 +14,7 @@ This is an early implementation, not a production automation system. Version 0.1
 - A bounded, read-only existing-project inventory that helps the orchestrator find current project markers and likely governance sources before it proposes a migration.
 - Per-agent step limits, role permissions that restrict the orchestrator to named subagents and prevent recursive delegation, a per-session-run tool-call circuit breaker, a delegation cap, a pre-request output-token cap, and a retry limit.
 - Starter governance documents and templates that never overwrite existing files.
+- An ADR template and a bounded architecture-verification workflow that match project evidence, primary-source research, scenario tests/prototypes, and owner decisions to the kind of uncertainty.
 - A packaged 17-document raw reference corpus with a lightweight local search tool that returns bounded excerpts rather than placing the whole library in model context.
 
 It does not publish to npm, create GitHub issues, create branches, commit, merge, or deploy. Human ownership and merge policy remain project decisions. No Claude Code files or integrations are included.
@@ -70,7 +71,7 @@ Merge these keys into an existing config; do not replace it. The scaffold create
 | Orchestrator | Maintains the story, governs scope, assigns bounded work, decides whether research is blocking | Does not implement WUs or invent authority from RAW research |
 | Builder | Implements one activated WU and reports evidence | Does not redefine the Epic or create child/successor WUs |
 | Researcher | Answers one exact blocking question from named sources | Read-only; no code or backlog changes; returns evidence and uncertainty |
-| Reviewer | Independently reviews a defined diff/contract | Read-only; findings go back to the orchestrator; no self-approval or merge |
+| Reviewer | Independently reviews a defined diff/contract or challenges a consequential architecture decision | Read-only; findings go back to the orchestrator; no self-approval or merge |
 
 The orchestrator can delegate only to its named Harness specialists, each of which is denied further subagent use. Research is optional and must resolve a decision that blocks the next authorized step.
 

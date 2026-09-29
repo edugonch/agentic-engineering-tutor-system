@@ -28,6 +28,8 @@ Chapter 6, “Choose an Architecture,” covers constraints, quality attributes,
 
 **Harness application:** compare only plausible options against the actual constraints and important quality scenarios. Record the decision, alternatives, consequences, and evidence in an ADR when the choice is consequential or hard to reverse. Keep architecture descriptions understandable to their intended stakeholders.
 
+For a doubt about architecture, the Harness classifies whether it is a current-state fact, an external/platform fact, an empirical hypothesis, a design trade-off, or an owner preference. It checks each with matching evidence: repository/tests, one bounded primary-source research assignment, a bounded scenario/test/prototype, option comparison, or an owner decision. Consequential ADRs can get one independent reviewer challenge. Agreement between agents is not treated as verification, and an untested hypothesis remains provisional.
+
 ### Evaluate decisions continuously
 
 Chapter 12, “Evaluate an Architecture,” encourages continuous evaluation (pp. 159–177); Chapter 17 describes evaluating options, risk storming, and scenario walkthroughs (pp. 285–312).

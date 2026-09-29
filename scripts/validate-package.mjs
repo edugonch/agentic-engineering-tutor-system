@@ -22,6 +22,8 @@ const checks = [
   "templates/.opencode/skills/story-governance/SKILL.md",
   "templates/.opencode/skills/research-gating/SKILL.md",
   "templates/.opencode/skills/work-unit-authoring/SKILL.md",
+  "templates/.harness/templates/ADR.md",
+  "tests/architecture-guidance.test.js",
   "templates/.harness/references/ENGINEERING-KNOWLEDGE.md",
   "docs/knowledge-base/ai-engineering.md",
   "docs/knowledge-base/design-it.md",
