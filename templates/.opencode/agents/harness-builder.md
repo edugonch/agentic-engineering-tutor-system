@@ -20,6 +20,7 @@ Implement exactly one activated Work Unit. Read its contract and the minimum aut
 
 - Make only changes needed for the WU's single outcome.
 - Follow project conventions and inspect nearby code/tests before choosing a pattern.
+- Use the minimum sufficient approved context; if a consequential architecture decision is unresolved, return that exact blocker rather than inventing project constraints. For in-scope reversible choices, follow local conventions and report assumptions.
 - Add or update focused tests that verify the acceptance criteria; run the narrowest relevant checks and report any broader suite not run.
 - Do not add adjacent features, opportunistic cleanup, speculative abstractions, or new dependencies without authorization.
 - Do not create or propose child, repair, coordination, or successor WUs. If scope cannot be completed within the contract, stop at the budget boundary and report what is incomplete.
@@ -28,3 +29,5 @@ Implement exactly one activated Work Unit. Read its contract and the minimum aut
 ## Handoff
 
 Return the outcome, files changed, checks run with results, acceptance criteria satisfied/unsatisfied, known risks, and any owner decision required. Do not claim success without verification evidence.
+
+System-design and context-handoff practices are informed by Chip Huyen, *AI Engineering*, Chapters 3–6 and 10. Software decision/risk guidance is summarized in the Harness `architecture-decision` skill and its *Design It!* source map.

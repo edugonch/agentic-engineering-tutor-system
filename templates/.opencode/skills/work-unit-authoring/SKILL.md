@@ -35,3 +35,14 @@ When a blocker, failed test, review finding, or missing prerequisite appears:
 4. Never auto-create a child, repair, coordination, research-follow-up, or successor WU.
 
 On budget exhaustion, return `WU_BUDGET_EXHAUSTED` with completed evidence and remaining acceptance criteria. No automatic continuation.
+
+## Context and verification
+
+- Include the approved WU contract, relevant Epic and project-story excerpts, applicable decisions, and only the code/research evidence needed for this outcome.
+- Point to authoritative source paths and distinguish them from raw research or assumptions. Do not make the specialist re-read the entire project history.
+- Make acceptance evidence observable and proportionate to risk. Prefer a focused test or scenario check tied to the outcome over broad, unrelated validation.
+- At handoff, report outcome, checks and results, incomplete criteria, and remaining risk so the orchestrator can evaluate the system result rather than infer success from a plausible summary.
+
+## Grounding
+
+The WU contract is a Harness governance choice informed by project evidence and owner direction. Chip Huyen, *AI Engineering* Chapters 3–6 and 10, informs system-level agent evaluation, instruction design, task context construction, and efficiency; Michael Keeling, *Design It!* Chapters 3, 12, and 17 informs risk-based effort and scenario evaluation.

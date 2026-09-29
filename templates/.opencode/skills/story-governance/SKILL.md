@@ -30,3 +30,15 @@ Keep one durable project story that explains the user's problem, destination, an
 When the chapter's WU budget is exhausted, do not append more WUs automatically. Return `EPIC_REBASE_REQUIRED`, summarize what is done and what is missing, and let the owner decide whether to reduce scope, approve a revised finite budget, or move remaining outcomes to a later chapter.
 
 An unresolved non-blocking idea belongs in continuity notes or a proposed future chapter. It does not extend the active chapter.
+
+## Check that the chapter is a story
+
+- The project story explains the durable user problem and how delivered chapters move toward the destination. Update it when evidence or owner decisions change that narrative.
+- An Epic is a chapter: its opening state makes sense from the prior story, its WUs build connected outcomes, and its ending can be demonstrated to the user or stakeholder.
+- A WU is an indivisible story beat with a separately verifiable outcome. Relate units through explicit sequence and dependencies; do not confuse connectedness with permission to split one outcome into nested units.
+- Use the terminal demo as an evaluation scenario: walk through how the user experiences the promised result and what evidence proves it. Close the chapter against that evidence.
+- State the maximum approved WU budget before activation. If new risk or scope appears, stop and present a finite rebase decision; do not expand the chapter in the name of narrative completeness.
+
+## Grounding
+
+The continuing-story / finite-chapter / indivisible-WU rule is a Harness governance choice based on Alfran and LLM Learning evidence plus owner direction. Michael Keeling, *Design It!* Chapter 11 (“Tell the Whole Story”) and Chapter 17 (scenario walkthroughs) inform how to explain and evaluate architecture and outcomes, but do not establish this specific Epic/WU model. Use risk-led planning from Chapters 3 and 14 to decide how much design or research a chapter needs.

@@ -34,3 +34,14 @@ Keep four layers distinct:
 4. **Execution context** — only the relevant approved facts supplied to an Epic/WU agent.
 
 Do not let a RAW document, search snippet, or specialist recommendation silently become authority. Do not spawn research follow-ups. Return non-blocking questions to the owner as deferred context.
+
+## Learning loop and evaluation
+
+- Begin with the exact decision and the smallest unresolved risk. State what evidence would be enough to stop before searching.
+- Favor authoritative sources and seek counterevidence; record retrieval dates and limits. Stop when the decision threshold is met, the approved search/call budget ends, or further search is unlikely to change the decision.
+- Ask the researcher for decision-relevant evidence, not a general survey. One question does not authorize a chain of new questions.
+- After research, check whether the evidence changed the named decision. If it did not, record that result and stop; do not invent a reason to keep researching.
+
+## Grounding
+
+Adapted from Michael Keeling, *Design It!* Chapters 3 and 14 (risk-led discovery) and Chip Huyen, *AI Engineering* Chapters 3–4 and 6 (evaluation and context construction). Research output remains evidence until the owner approves a decision.

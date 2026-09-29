@@ -32,6 +32,18 @@ Use this skill to turn an informal software idea into a reviewable project chart
 
 Recommend research only when all are true: (a) a precise unresolved question exists, (b) it affects a named decision, (c) current authoritative project material cannot answer it, and (d) the answer is needed before the next safe step. Define the source scope and stop condition. Store retrieved outputs as raw evidence and synthesize separately. Do not create a research stream for non-blocking curiosities.
 
+## Adaptive design discovery
+
+- Let the user's goal and the next consequential decision determine the questions; do not run a fixed questionnaire when answers are already known.
+- Ask who the stakeholders are, which constraints are real (technical, legal, operational, budget, privacy), and what observable evidence would demonstrate success.
+- Surface quality attributes only when relevant. Turn a material quality need into a concrete scenario and ask for a measurable target if choosing one would change scope or obligations.
+- Identify the largest decision-relevant uncertainty and its possible consequence. Recommend a small research task, prototype, or owner decision only if it can reduce that risk before the next step.
+- Iterate: think about what must be learned, propose or make one useful artifact, check it with the owner or evidence, then choose the next step. Intake does not need to settle the entire future architecture.
+
 ## Output
 
 Present a concise draft with: problem, user/context, destination, MVP/in-scope, non-goals, constraints, success evidence, assumptions, blocking question(s), and the owner decision requested. Do not create files until the owner approves.
+
+## Grounding
+
+Adapted from Michael Keeling, *Design It!* Chapters 2–5 and 14 (iterative design, risk-led strategy, stakeholders, constraints, quality attributes, and discovery). AI-specific evaluation and context practices are summarized in the plugin's `docs/knowledge-base/ai-engineering.md`.

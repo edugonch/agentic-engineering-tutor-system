@@ -37,3 +37,5 @@ Before researching, identify the exact question, the decision it could change, a
 ## Output
 
 Return: exact question; decision affected; sources with dates and direct support; findings; conflicting evidence; confidence and limitations; concise recommendation; and whether the stop condition was reached. If the evidence is inadequate, state that plainly.
+
+Keep evidence bounded to the assigned decision. This supports the Harness's system-level evaluation and context discipline (Chip Huyen, *AI Engineering*, Chapters 3–6) and risk-led discovery (Michael Keeling, *Design It!*, Chapters 3 and 14); neither source authorizes follow-up work or changes project authority.
