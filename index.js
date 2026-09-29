@@ -4,6 +4,7 @@ import { getProjectStatus, initializeProject } from "./src/scaffold.js"
 import { analyzeExistingProject } from "./src/project-analysis.js"
 import { validateStoryFile } from "./src/story-validator.js"
 import { searchKnowledge } from "./src/knowledge-search.js"
+import { registerHarnessCommand } from "./src/bootstrap-command.js"
 import {
   buildAuditRecord,
   createAuditSink,
@@ -173,5 +174,7 @@ export default Plugin.define({
         execute: async (input) => json(await searchKnowledge(input.query, input)),
       })
     })
+
+    await registerHarnessCommand(ctx)
   },
 })
