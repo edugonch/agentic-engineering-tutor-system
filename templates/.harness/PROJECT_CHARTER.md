@@ -31,7 +31,9 @@
 - Product owner: [OWNER INPUT REQUIRED]
 - Research approval: [OWNER INPUT REQUIRED]
 - WU activation authority: [OWNER INPUT REQUIRED]
-- Merge/release policy: [OWNER INPUT REQUIRED; recommended initial policy: human review at Epic boundary]
+- Current Harness gate: human review and merge remain per WU; this plugin does not merge or release.
+- Future Epic-level gate: an option only after bounded automation has been validated and the Product Owner explicitly approves a separate release policy. It is not the initial/default policy.
+- Project-specific merge/release policy: [OWNER INPUT REQUIRED]
 - Per-WU active-time and per-Epic WU budgets: owner-approved for each Epic; no universal defaults.
 
 ## Decision history
