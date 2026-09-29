@@ -36,7 +36,10 @@ export async function validateStoryFile(projectRoot, documentPath, documentType)
   const warnings = []
   if (documentType === "epic") {
     const maxCount = content.match(/^\s*-\s*Maximum WU count:\s*(\d+)\s*$/im)
-    if (!maxCount || Number(maxCount[1]) < 1) invalid.push("Maximum WU count must be a positive integer approved for this Epic.")
+    const maximumWus = maxCount ? Number(maxCount[1]) : NaN
+    if (!Number.isSafeInteger(maximumWus) || maximumWus < 1) {
+      invalid.push("Maximum WU count must be a positive safe integer approved for this Epic.")
+    }
 
     const approval = content.match(/^\s*-\s*Approval reference:\s*(.*?)\s*$/im)?.[1]
     const approvalStatus = content.match(/^\s*-\s*Budget approval status:\s*(.*?)\s*$/im)?.[1]
@@ -48,9 +51,9 @@ export async function validateStoryFile(projectRoot, documentPath, documentType)
       if (!isConcreteValue(value)) invalid.push(`${field} must contain a concrete, non-placeholder value.`)
     }
 
-    if (maxCount) {
+    if (Number.isSafeInteger(maximumWus) && maximumWus >= 1) {
       const plannedWus = content.split(/\r?\n/).filter((line) => /^\|\s*\d+\s*\|\s*(?!\[WU ID\])[^|]+\|/i.test(line)).length
-      if (plannedWus > Number(maxCount[1])) invalid.push(`Work Unit sequence has ${plannedWus} entries, exceeding the approved maximum of ${maxCount[1]}.`)
+      if (plannedWus > maximumWus) invalid.push(`Work Unit sequence has ${plannedWus} entries, exceeding the approved maximum of ${maximumWus}.`)
     }
     if (/TBD|TODO|\[OWNER INPUT REQUIRED\]/i.test(content)) warnings.push("The Epic still contains unresolved placeholders outside the validated budget and terminal-outcome fields.")
   }
@@ -58,7 +61,7 @@ export async function validateStoryFile(projectRoot, documentPath, documentType)
   if (documentType === "wu") {
     const activeTime = content.match(/^\s*-\s*Active-time limit:\s*(.*?)\s*$/im)?.[1]
     const approval = content.match(/^\s*-\s*Approval reference:\s*(.*?)\s*$/im)?.[1]
-    if (!isConcreteValue(activeTime)) invalid.push("WU needs a concrete, owner-approved active-time limit.")
+    if (!isFiniteDuration(activeTime)) invalid.push("WU needs a finite positive active-time limit, such as '90 minutes' or '2 hours'.")
     if (!isConcreteValue(approval)) invalid.push("WU execution budget needs a concrete owner-approved decision reference.")
   }
   const recursiveLines = content.split(/\r?\n/).filter((line) =>
@@ -84,4 +87,12 @@ function isConcreteValue(value) {
   return normalized.length > 0
     && !/^\[[^\]]*\]$/.test(normalized)
     && !/^(?:TBD|TODO|PENDING|text|none|n\/a|owner input required)$/i.test(normalized)
+}
+
+function isFiniteDuration(value) {
+  if (!value) return false
+  const match = value.trim().match(/^(\d+(?:\.\d+)?)\s*(seconds?|minutes?|hours?|days?|weeks?)$/i)
+  if (!match) return false
+  const amount = Number(match[1])
+  return Number.isFinite(amount) && amount > 0
 }
