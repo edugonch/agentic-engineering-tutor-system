@@ -35,9 +35,8 @@ export async function validateStoryFile(projectRoot, documentPath, documentType)
   const invalid = []
   const warnings = []
   const activationBlockers = []
-  const statusLine = content.match(/^\s*Status:\s*(.*?)\s*$/im)?.[1] ?? ""
-  const nonExecutableDraft = /\bDRAFT\b/i.test(statusLine) && /NON[- ]EXECUTABLE|NOT AUTHORIZED/i.test(statusLine)
-  if (nonExecutableDraft) activationBlockers.push("Contract is DRAFT / NON-EXECUTABLE; owner review, approval, and explicit activation are still required.")
+  const draftContract = hasDraftStatus(content)
+  if (draftContract) activationBlockers.push("Contract is DRAFT / NON-EXECUTABLE; owner review, approval, and explicit activation are still required.")
   if (documentType === "epic") {
     const maxCountValue = readBudgetField(content, "Maximum WU count", invalid)
     const maxCount = maxCountValue?.match(/^(\d+)$/)
@@ -49,11 +48,11 @@ export async function validateStoryFile(projectRoot, documentPath, documentType)
     const approval = readBudgetField(content, "Approval reference", invalid)
     const approvalStatus = readBudgetField(content, "Budget approval status", invalid)
     if (!approvalStatus?.toUpperCase().startsWith("APPROVED")) {
-      if (nonExecutableDraft) activationBlockers.push("Epic WU count approval is pending; execution cannot be activated.")
+      if (draftContract) activationBlockers.push("Epic WU count approval is pending; execution cannot be activated.")
       else invalid.push("Epic WU budget must have explicit APPROVED status before validation can pass.")
     }
     if (!isConcreteValue(approval) || hasPendingLanguage(approval)) {
-      if (nonExecutableDraft) activationBlockers.push("Epic WU budget needs a concrete owner approval reference before activation.")
+      if (draftContract) activationBlockers.push("Epic WU budget needs a concrete owner approval reference before activation.")
       else invalid.push("Epic WU budget needs a concrete owner-approved decision reference.")
     }
 
@@ -73,11 +72,11 @@ export async function validateStoryFile(projectRoot, documentPath, documentType)
     const activeTime = readBudgetField(content, "Active-time limit", invalid)
     const approval = readBudgetField(content, "Approval reference", invalid)
     if (!isFiniteDuration(activeTime)) {
-      if (nonExecutableDraft) activationBlockers.push("WU needs a finite positive owner-approved active-time limit before activation.")
+      if (draftContract) activationBlockers.push("WU needs a finite positive owner-approved active-time limit before activation.")
       else invalid.push("WU needs a finite positive active-time limit, such as '90 minutes' or '2 hours'.")
     }
     if (!isConcreteValue(approval) || hasPendingLanguage(approval)) {
-      if (nonExecutableDraft) activationBlockers.push("WU execution budget needs a concrete owner approval reference before activation.")
+      if (draftContract) activationBlockers.push("WU execution budget needs a concrete owner approval reference before activation.")
       else invalid.push("WU execution budget needs a concrete owner-approved decision reference.")
     }
   }
@@ -102,6 +101,15 @@ export async function validateStoryFile(projectRoot, documentPath, documentType)
 
 function hasPendingLanguage(value) {
   return /\b(pending|not authorized|not approved|awaiting)\b/i.test(String(value ?? ""))
+}
+
+function hasDraftStatus(content) {
+  const frontmatter = content.match(/^\uFEFF?---[ \t]*\r?\n[\s\S]*?\r?\n---[ \t]*(?:\r?\n|$)/)
+  const metadata = frontmatter?.[0].match(/^\s*status:\s*(?:"([^"]*)"|'([^']*)'|([^#\s]+))\s*$/im)
+  const metadataStatus = metadata?.[1] ?? metadata?.[2] ?? metadata?.[3] ?? ""
+  const body = frontmatter ? content.slice(frontmatter[0].length) : content
+  const bodyStatus = body.match(/^\s*Status:\s*(.*?)\s*$/im)?.[1] ?? ""
+  return /\bDRAFT\b/i.test(metadataStatus) || /\bDRAFT\b/i.test(bodyStatus)
 }
 
 function isConcreteValue(value) {
