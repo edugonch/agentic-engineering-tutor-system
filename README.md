@@ -10,7 +10,7 @@ This is an early implementation, not a production automation system. Version 0.1
 
 - OpenCode plugin tools to initialize new or imported projects, inventory existing projects, inspect Harness files, and validate Epic/WU contracts.
 - OpenCode-native orchestrator, builder, researcher, and reviewer profiles, installed into the target project on explicit initialization.
-- OpenCode-native skills for new-project intake, existing-project import, story/Epic design, bounded research, and WU authoring.
+- OpenCode-native skills for new-project intake, existing-project import, architecture decisions, story/Epic design, bounded research, and WU authoring.
 - A bounded, read-only existing-project inventory that helps the orchestrator find current project markers and likely governance sources before it proposes a migration.
 - Per-agent step limits, role permissions that restrict the orchestrator to named subagents and prevent recursive delegation, a per-session-run tool-call circuit breaker, a delegation cap, a pre-request output-token cap, and a retry limit.
 - Starter governance documents and templates that never overwrite existing files.
@@ -46,6 +46,8 @@ Then restart OpenCode. The package entry point uses the OpenCode V2 plugin API (
 Import is a separate assessment path from new-project intake. The plugin does not assume Alfran's or LLM Learning's domain or tracker structure; it abstracts story, finite-chapter, indivisible-WU, bounded-research, and owner-authority rules. LLM Learning can later serve as a pilot for this import flow without becoming the product being built here.
 
 The design record summarizes how the source-project lessons map into reusable governance: [`docs/lessons-from-source-projects.md`](docs/lessons-from-source-projects.md). The adaptation of the supplied agent/skill-development references is documented in [`docs/source-adaptation.md`](docs/source-adaptation.md).
+
+Two additional engineering references now inform the agent and skill behavior: Chip Huyen's *AI Engineering* guides context construction, agent failure evaluation, and cost/observability controls; Michael Keeling's *Design It!* guides risk-led discovery, quality scenarios, architecture decisions, and evaluation. See the concise source maps in [`docs/knowledge-base/`](docs/knowledge-base/). The books are not redistributed. The installed projects receive a short provenance and authority note at `.harness/references/ENGINEERING-KNOWLEDGE.md`.
 
 Recommended project config:
 
