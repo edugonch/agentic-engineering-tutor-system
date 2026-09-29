@@ -39,6 +39,8 @@ export async function validateStoryFile(projectRoot, documentPath, documentType)
     if (!maxCount || Number(maxCount[1]) < 1) invalid.push("Maximum WU count must be a positive integer approved for this Epic.")
 
     const approval = content.match(/^\s*-\s*Approval reference:\s*(.*?)\s*$/im)?.[1]
+    const approvalStatus = content.match(/^\s*-\s*Budget approval status:\s*(.*?)\s*$/im)?.[1]
+    if (approvalStatus?.toUpperCase() !== "APPROVED") invalid.push("Epic WU budget must have explicit APPROVED status before validation can pass.")
     if (!isConcreteValue(approval)) invalid.push("Epic WU budget needs a concrete owner-approved decision reference.")
 
     for (const field of ["Demo scenario", "Acceptance evidence", "End condition"]) {

@@ -25,6 +25,7 @@ Describe one cohesive user-facing result. Keep implementation detail secondary t
 ## Approved WU budget
 
 - Maximum WU count: [POSITIVE OWNER-APPROVED INTEGER]
+- Budget approval status: [PENDING]
 - Approval reference: [APPROVED DECISION ID / DATE]
 - If exhausted before the terminal condition: stop with `EPIC_REBASE_REQUIRED`; no automatic extension.
 

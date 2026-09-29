@@ -5,7 +5,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { validateStoryFile } from "../src/story-validator.js"
 
-const epic = `# E01\n## Chapter purpose\nEnable a user to complete the first workflow.\n## Start condition\nThe approved project seed is complete.\n## User-visible outcome\nA user can finish the first workflow.\n## Terminal demo and acceptance\n- Demo scenario: A new user completes the workflow.\n- Acceptance evidence: The end-to-end test passes.\n- End condition: The result is saved and shown to the user.\n## Approved WU budget\n- Maximum WU count: 3\n- Approval reference: DEC-004 / 2026-09-29\n## Work Unit sequence\n| Order | WU | Outcome | Depends on | Status |\n|---:|---|---|---|---|\n| 1 | WU-01 | Create workflow | none | DRAFT |\n| 2 | WU-02 | Show saved result | WU-01 | DRAFT |\n## Out of scope\n- Analytics\n`
+const epic = `# E01\n## Chapter purpose\nEnable a user to complete the first workflow.\n## Start condition\nThe approved project seed is complete.\n## User-visible outcome\nA user can finish the first workflow.\n## Terminal demo and acceptance\n- Demo scenario: A new user completes the workflow.\n- Acceptance evidence: The end-to-end test passes.\n- End condition: The result is saved and shown to the user.\n## Approved WU budget\n- Maximum WU count: 3\n- Budget approval status: APPROVED\n- Approval reference: DEC-004 / 2026-09-29\n## Work Unit sequence\n| Order | WU | Outcome | Depends on | Status |\n|---:|---|---|---|---|\n| 1 | WU-01 | Create workflow | none | DRAFT |\n| 2 | WU-02 | Show saved result | WU-01 | DRAFT |\n## Out of scope\n- Analytics\n`
 
 test("accepts an Epic contract with finite story sections", async () => {
   const root = await mkdtemp(join(tmpdir(), "harness-validator-"))
@@ -26,10 +26,11 @@ test("rejects an Epic with a placeholder budget, missing closure evidence, or mo
       .replace("Approval reference: DEC-004 / 2026-09-29", "Approval reference: [PENDING]")
       .replace("Acceptance evidence: The end-to-end test passes.", "Acceptance evidence: [PENDING]")
       .replace("Maximum WU count: 3", "Maximum WU count: 1")
+      .replace("Budget approval status: APPROVED", "Budget approval status: PENDING")
       .replace("| 2 | WU-02 | Show saved result | WU-01 | DRAFT |", "| 2 | WU-02 | Show saved result | WU-01 | DRAFT |\n| 3 | WU-03 | Extra result | WU-02 | DRAFT |"))
     const result = await validateStoryFile(root, "E01.md", "epic")
     assert.equal(result.status, "FAIL")
-    assert.equal(result.invalid_fields.length, 3)
+    assert.equal(result.invalid_fields.length, 4)
     assert.ok(result.invalid_fields.some((field) => field.includes("exceeding the approved maximum")))
 
     await writeFile(join(root, "E01.md"), epic.replace("Maximum WU count: 3", "Maximum WU count: [OWNER-APPROVED INTEGER]"))
