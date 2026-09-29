@@ -8,7 +8,7 @@ The Harness treats the whole project as a continuing story, Epics as finite chap
 
 This is an early implementation, not a production automation system. Version 0.1 provides:
 
-- OpenCode plugin tools to initialize new or imported projects, inventory existing projects, inspect Harness files, validate Epic/WU contracts, and search the preserved reference library selectively.
+- OpenCode plugin tools to initialize new or imported projects, inventory existing projects and knowledge archives, preserve local/external research snapshots with provenance, search/read project knowledge selectively, record linked research/spec/story artifacts, validate Epic/WU contracts, and search the packaged reference library.
 - OpenCode-native orchestrator, builder, researcher, designer, and reviewer profiles, installed into the target project on explicit initialization. The designer is selected only for user-facing UI work within an activated WU.
 - OpenCode-native skills for new-project intake, existing-project import, architecture decisions, story/Epic design, bounded research, and WU authoring.
 - A bounded, read-only existing-project inventory that helps the orchestrator find current project markers and likely governance sources before it proposes a migration.
@@ -47,9 +47,11 @@ Confirm the package appears with `opencode plugin list`. If it does not, inspect
 
 1. Start OpenCode in the existing repository and run `/harness` with a request to import the project.
 2. The bootstrap instructions direct the orchestrator to call `harness_analyze_existing_project`, which returns a bounded path inventory and project markers without reading file contents or writing files.
-3. The orchestrator inspects only relevant source-of-truth files, reconstructs the project story from evidence, and proposes which existing Epics, WUs, research, and decisions map to Harness governance.
+3. The orchestrator reviews the complete discovered set of research, compendia/syntheses, rules, decisions, requirements/specifications, state, Epics, stories, and WUs in bounded batches; it reports inventory truncation and verifies claims against code where needed. Google Drive sources are retrieved by exact ID/revision using the project's configured One CLI/MCP route.
 4. Review the mapping, current status, conflicts, open-ended work, and non-goals. A legacy Epic with recursive expansion or no ending must be handled as a rebase decision, not imported as an active infinite chapter.
-5. Only after you approve the story and mapping should it call `harness_initialize_project` with `project_type: existing` and the approved mapping. It records `.harness/IMPORT_ASSESSMENT.md`, adds other missing Harness files, and preserves existing files.
+5. Only after you approve the story and mapping does it call `harness_import_project_knowledge` to preserve relevant local documents and exact-revision external source snapshots with SHA-256 hashes, retrieval dates, classifications, declared authority, and relationships. Snapshots are marked `SNAPSHOT_UNVERIFIED`; they remain references until checked against their live authority. It then calls `harness_initialize_project` with `project_type: existing`, the approved mapping, and exact references to existing story/state authorities. The scaffold writes pointer files rather than creating competing story/state copies.
+
+The project archive lives under `.harness/knowledge/`. Use `harness_search_project_knowledge` and `harness_read_project_knowledge` before collecting prior research again. `harness_record_knowledge_artifact` stores RAW research, compendia, syntheses, requirements/specifications, user stories, Epics, WUs, decisions, or rules as immutable linked records. Raw evidence remains separate from synthesis; an approved user story must parent to an indexed owner-approved requirement/specification. Binary research files are preserved unchanged; inspect/extract them with the project document reader and save any extraction separately with its source record key.
 
 Import is a separate assessment path from new-project intake. The plugin does not assume Alfran's or LLM Learning's domain or tracker structure; it abstracts story, finite-chapter, indivisible-WU, bounded-research, and owner-authority rules. LLM Learning can later serve as a pilot for this import flow without becoming the product being built here.
 

@@ -1,6 +1,6 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { getProjectStatus, initializeProject } from "../src/scaffold.js"
@@ -97,4 +97,38 @@ test("rejects an existing-project import without an approved assessment before w
   } finally {
     await rm(root, { recursive: true, force: true })
   }
+})
+
+test("references existing story and state authorities instead of creating duplicate copies", async () => {
+  const root = await mkdtemp(join(tmpdir(), "harness-existing-authority-"))
+  try {
+    await writeFile(join(root, "PROJECT_STATE.md"), "Canonical state from owner\n")
+    const result = await initializeProject(root, {
+      ...input,
+      project_type: "existing",
+      import_assessment: "Verified mapping.",
+      project_story_ref: "google-drive:STORY-ID@revision-2",
+    })
+    assert.equal(result.authority_references.project_state, "PROJECT_STATE.md")
+    assert.equal(result.authority_references.project_story, "google-drive:STORY-ID@revision-2")
+    assert.equal(result.created.includes(".harness/PROJECT_STATE.md"), false)
+    assert.equal(result.created.includes(".harness/PROJECT_STORY.md"), false)
+    assert.match(await readFile(join(root, ".harness/PROJECT_STATE_REF.md"), "utf8"), /PROJECT_STATE.md/)
+    assert.match(await readFile(join(root, ".harness/PROJECT_STORY_REF.md"), "utf8"), /STORY-ID@revision-2/)
+    assert.equal(await readFile(join(root, "PROJECT_STATE.md"), "utf8"), "Canonical state from owner\n")
+    assert.equal((await getProjectStatus(root)).initialized, true)
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+test("stops before writing when multiple state authorities have not been mapped", async () => {
+  const root = await mkdtemp(join(tmpdir(), "harness-ambiguous-authority-"))
+  try {
+    await mkdir(join(root, "docs", "product"), { recursive: true })
+    await writeFile(join(root, "PROJECT_STATE.md"), "State A")
+    await writeFile(join(root, "docs", "product", "PROJECT_STATE.md"), "State B")
+    await assert.rejects(initializeProject(root, {
+      ...input, project_type: "existing", import_assessment: "Owner-approved mapping.",
+    }), /multiple state authority candidates/)
+    assert.deepEqual(await readdir(root), ["PROJECT_STATE.md", "docs"])
+  } finally { await rm(root, { recursive: true, force: true }) }
 })

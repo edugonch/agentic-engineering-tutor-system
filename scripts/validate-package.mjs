@@ -11,6 +11,7 @@ const checks = [
   "src/turn-guard.js",
   "src/scaffold.js",
   "src/project-analysis.js",
+  "src/project-knowledge.js",
   "src/story-validator.js",
   "src/knowledge-search.js",
   "src/decision/contracts.js",
@@ -30,6 +31,12 @@ const checks = [
   "templates/.opencode/skills/research-gating/SKILL.md",
   "templates/.opencode/skills/work-unit-authoring/SKILL.md",
   "templates/.harness/templates/ADR.md",
+  "templates/.harness/knowledge/README.md",
+  "templates/.harness/templates/RESEARCH_RECORD.md",
+  "templates/.harness/templates/RESEARCH_SYNTHESIS.md",
+  "templates/.harness/templates/REQUIREMENT_SPEC.md",
+  "templates/.harness/templates/USER_STORY.md",
+  "tests/project-knowledge.test.js",
   "templates/.harness/OPENCODE-CONFIG-FRAGMENT.jsonc",
   "tests/architecture-guidance.test.js",
   "templates/.harness/references/ENGINEERING-KNOWLEDGE.md",
@@ -88,7 +95,7 @@ for (const marker of ["opencode plugin add 'github:edugonch/agentic-engineering-
   if (!readme.includes(marker)) errors.push(`README.md: missing installer/bootstrap instruction ${marker}`)
 }
 const entry = await readFile(join(root, "index.js"), "utf8")
-for (const marker of ["Plugin.define", 'ctx.session.hook("context"', 'ctx.tool.hook("execute.before"', 'ctx.session.hook("retry"', 'name: "harness_search_knowledge"', "registerHarnessCommand(ctx)"]) {
+for (const marker of ["Plugin.define", 'ctx.session.hook("context"', 'ctx.tool.hook("execute.before"', 'ctx.session.hook("retry"', 'name: "harness_search_knowledge"', 'name: "harness_import_project_knowledge"', 'name: "harness_search_project_knowledge"', 'name: "harness_record_knowledge_artifact"', "registerHarnessCommand(ctx)"]) {
   if (!entry.includes(marker)) errors.push(`index.js: missing V2 runtime contract ${marker}`)
 }
 

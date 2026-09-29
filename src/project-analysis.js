@@ -1,5 +1,6 @@
 import { readdir } from "node:fs/promises"
 import { basename, isAbsolute, join, relative, resolve } from "node:path"
+import { discoverProjectKnowledge } from "./project-knowledge.js"
 
 const IGNORED_DIRECTORIES = new Set([
   ".git", ".hg", ".svn", "node_modules", "vendor", "dist", "build", "coverage",
@@ -58,6 +59,7 @@ export async function analyzeExistingProject(projectRoot) {
   }
 
   await visit(projectRoot, 0)
+  const knowledge = await discoverProjectKnowledge(projectRoot)
   const topLevelFiles = files.filter((path) => !path.includes("/")).sort()
   const allKeyDocuments = files.filter((path) => KEY_DOCUMENTS.has(path.split("/").at(-1))).sort()
   const governanceCandidates = files.filter((path) => GOVERNANCE_PATTERN.test(path)).sort()
@@ -83,11 +85,13 @@ export async function analyzeExistingProject(projectRoot) {
     key_documents_truncated: allKeyDocuments.length > MAX_KEY_DOCUMENTS,
     governance_candidates: governanceCandidates.slice(0, MAX_REPORTED_PATHS),
     governance_candidates_truncated: governanceCandidates.length > MAX_REPORTED_PATHS,
+    knowledge_archive: knowledge,
     limits: [
-      "The inventory reports paths and project markers; it does not read or modify file contents.",
+      "The inventory reports paths, sizes, timestamps, and path-based document classifications; it does not return document contents or modify files.",
+      "Knowledge classifications are discovery hints; they do not establish authority, approval, freshness, or completeness.",
       "The scan skips common generated/dependency directories, follows no symlinks, and stops at its depth/file limits.",
       "Absence from this inventory is not proof that information does not exist outside the scanned areas.",
     ],
-    next: "Review project markers and governance candidates; inspect only relevant source-of-truth documents, then propose a project-story and governance mapping for owner approval. Do not write or overwrite project files during assessment.",
+    next: "Review the knowledge archive inventory and authority candidates, read the complete relevant source set (including research, syntheses/compendia, rules, decisions, specifications, Epics and Work Units), record exact source IDs/revisions and relationships, then present the mapping for owner approval. Do not write or overwrite project files during assessment.",
   }
 }

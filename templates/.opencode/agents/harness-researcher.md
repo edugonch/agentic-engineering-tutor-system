@@ -36,6 +36,6 @@ Before researching, identify the exact question, the decision it could change, a
 
 ## Output
 
-Return: exact question; decision affected; sources with dates and direct support; findings; conflicting evidence; confidence and limitations; concise recommendation; and whether the stop condition was reached. If the evidence is inadequate, state that plainly.
+Return: exact question; decision affected; sources with canonical URLs/IDs and exact revision or publication date; retrieval date; source excerpts/findings; conflicting evidence; confidence and limitations; concise recommendation; and whether the stop condition was reached. Include a capture-ready RAW section that preserves retrieved source text or clearly marks where verbatim source text is unavailable. The orchestrator records RAW and synthesis as separate indexed artifacts with `harness_record_knowledge_artifact`; you do not edit files or promote authority.
 
 Keep evidence bounded to the assigned decision. This supports the Harness's system-level evaluation and context discipline (Chip Huyen, *AI Engineering*, Chapters 3–6) and risk-led discovery (Michael Keeling, *Design It!*, Chapters 3 and 14); neither source authorizes follow-up work or changes project authority.

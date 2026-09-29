@@ -4,6 +4,7 @@ import { getProjectStatus, initializeProject } from "./src/scaffold.js"
 import { analyzeExistingProject } from "./src/project-analysis.js"
 import { validateStoryFile } from "./src/story-validator.js"
 import { searchKnowledge } from "./src/knowledge-search.js"
+import { discoverProjectKnowledge, importProjectKnowledge, readProjectKnowledge, recordKnowledgeArtifact, searchProjectKnowledge } from "./src/project-knowledge.js"
 import { registerHarnessCommand } from "./src/bootstrap-command.js"
 import {
   buildAuditRecord,
@@ -124,6 +125,8 @@ export default Plugin.define({
           mvp: { type: "string", minLength: 1 },
           success_evidence: { type: "string", minLength: 1 },
           import_assessment: { type: "string", maxLength: 20000 },
+          project_story_ref: { type: "string", maxLength: 1000, description: "Exact existing local path or canonical external ID/URI for the live story authority, when present." },
+          project_state_ref: { type: "string", maxLength: 1000, description: "Exact existing local path or canonical external ID/URI for the live state authority, when present." },
           owner_confirmed: { type: "boolean" },
         }, ["project_type", "project_name", "problem", "desired_outcome", "mvp", "success_evidence", "owner_confirmed"]),
         execute: async (input) => {
@@ -142,6 +145,74 @@ export default Plugin.define({
         description: "Read-only bounded inventory for bringing an existing software project under Harness governance. Reports project markers and likely story, Epic, Work Unit, research, and decision documents; never reads file contents or changes files.",
         input: objectInput({}),
         execute: async () => json(await analyzeExistingProject(requireProjectRoot())),
+      })
+
+      editor.add({
+        name: "harness_discover_project_knowledge",
+        description: "Read-only inventory of research, compendia, syntheses, rules, decisions, specs, stories, Epics, WUs, and other likely knowledge in the current project. Reports paths and metadata only; never reads document bodies or changes files.",
+        input: objectInput({}),
+        execute: async () => json(await discoverProjectKnowledge(requireProjectRoot())),
+      })
+
+      editor.add({
+        name: "harness_import_project_knowledge",
+        description: "After explicit owner approval, archive discovered local project knowledge and exact-revision external source snapshots (such as Google Drive documents retrieved through the project's required One CLI/MCP route). Preserves bytes, hashes, IDs, revisions, retrieval time, classifications, declared authority, and relationships. Snapshots are unverified references and do not replace live authority.",
+        input: objectInput({
+          owner_confirmed: { type: "boolean" },
+          external_sources: {
+            type: "array", maxItems: 20,
+            items: objectInput({
+              source_id: { type: "string", minLength: 1, maxLength: 181 },
+              title: { type: "string", minLength: 1 },
+              source_system: { type: "string", enum: ["google-drive", "github", "other"] },
+              source_ref: { type: "string", minLength: 1 },
+              source_revision: { type: "string", minLength: 1 },
+              retrieved_at: { type: "string" },
+              classification: { type: "string", enum: ["PROJECT_STATE", "GOVERNANCE_RULE", "APPROVED_DECISION", "REQUIREMENT", "SPECIFICATION", "EPIC", "USER_STORY", "WORK_UNIT", "RAW_RESEARCH", "RESEARCH_COMPENDIUM", "RESEARCH_SYNTHESIS", "DESIGN_HANDOFF", "REFERENCE", "OTHER"] },
+              declared_authority: { type: "string", enum: ["CANONICAL", "APPROVED", "DERIVED", "RAW", "HISTORICAL", "UNKNOWN"] },
+              content: { type: "string", minLength: 1, maxLength: 1048576 },
+              related_sources: { type: "array", items: { type: "string" }, maxItems: 100 },
+            }, ["source_id", "title", "source_system", "source_ref", "source_revision", "classification", "declared_authority", "content"]),
+          },
+        }, ["owner_confirmed"]),
+        execute: async (input) => json(await importProjectKnowledge(requireProjectRoot(), input)),
+      })
+
+      editor.add({
+        name: "harness_search_project_knowledge",
+        description: "Search the project's imported research and governance snapshots on demand. Returns short excerpts with source ID, exact revision, authority declaration, hash, and relationships. Search is a navigation aid; verify current authority before relying on a result.",
+        input: objectInput({
+          query: { type: "string", minLength: 3, maxLength: 500 },
+          max_results: { type: "integer", minimum: 1, maximum: 10, default: 5 },
+        }, ["query"]),
+        execute: async (input) => json(await searchProjectKnowledge(requireProjectRoot(), input.query, input.max_results)),
+      })
+
+      editor.add({
+        name: "harness_read_project_knowledge",
+        description: "Read one exact imported project-knowledge source by source_id or record_key returned by the index/search tool. For multiple revisions, pass the record_key. Returns bounded lines and provenance.",
+        input: objectInput({
+          source_id: { type: "string", minLength: 1 },
+          start_line: { type: "integer", minimum: 1, default: 1 },
+          max_lines: { type: "integer", minimum: 1, maximum: 500, default: 200 },
+        }, ["source_id"]),
+        execute: async (input) => json(await readProjectKnowledge(requireProjectRoot(), input.source_id, input.start_line, input.max_lines)),
+      })
+
+      editor.add({
+        name: "harness_record_knowledge_artifact",
+        description: "After the owner authorizes this artifact write, persist a research record, compendium, synthesis, requirement, specification, user story, Epic, WU, decision, or rule as a new immutable artifact with source/parent references. Requires explicit provenance; APPROVED status requires owner confirmation, and research evidence cannot itself be marked approved.",
+        input: objectInput({
+          artifact_type: { type: "string", enum: ["raw-research", "research-compendium", "research-synthesis", "requirement", "specification", "user-story", "epic", "work-unit", "decision", "rule"] },
+          artifact_id: { type: "string", minLength: 1, maxLength: 181 },
+          title: { type: "string", minLength: 1 },
+          content: { type: "string", minLength: 1, maxLength: 524288 },
+          status: { type: "string", enum: ["RAW", "DRAFT", "PROPOSED", "APPROVED", "REJECTED", "SUPERSEDED"] },
+          source_refs: { type: "array", items: { type: "string" }, maxItems: 100 },
+          parent_refs: { type: "array", items: { type: "string" }, maxItems: 100 },
+          owner_confirmed: { type: "boolean" },
+        }, ["artifact_type", "artifact_id", "title", "content", "status", "owner_confirmed"]),
+        execute: async (input) => json(await recordKnowledgeArtifact(requireProjectRoot(), input)),
       })
 
       editor.add({
