@@ -1,6 +1,6 @@
 # OpenCode Agentic Harness
 
-An OpenCode-only starter for guiding software projects from discovery through bounded, story-shaped delivery. The project is intentionally provider-neutral: agents inherit the user's configured model unless a project owner explicitly selects a model.
+An OpenCode-only starter for guiding software projects from discovery through bounded, story-shaped delivery. The project is provider-neutral: the owner explicitly configures the primary orchestrator model and each worker model for the providers available to that project.
 
 The Harness treats the whole project as a continuing story, Epics as finite chapters, and Work Units (WUs) as indivisible outcomes that fit together in a chapter. A WU may depend on or follow another WU, but it cannot recursively create child WUs.
 
@@ -9,7 +9,7 @@ The Harness treats the whole project as a continuing story, Epics as finite chap
 This is an early implementation, not a production automation system. Version 0.1 provides:
 
 - OpenCode plugin tools to initialize new or imported projects, inventory existing projects, inspect Harness files, validate Epic/WU contracts, and search the preserved reference library selectively.
-- OpenCode-native orchestrator, builder, researcher, and reviewer profiles, installed into the target project on explicit initialization.
+- OpenCode-native orchestrator, builder, researcher, designer, and reviewer profiles, installed into the target project on explicit initialization. The designer is selected only for user-facing UI work within an activated WU.
 - OpenCode-native skills for new-project intake, existing-project import, architecture decisions, story/Epic design, bounded research, and WU authoring.
 - A bounded, read-only existing-project inventory that helps the orchestrator find current project markers and likely governance sources before it proposes a migration.
 - Per-agent step limits, role permissions that restrict the orchestrator to named subagents and prevent recursive delegation, a per-session-run tool-call circuit breaker, a delegation cap, a pre-request output-token cap, and a retry limit.
@@ -59,16 +59,31 @@ Two additional engineering references now inform the agent and skill behavior: C
 
 The separately supplied agent/skill/command/plugin source files are preserved in [`docs/reference-library/`](docs/reference-library/). Use the plugin's `harness_search_knowledge` tool for targeted excerpts; the original files are not copied into each project. The retrieval is lexical and heading-aware, and its results remain non-authoritative RAW references.
 
-Recommended project config after initialization (merge these keys into the existing config):
+## Configure models by agent
+
+Model assignment is part of the orchestrator/worker design. The primary session runs `harness-orchestrator`; set its default model with OpenCode's top-level `model` setting. Set each worker's model under the `agents` object. This lets the owner select a more capable model for orchestration and purpose-fit models for implementation, research, design, and review.
+
+The initialization tool creates `.harness/OPENCODE-CONFIG-FRAGMENT.jsonc` with all Harness role names and model placeholders. Replace every placeholder with an available `provider/model-id` from `opencode models` before merging the fragment into the root `opencode.json` or `opencode.jsonc`. The fragment is a template, not a valid configuration until those values are replaced. OpenCode keeps the selected model separately from the selected agent in an existing session; start a new session or select the intended orchestrator model after changing the config.
+
+Example after replacing the placeholders:
 
 ```jsonc
 {
   "$schema": "https://opencode.ai/config.json",
-  "default_agent": "harness-orchestrator"
+  "default_agent": "harness-orchestrator",
+  "model": "provider/your-orchestrator-model",
+  "agents": {
+    "harness-builder": { "model": "provider/your-builder-model" },
+    "harness-researcher": { "model": "provider/your-research-model" },
+    "harness-designer": { "model": "provider/your-design-model" },
+    "harness-reviewer": { "model": "provider/your-review-model" }
+  }
 }
 ```
 
-The scaffold creates a copyable fragment rather than editing existing OpenCode configuration. This agent config is optional for the first-run plugin command; use it after the orchestrator profile has been scaffolded.
+The model IDs above are illustrative placeholders, not guaranteed catalog entries. The Harness does not rank models automatically or silently choose a vendor. The owner should choose an orchestration model with sufficient capability for planning and delegation, then select worker models for their roles, capabilities, and cost. Jev is configured separately as a decision provider; it is not an agent model.
+
+Merge these keys into an existing config; do not replace it. The scaffold creates a copyable fragment rather than editing existing OpenCode configuration. This model-routing fragment is separate from plugin installation; the plugin and `/harness` bootstrap do not require copying local plugin files. A configured worker model overrides the session model; if omitted, OpenCode can make that worker inherit the parent session model.
 
 ## Agent relationship
 

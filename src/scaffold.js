@@ -24,6 +24,7 @@ const TEMPLATE_FILES = [
   ".opencode/agents/harness-builder.md",
   ".opencode/agents/harness-researcher.md",
   ".opencode/agents/harness-reviewer.md",
+  ".opencode/agents/harness-designer.md",
   ".opencode/skills/project-intake/SKILL.md",
   ".opencode/skills/project-import/SKILL.md",
   ".opencode/skills/architecture-decision/SKILL.md",
@@ -134,7 +135,7 @@ export async function initializeProject(projectRoot, values) {
     }
   }
 
-  let openCodeConfig = "not changed; review .harness/OPENCODE-CONFIG-FRAGMENT.jsonc and merge it into the project config if desired"
+  let openCodeConfig = "not changed; replace the model placeholders in .harness/OPENCODE-CONFIG-FRAGMENT.jsonc with IDs from `opencode models`, then merge it into the project config"
   for (const candidate of CONFIG_CANDIDATES) {
     if (await exists(join(root, candidate))) {
       openCodeConfig = `left unchanged (${candidate} already exists)`

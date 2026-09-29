@@ -21,6 +21,7 @@ const checks = [
   "templates/.opencode/agents/harness-builder.md",
   "templates/.opencode/agents/harness-researcher.md",
   "templates/.opencode/agents/harness-reviewer.md",
+  "templates/.opencode/agents/harness-designer.md",
   "templates/.opencode/skills/project-intake/SKILL.md",
   "templates/.opencode/skills/project-import/SKILL.md",
   "templates/.opencode/skills/architecture-decision/SKILL.md",
@@ -29,6 +30,7 @@ const checks = [
   "templates/.opencode/skills/research-gating/SKILL.md",
   "templates/.opencode/skills/work-unit-authoring/SKILL.md",
   "templates/.harness/templates/ADR.md",
+  "templates/.harness/OPENCODE-CONFIG-FRAGMENT.jsonc",
   "tests/architecture-guidance.test.js",
   "templates/.harness/references/ENGINEERING-KNOWLEDGE.md",
   "docs/knowledge-base/ai-engineering.md",
@@ -36,6 +38,8 @@ const checks = [
   "docs/reference-library/README.md",
   "docs/reference-library/manifest.json",
   "docs/reference-library/SHA256SUMS",
+  "docs/third-party/README.md",
+  "docs/third-party/licenses/OpenDesign-Apache-2.0.txt",
 ]
 
 for (const path of checks) {
@@ -86,6 +90,11 @@ for (const marker of ["opencode plugin add 'github:edugonch/agentic-engineering-
 const entry = await readFile(join(root, "index.js"), "utf8")
 for (const marker of ["Plugin.define", 'ctx.session.hook("context"', 'ctx.tool.hook("execute.before"', 'ctx.session.hook("retry"', 'name: "harness_search_knowledge"', "registerHarnessCommand(ctx)"]) {
   if (!entry.includes(marker)) errors.push(`index.js: missing V2 runtime contract ${marker}`)
+}
+
+const modelConfig = await readFile(join(root, "templates/.harness/OPENCODE-CONFIG-FRAGMENT.jsonc"), "utf8")
+for (const marker of ['"default_agent": "harness-orchestrator"', '"model": "provider/orchestrator-model-id"', '"agents": {', '"harness-builder"', '"harness-researcher"', '"harness-designer"', '"harness-reviewer"']) {
+  if (!modelConfig.includes(marker)) errors.push(`model configuration fragment: missing ${marker}`)
 }
 
 if (errors.length) {

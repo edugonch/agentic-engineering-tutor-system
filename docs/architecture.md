@@ -17,7 +17,7 @@ Import starts with `harness_analyze_existing_project`, a bounded read-only inven
 
 ## Agent control plane
 
-The orchestrator is the only primary Harness role. It conducts adaptive project intake, maintains story continuity, checks governance state, chooses a bounded specialist, and reports back to the owner. The builder implements one WU. The researcher answers a single blocking question read-only. The reviewer independently assesses the defined changeset read-only. Specialists do not recursively delegate or change roadmap authority.
+The orchestrator is the only primary Harness role. It conducts adaptive project intake, maintains story continuity, checks governance state, chooses a bounded specialist, and reports back to the owner. The builder implements general software WUs. The designer handles a UI-centric WU or returns a bounded design contract when a mixed WU has a material interface decision. The researcher answers a single blocking question read-only. The reviewer independently assesses the defined changeset read-only. Specialists do not recursively delegate or change roadmap authority.
 
 The orchestrator's V2 `subagent` permission rules allow only the named Harness specialists, and each specialist is denied subagent use. Per-agent `steps` put a ceiling on agentic iterations. The plugin caps V2 `subagent` delegations and all tool calls per user-prompt session run.
 
@@ -54,7 +54,7 @@ This experiment does not implement advisor mode, automatic routing, LLM fallback
 
 ## Merge autonomy
 
-The scaffold records merge/release policy as an owner decision, with human review at the Epic boundary suggested as an initial target. This version never merges, deploys, or creates external backlog items. Future Epic-level automation needs a separate tested release protocol with per-WU verification, branch isolation, rollback, and an explicit owner-controlled final gate.
+The current workflow keeps independent human review and merge at each WU. The plugin never merges, deploys, or creates external backlog items. Moving the human gate to the end of an Epic is a future option, not the initial policy: it requires validated bounded automation, per-WU verification, branch isolation, recovery behavior, and explicit Product Owner approval of a separate release policy.
 
 ## Reference library retrieval
 
