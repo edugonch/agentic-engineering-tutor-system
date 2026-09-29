@@ -9,7 +9,7 @@ import {
   createShadowPolicy,
   validateDecisionAudit,
   createDecisionProvider,
-} from "../src/decision/contracts.js"
+} from "../src/decision/index.js"
 import { readJevSettings, createJevDecisionProvider, isJevReady } from "../src/decision/jev-provider.js"
 import { buildAuditRecord, createAuditSink } from "../src/decision/audit.js"
 
