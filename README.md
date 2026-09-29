@@ -19,31 +19,37 @@ This is an early implementation, not a production automation system. Version 0.1
 
 It does not publish to npm, create GitHub issues, create branches, commit, merge, or deploy. Human ownership and merge policy remain project decisions. No Claude Code files or integrations are included.
 
-## Install from this GitHub repository
+## Install with OpenCode's plugin installer
 
-The OpenCode CLI supports installing a plugin from a GitHub source. From a terminal, run:
+Install the plugin through OpenCode, without adding local plugin paths or copying agent profiles by hand:
 
 ```sh
 opencode plugin add 'github:edugonch/agentic-engineering-tutor-system'
 ```
 
-Then restart OpenCode. The package entry point uses the OpenCode V2 plugin API (`@opencode/plugin`). This repository does not include a Claude Code implementation or a V1 compatibility layer.
+Restart OpenCode after installation. To test the unmerged Jev spike branch with the same plugin installer:
+
+```sh
+opencode plugin add 'git+https://github.com/edugonch/agentic-engineering-tutor-system.git#jev-shadow-spike'
+```
+
+Confirm the package appears with `opencode plugin list`. If it does not, inspect the resolved configuration with `opencode debug config` and review OpenCode startup errors. The package declares `main: ./index.js` as its server entry point and targets the OpenCode V2 plugin API (`@opencode/plugin`); it has no Claude Code or V1 implementation.
 
 ## Start a new project
 
-1. Start OpenCode in the project and choose `harness-orchestrator` as the primary agent (or set it as `default_agent` in `opencode.json[c]`).
-2. Describe the project in ordinary language. The orchestrator conducts a short, adaptive intake before creating files: problem, intended outcome, MVP, constraints, users, and success evidence.
-3. Review the proposed project story and charter. Ask the orchestrator to initialize only after approving that summary.
-4. The orchestrator calls `harness_initialize_project` with `project_type: "new"` and `owner_confirmed: true`. The tool creates only missing files and reports any paths it left untouched.
-5. Define a finite first Epic with an owner-approved WU count and terminal demo/acceptance condition. Do not treat the full project roadmap as one Epic.
+1. Start OpenCode in the project and run the plugin command `/harness` with the project idea. This command starts intake before any Harness agent profiles exist; it is registered by the plugin and requires no manual profile installation.
+2. The orchestrator conducts adaptive intake about the problem, intended outcome, MVP, constraints, users, and success evidence.
+3. Review the proposed project story and charter. The plugin must not initialize files until you approve the summary.
+4. After approval, the orchestrator calls `harness_initialize_project` with `project_type: new` and `owner_confirmed: true`. The tool creates only missing files and reports paths it left untouched, including the native agent profiles and skills.
+5. Restart OpenCode or start a new session, select `harness-orchestrator`, and review the generated governance. Then define a finite first Epic with an owner-approved WU count and terminal demo/acceptance condition.
 
 ## Bring an existing project under governance
 
-1. Start OpenCode in the existing repository and choose `harness-orchestrator`.
-2. Ask it to assess/import the existing project. It calls `harness_analyze_existing_project`, which returns a bounded path inventory and project markers without reading file contents or writing files.
+1. Start OpenCode in the existing repository and run `/harness` with a request to import the project.
+2. The bootstrap instructions direct the orchestrator to call `harness_analyze_existing_project`, which returns a bounded path inventory and project markers without reading file contents or writing files.
 3. The orchestrator inspects only relevant source-of-truth files, reconstructs the project story from evidence, and proposes which existing Epics, WUs, research, and decisions map to Harness governance.
-4. Review the mapping, current status, conflicts, open-ended work, and non-goals. A legacy Epic that expands recursively or has no ending must be treated as a rebase decision, not imported as an active infinite chapter.
-5. Only after you approve the story and mapping should it call `harness_initialize_project` with `project_type: "existing"` and the approved mapping. That tool records the mapping in `.harness/IMPORT_ASSESSMENT.md`, adds other missing Harness files, and preserves every existing file. Review those generated files before authorizing work.
+4. Review the mapping, current status, conflicts, open-ended work, and non-goals. A legacy Epic with recursive expansion or no ending must be handled as a rebase decision, not imported as an active infinite chapter.
+5. Only after you approve the story and mapping should it call `harness_initialize_project` with `project_type: existing` and the approved mapping. It records `.harness/IMPORT_ASSESSMENT.md`, adds other missing Harness files, and preserves existing files.
 
 Import is a separate assessment path from new-project intake. The plugin does not assume Alfran's or LLM Learning's domain or tracker structure; it abstracts story, finite-chapter, indivisible-WU, bounded-research, and owner-authority rules. LLM Learning can later serve as a pilot for this import flow without becoming the product being built here.
 
@@ -77,7 +83,7 @@ Example after replacing the placeholders:
 
 The model IDs above are illustrative placeholders, not guaranteed catalog entries. The Harness does not rank models automatically or silently choose a vendor. The owner should choose an orchestration model with sufficient capability for planning and delegation, then select worker models for their roles, capabilities, and cost. Jev is configured separately as a decision provider; it is not an agent model.
 
-Merge these keys into an existing config; do not replace it. The scaffold creates a copyable fragment rather than editing existing OpenCode configuration. A configured worker model overrides the session model; if omitted, OpenCode can make that worker inherit the parent session model.
+Merge these keys into an existing config; do not replace it. The scaffold creates a copyable fragment rather than editing existing OpenCode configuration. This model-routing fragment is separate from plugin installation; the plugin and `/harness` bootstrap do not require copying local plugin files. A configured worker model overrides the session model; if omitted, OpenCode can make that worker inherit the parent session model.
 
 ## Agent relationship
 
@@ -115,6 +121,36 @@ npm run validate
 ```
 
 Requires a modern Node.js runtime for the pure-JavaScript test and validation suite. Loading the plugin itself requires OpenCode.
+
+## Jev shadow-mode experiment (opt-in)
+
+The plugin can call OpenCode Zen / TypeSafe Jev in **shadow mode** to collect structured decision signals for evaluation. Jev estimates; the deterministic Harness policy still decides. The signals are never used to select agents, change context, approve work, or execute actions.
+
+To enable the experiment:
+
+```sh
+export HARNESS_JEV_ENABLED=1
+export HARNESS_JEV_API_KEY="your-opencode-console-api-key"
+```
+
+Optional overrides:
+
+| Variable | Default | Effect |
+|---|---|---|
+| `HARNESS_JEV_MODEL` | `jev-1.13-free` | Jev model ID; configure another model if the free tier changes |
+| `HARNESS_JEV_ENDPOINT` | `https://opencode.ai/zen/v1/systemone` | System One evaluation endpoint |
+| `HARNESS_JEV_TIMEOUT_MS` | `5000` | Per-request timeout |
+| `HARNESS_JEV_MAX_RETRIES` | `1` | At most one retry; values above `1` are capped to `1` |
+| `HARNESS_JEV_AUDIT` | unset | Set to `1` to persist redacted audit records |
+| `HARNESS_JEV_AUDIT_PATH` | `.harness/audit/jev-decisions.ndjson` | NDJSON audit path relative to the project root |
+
+When Jev is disabled or misconfigured, or when Jev returns an error or times out, the orchestrator behaves exactly as before.
+
+**Data transmission:** enabling Jev sends the first 2,000 characters of each admitted user prompt to OpenCode Zen for evaluation. The local audit does not persist that text.
+
+Audit records contain only a non-sensitive task identifier, schema version, requested/actual model, signals, usage tokens (when provided), latency, and a sanitized status or error. They never include prompts, source code, secrets, or repository contents.
+
+The Jev integration uses the OpenCode V2 `prompt` admission hook, keyed by `messageID` to avoid duplicate calls when admission is retried. Prompt hooks are not an exactly-once boundary, so the implementation limits Jev to at most one in-flight request per admitted message and never awaits the call in the hook.
 
 ## Compatibility
 

@@ -4,6 +4,16 @@ import { getProjectStatus, initializeProject } from "./src/scaffold.js"
 import { analyzeExistingProject } from "./src/project-analysis.js"
 import { validateStoryFile } from "./src/story-validator.js"
 import { searchKnowledge } from "./src/knowledge-search.js"
+import { registerHarnessCommand } from "./src/bootstrap-command.js"
+import {
+  buildAuditRecord,
+  createAuditSink,
+  createDecisionProvider,
+  createJevDecisionProvider,
+  createShadowPolicy,
+  isJevReady,
+  readJevSettings,
+} from "./src/decision/index.js"
 
 const json = (value) => ({ content: JSON.stringify(value, null, 2) })
 const objectInput = (properties, required = []) => ({
@@ -24,8 +34,65 @@ export default Plugin.define({
       return projectRoot
     }
 
+    // Jev shadow-mode decision experiment. Disabled by default; opt-in via
+    // HARNESS_JEV_ENABLED=1 and HARNESS_JEV_API_KEY. Jev estimates are audited
+    // but never change routing, context, permissions, or actions.
+    const jevSettings = readJevSettings(process.env)
+    const jevProvider = isJevReady(jevSettings)
+      ? createDecisionProvider(createJevDecisionProvider(jevSettings))
+      : null
+    const jevPolicy = createShadowPolicy()
+    const jevAudit = createAuditSink(jevSettings, projectRoot)
+    const jevSeen = new Set()
+    const JEV_SEEN_MAX = 1000
+
+    function jevTaskId(sessionID, messageID) {
+      return `${sessionID}::${messageID}`
+    }
+
+    function markJevSeen(messageID) {
+      if (jevSeen.size >= JEV_SEEN_MAX) {
+        const first = jevSeen.values().next().value
+        jevSeen.delete(first)
+      }
+      jevSeen.add(messageID)
+    }
+
+    async function runJevShadow(event) {
+      const taskId = jevTaskId(event.sessionID, event.messageID)
+      const state = String(event.prompt?.text ?? "").slice(0, 2000)
+      const result = await jevProvider.estimate({ taskId, state })
+      if (result.ok) {
+        // Policy is intentionally a no-op in shadow mode.
+        jevPolicy.apply(result.signals)
+      }
+      const record = buildAuditRecord({
+        taskId,
+        requestedModel: jevSettings.model,
+        actualModel: result.ok ? result.actualModel : undefined,
+        signals: result.ok ? result.signals : undefined,
+        usage: result.ok ? result.usage : undefined,
+        latencyMs: result.latencyMs,
+        status: result.ok ? "ok" : "error",
+        error: result.error,
+      })
+      await jevAudit.write(record)
+    }
+
     // A fresh user prompt starts a new per-session action budget.
-    await ctx.session.hook("prompt", (event) => guard.reset(event.sessionID))
+    await ctx.session.hook("prompt", (event) => {
+      guard.reset(event.sessionID)
+
+      // Shadow-mode Jev: one best-effort estimate per admitted user prompt.
+      // Prompt hooks are not an exactly-once boundary; we key by messageID to
+      // avoid duplicate calls when admission is retried.
+      if (jevProvider && event.messageID && !jevSeen.has(event.messageID)) {
+        markJevSeen(event.messageID)
+        // Fire and forget: failures must never block prompt admission or alter
+        // the conversation.
+        runJevShadow(event).catch(() => {})
+      }
+    })
 
     // V2 calls this hook before every agent-loop request, including tool continuations.
     await ctx.session.hook("context", (event) => {
@@ -107,5 +174,7 @@ export default Plugin.define({
         execute: async (input) => json(await searchKnowledge(input.query, input)),
       })
     })
+
+    await registerHarnessCommand(ctx)
   },
 })

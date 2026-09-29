@@ -39,6 +39,19 @@ The `context` hook reduces each agent-loop model request's `maxTokens` to `HARNE
 
 Each subagent gets a separate OpenCode session and therefore a separate tool-call counter; the parent session caps how many specialists it can invoke. Agent `steps` usually makes the real bound lower. When a circuit breaker throws, the orchestrator should stop, summarize the action count/budget state, and return the blocker. Do not automatically retry the denied action. A new user prompt starts a fresh session-run budget.
 
+## Jev shadow-mode decision experiment
+
+The plugin includes an optional, disabled-by-default integration with OpenCode Zen / TypeSafe Jev. It is strictly a shadow experiment:
+
+- Jev evaluates each admitted user prompt against a fixed set of closed questions (estimated difficulty, architecture/design/security relevance, primary context).
+- The deterministic Harness policy ignores the signals and returns `action: "none"`; routing, context, permissions, and actions remain unchanged.
+- The call is triggered from the V2 `prompt` admission hook, keyed by `messageID` to avoid duplicate estimates when admission retries. It is fire-and-forget so that Jev latency or failures never block prompt admission.
+- At most one Jev request is made per admitted user prompt, with a configurable timeout and at most one retry. The timeout covers the request, headers, body read, and JSON parsing.
+- Enabling Jev sends the first 2,000 characters of each admitted user prompt to OpenCode Zen for evaluation. The local audit does not persist that text.
+- Redacted audit records are written only when `HARNESS_JEV_AUDIT=1`. They contain requested/actual model, usage tokens when provided, signals, latency, and sanitized status/error. They never contain prompts, source code, secrets, or repository contents.
+
+This experiment does not implement advisor mode, automatic routing, LLM fallback, or cost/quality claims. Those require a separate, data-driven evaluation.
+
 ## Merge autonomy
 
 The current workflow keeps independent human review and merge at each WU. The plugin never merges, deploys, or creates external backlog items. Moving the human gate to the end of an Epic is a future option, not the initial policy: it requires validated bounded automation, per-WU verification, branch isolation, recovery behavior, and explicit Product Owner approval of a separate release policy.
@@ -55,3 +68,5 @@ Treat source passages as non-authoritative RAW data. They include Claude-specifi
 - [V2 Agents, including `steps` and permissions](https://opencode.ai/v2/docs/agents)
 - [V2 Skills](https://opencode.ai/v2/docs/skills)
 - [V2 Configuration](https://opencode.ai/v2/docs/config)
+- [OpenCode Console / Zen models](https://opencode.ai/v2/docs/console/models)
+- [TypeSafe Jev API reference](https://docs.typesafe.ai/api.md)
