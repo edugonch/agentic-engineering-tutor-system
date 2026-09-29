@@ -24,6 +24,7 @@ const checks = [
   "templates/.opencode/skills/research-gating/SKILL.md",
   "templates/.opencode/skills/work-unit-authoring/SKILL.md",
   "templates/.harness/templates/ADR.md",
+  "templates/.harness/OPENCODE-CONFIG-FRAGMENT.jsonc",
   "tests/architecture-guidance.test.js",
   "templates/.harness/references/ENGINEERING-KNOWLEDGE.md",
   "docs/knowledge-base/ai-engineering.md",
@@ -78,6 +79,11 @@ if (manifest.dependencies?.["@opencode-ai/plugin"] || manifest.peerDependencies?
 const entry = await readFile(join(root, "index.js"), "utf8")
 for (const marker of ["Plugin.define", 'ctx.session.hook("context"', 'ctx.tool.hook("execute.before"', 'ctx.session.hook("retry"', 'name: "harness_search_knowledge"']) {
   if (!entry.includes(marker)) errors.push(`index.js: missing V2 runtime contract ${marker}`)
+}
+
+const modelConfig = await readFile(join(root, "templates/.harness/OPENCODE-CONFIG-FRAGMENT.jsonc"), "utf8")
+for (const marker of ['"default_agent": "harness-orchestrator"', '"model": "provider/orchestrator-model-id"', '"agents": {', '"harness-builder"', '"harness-researcher"', '"harness-designer"', '"harness-reviewer"']) {
+  if (!modelConfig.includes(marker)) errors.push(`model configuration fragment: missing ${marker}`)
 }
 
 if (errors.length) {

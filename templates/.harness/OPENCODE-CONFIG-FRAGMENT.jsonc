@@ -1,6 +1,27 @@
-// Merge these settings into the project's opencode.json or opencode.jsonc.
+// Model-routing template for the project's opencode.json or opencode.jsonc.
+// Replace every provider/model placeholder with an ID returned by `opencode models`
+// before merging. Do not use this fragment unchanged: the placeholder model IDs are not real models.
 // The Harness initializer leaves existing OpenCode config untouched.
 {
   "$schema": "https://opencode.ai/config.json",
-  "default_agent": "harness-orchestrator"
+  "default_agent": "harness-orchestrator",
+
+  // The primary session runs the orchestrator. Choose its more capable model here.
+  "model": "provider/orchestrator-model-id",
+
+  // Explicit worker models prevent them from silently inheriting the orchestrator's model.
+  "agents": {
+    "harness-builder": {
+      "model": "provider/builder-model-id"
+    },
+    "harness-researcher": {
+      "model": "provider/researcher-model-id"
+    },
+    "harness-designer": {
+      "model": "provider/designer-model-id"
+    },
+    "harness-reviewer": {
+      "model": "provider/reviewer-model-id"
+    }
+  }
 }
