@@ -1,14 +1,36 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { createTurnGuard, readGuardSettings } from "../src/turn-guard.js"
+import { applyOutputTokenCap, createTurnGuard, readGuardSettings } from "../src/turn-guard.js"
 
 test("applies defaults and ignores invalid limit overrides", () => {
   assert.deepEqual(readGuardSettings({ HARNESS_MAX_TOOL_CALLS: "0" }), {
     maxToolCalls: 40,
     maxDelegations: 3,
     maxIdenticalMutations: 4,
-    maxOutputTokens: 4096,
+    maxOutputTokens: null,
   })
+})
+
+test("leaves provider request options untouched unless the output-token cap is explicitly enabled", () => {
+  const options = { temperature: 0.2 }
+  assert.equal(applyOutputTokenCap(options, null), options)
+  assert.deepEqual(options, { temperature: 0.2 })
+  assert.equal(readGuardSettings({}).maxOutputTokens, null)
+  assert.equal(readGuardSettings({ HARNESS_MAX_OUTPUT_TOKENS: "2048" }).maxOutputTokens, 2048)
+})
+
+test("applies an explicitly configured output-token cap without raising a lower request limit", () => {
+  const uncapped = { temperature: 0.2 }
+  applyOutputTokenCap(uncapped, 2048)
+  assert.equal(uncapped.maxTokens, 2048)
+
+  const high = { maxTokens: 4096 }
+  applyOutputTokenCap(high, 2048)
+  assert.equal(high.maxTokens, 2048)
+
+  const lower = { maxTokens: 512 }
+  applyOutputTokenCap(lower, 2048)
+  assert.equal(lower.maxTokens, 512)
 })
 
 test("stops tool actions after the configured per-turn ceiling", () => {
