@@ -1,6 +1,5 @@
 export {
   PRIMARY_CONTEXT_OPTIONS,
-  SIGNAL_SCHEMA_VERSION,
   validateDecisionSignal,
   createDecisionProvider,
   createShadowPolicy,
