@@ -26,6 +26,7 @@ test("initializes missing files and preserves existing owner files", async () =>
     assert.ok(result.created.includes(".opencode/skills/reference-library-search/SKILL.md"))
     assert.ok(result.created.includes(".harness/references/ENGINEERING-KNOWLEDGE.md"))
     assert.ok(result.created.includes(".harness/templates/ADR.md"))
+    assert.ok(result.created.includes(".harness/OPENCODE-CONFIG-FRAGMENT.jsonc"))
     assert.equal(await readFile(join(root, "AGENTS.md"), "utf8"), "Owner-authored rules\n")
     const story = await readFile(join(root, ".harness/PROJECT_STORY.md"), "utf8")
     assert.match(story, /Sample Project/)
@@ -34,11 +35,32 @@ test("initializes missing files and preserves existing owner files", async () =>
     assert.match(await readFile(join(root, ".opencode/agents/harness-designer.md"), "utf8"), /product-interface designer/)
     assert.match(await readFile(join(root, ".harness/references/ENGINEERING-KNOWLEDGE.md"), "utf8"), /Chip Huyen/)
     assert.match(await readFile(join(root, ".harness/templates/ADR.md"), "utf8"), /Verification plan and evidence/)
+    const modelConfig = await readFile(join(root, ".harness/OPENCODE-CONFIG-FRAGMENT.jsonc"), "utf8")
+    assert.match(modelConfig, /"model": "provider\/orchestrator-model-id"/)
+    for (const agent of ["builder", "researcher", "designer", "reviewer"]) {
+      assert.match(modelConfig, new RegExp(`"harness-${agent}"`))
+      assert.match(modelConfig, new RegExp(`provider/${agent}-model-id`))
+    }
+    assert.match(result.openCodeConfig, /opencode models/)
     assert.equal((await getProjectStatus(root)).initialized, true)
 
     const second = await initializeProject(root, { ...input, project_name: "Changed" })
     assert.ok(second.skipped.includes(".harness/PROJECT_STORY.md"))
     assert.match(await readFile(join(root, ".harness/PROJECT_STORY.md"), "utf8"), /Sample Project/)
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test("leaves an existing OpenCode model configuration untouched", async () => {
+  const root = await mkdtemp(join(tmpdir(), "harness-opencode-config-"))
+  const config = '{"model":"owner/provider-model","agents":{"harness-builder":{"model":"owner/builder"}}}\n'
+  try {
+    await writeFile(join(root, "opencode.jsonc"), config)
+    const result = await initializeProject(root, input)
+    assert.equal(await readFile(join(root, "opencode.jsonc"), "utf8"), config)
+    assert.equal(result.openCodeConfig, "left unchanged (opencode.jsonc already exists)")
+    assert.ok(result.created.includes(".harness/OPENCODE-CONFIG-FRAGMENT.jsonc"))
   } finally {
     await rm(root, { recursive: true, force: true })
   }
