@@ -67,8 +67,10 @@ export default Plugin.define({
       }
       const record = buildAuditRecord({
         taskId,
-        model: jevSettings.model,
+        requestedModel: jevSettings.model,
+        actualModel: result.ok ? result.actualModel : undefined,
         signals: result.ok ? result.signals : undefined,
+        usage: result.ok ? result.usage : undefined,
         latencyMs: result.latencyMs,
         status: result.ok ? "ok" : "error",
         error: result.error,

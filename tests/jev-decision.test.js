@@ -1,6 +1,6 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { mkdtemp, readFile, rm } from "node:fs/promises"
+import { mkdtemp, readFile, rm, symlink, writeFile, mkdir } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import {
@@ -45,6 +45,22 @@ function makeFetch(response, options = {}) {
         const error = new Error("The operation was aborted")
         error.name = "AbortError"
         throw error
+      }
+    }
+    if (options.bodyDelayMs) {
+      const originalJson = response.body
+      return {
+        ok: response.status < 400,
+        status: response.status,
+        json: async () => {
+          await new Promise((resolve) => setTimeout(resolve, options.bodyDelayMs))
+          if (init?.signal?.aborted) {
+            const error = new Error("The operation was aborted")
+            error.name = "AbortError"
+            throw error
+          }
+          return originalJson
+        },
       }
     }
     if (options.throwError) {
@@ -147,11 +163,13 @@ test("provider parses a valid Jev response", async () => {
   const result = await provider.estimate({ taskId: "t1", state: "Refactor the auth module." })
 
   assert.equal(result.ok, true)
+  assert.equal(result.actualModel, "jev-1.13.0")
   assert.equal(result.signals.difficulty, 3)
   assert.equal(result.signals.needsArchitecture, 0.2)
   assert.equal(result.signals.needsDesign, 0.5)
   assert.equal(result.signals.needsSecurity, 0.1)
   assert.equal(result.signals.primaryContext, "design")
+  assert.deepEqual(result.usage, { input_tokens: 100, output_tokens: 20 })
   assert.ok(result.latencyMs >= 0)
 
   const request = JSON.parse(fetchImpl.calls[0].init.body)
@@ -215,6 +233,19 @@ test("provider rejects an invalid choice answer", async () => {
   assert.match(result.error.message, /primaryContext/)
 })
 
+test("provider rejects invalid usage fields", async () => {
+  const body = structuredClone(validResponse)
+  body.usage = { input_tokens: -1, output_tokens: 20 }
+  const fetchImpl = makeFetch({ status: 200, body })
+  const provider = createJevDecisionProvider(
+    { ...readJevSettings({}), apiKey: "test-key" },
+    { fetch: fetchImpl },
+  )
+  const result = await provider.estimate({ taskId: "t1", state: "x" })
+  assert.equal(result.ok, false)
+  assert.match(result.error.message, /input_tokens/)
+})
+
 test("provider returns error on HTTP failure without retrying 4xx", async () => {
   const fetchImpl = makeFetch({ status: 401, body: {} })
   const provider = createJevDecisionProvider(
@@ -250,7 +281,7 @@ test("provider respects maxRetries=0", async () => {
   assert.equal(fetchImpl.callCount(), 1)
 })
 
-test("provider times out and retries once", async () => {
+test("provider times out during fetch and retries once", async () => {
   const fetchImpl = makeFetch(
     { status: 200, body: validResponse },
     { delayMs: 100 },
@@ -263,6 +294,25 @@ test("provider times out and retries once", async () => {
   assert.equal(result.ok, false)
   assert.match(result.error.message, /timed out/)
   assert.equal(fetchImpl.callCount(), 2)
+})
+
+test("provider times out while reading response body and retries once", async () => {
+  const fetchImpl = makeFetch(
+    { status: 200, body: validResponse },
+    { bodyDelayMs: 100 },
+  )
+  const provider = createJevDecisionProvider(
+    { ...readJevSettings({ HARNESS_JEV_TIMEOUT_MS: "20" }), apiKey: "test-key" },
+    { fetch: fetchImpl },
+  )
+  const start = Date.now()
+  const result = await provider.estimate({ taskId: "t1", state: "x" })
+  const elapsed = Date.now() - start
+
+  assert.equal(result.ok, false)
+  assert.match(result.error.message, /timed out/)
+  assert.equal(fetchImpl.callCount(), 2)
+  assert.ok(elapsed < 300, `elapsed ${elapsed}ms should be well under the unbounded case`)
 })
 
 test("provider handles malformed JSON", async () => {
@@ -287,30 +337,45 @@ test("DecisionProvider contract rejects invalid providers", () => {
   assert.throws(() => createDecisionProvider(null), /object/)
 })
 
+test("audit record contains requested and actual model and usage", () => {
+  const record = buildAuditRecord({
+    taskId: "task-123",
+    requestedModel: "jev-1.13-free",
+    actualModel: "jev-1.13.0",
+    signals: validSignal,
+    usage: { input_tokens: 100, output_tokens: 20 },
+    latencyMs: 120,
+    status: "ok",
+  })
+  assert.equal(record.schemaVersion, "jev-shadow-audit-v2")
+  assert.equal(record.taskId, "task-123")
+  assert.equal(record.requestedModel, "jev-1.13-free")
+  assert.equal(record.actualModel, "jev-1.13.0")
+  assert.deepEqual(record.usage, { input_tokens: 100, output_tokens: 20 })
+  assert.equal(record.latencyMs, 120)
+  assert.equal(record.status, "ok")
+  assert.deepEqual(record.signals, validSignal)
+})
+
 test("audit record contains no prompts, secrets, or code", () => {
   const record = buildAuditRecord({
     taskId: "task-123",
-    model: "jev-1.13-free",
+    requestedModel: "jev-1.13-free",
     signals: validSignal,
     latencyMs: 120,
     status: "ok",
   })
-  assert.equal(record.schemaVersion, "jev-shadow-audit-v1")
-  assert.equal(record.taskId, "task-123")
-  assert.equal(record.model, "jev-1.13-free")
-  assert.equal(record.latencyMs, 120)
-  assert.equal(record.status, "ok")
-  assert.deepEqual(record.signals, validSignal)
   assert.equal("prompt" in record, false)
   assert.equal("state" in record, false)
   assert.equal("apiKey" in record, false)
+  assert.equal("code" in record, false)
 })
 
 test("audit sanitizes errors that may contain secrets", () => {
   const error = new Error("Request failed with Bearer super-secret-token and api_key=another-secret")
   const record = buildAuditRecord({
     taskId: "task-123",
-    model: "jev-1.13-free",
+    requestedModel: "jev-1.13-free",
     latencyMs: 120,
     status: "error",
     error,
@@ -318,6 +383,31 @@ test("audit sanitizes errors that may contain secrets", () => {
   assert.match(record.error, /\[redacted\]/)
   assert.equal(record.error.includes("super-secret-token"), false)
   assert.equal(record.error.includes("another-secret"), false)
+})
+
+test("audit validates usage fields", () => {
+  assert.throws(
+    () =>
+      buildAuditRecord({
+        taskId: "task-123",
+        requestedModel: "jev-1.13-free",
+        usage: { input_tokens: -1 },
+        latencyMs: 120,
+        status: "ok",
+      }),
+    /input_tokens/,
+  )
+  assert.throws(
+    () =>
+      buildAuditRecord({
+        taskId: "task-123",
+        requestedModel: "jev-1.13-free",
+        usage: { extra: 1 },
+        latencyMs: 120,
+        status: "ok",
+      }),
+    /unexpected usage fields/,
+  )
 })
 
 test("audit sink writes NDJSON when enabled", async () => {
@@ -329,8 +419,10 @@ test("audit sink writes NDJSON when enabled", async () => {
     )
     const record = buildAuditRecord({
       taskId: "task-123",
-      model: "jev-1.13-free",
+      requestedModel: "jev-1.13-free",
+      actualModel: "jev-1.13.0",
       signals: validSignal,
+      usage: { input_tokens: 100, output_tokens: 20 },
       latencyMs: 120,
       status: "ok",
     })
@@ -341,6 +433,8 @@ test("audit sink writes NDJSON when enabled", async () => {
     assert.equal(lines.length, 1)
     const parsed = JSON.parse(lines[0])
     assert.equal(parsed.taskId, "task-123")
+    assert.equal(parsed.actualModel, "jev-1.13.0")
+    assert.deepEqual(parsed.usage, { input_tokens: 100, output_tokens: 20 })
   } finally {
     await rm(root, { recursive: true, force: true })
   }
@@ -355,7 +449,7 @@ test("audit sink disables writing when path escapes the project root", async () 
     )
     const record = buildAuditRecord({
       taskId: "task-123",
-      model: "jev-1.13-free",
+      requestedModel: "jev-1.13-free",
       signals: validSignal,
       latencyMs: 120,
       status: "ok",
@@ -370,13 +464,40 @@ test("audit sink disables writing when path escapes the project root", async () 
   }
 })
 
+test("audit sink refuses to follow a symlink that points outside the project", async () => {
+  const root = await mkdtemp(join(tmpdir(), "harness-jev-audit-symlink-"))
+  const externalDir = await mkdtemp(join(tmpdir(), "harness-jev-audit-external-"))
+  try {
+    await symlink(externalDir, join(root, "external-link"))
+    const sink = createAuditSink(
+      { auditEnabled: true, auditPath: "external-link/escape.ndjson" },
+      root,
+    )
+    const record = buildAuditRecord({
+      taskId: "task-123",
+      requestedModel: "jev-1.13-free",
+      signals: validSignal,
+      latencyMs: 120,
+      status: "ok",
+    })
+    await sink.write(record)
+    await assert.rejects(
+      readFile(join(externalDir, "escape.ndjson"), "utf8"),
+      /ENOENT/,
+    )
+  } finally {
+    await rm(root, { recursive: true, force: true })
+    await rm(externalDir, { recursive: true, force: true })
+  }
+})
+
 test("disabled audit sink validates but does not write", async () => {
   const root = await mkdtemp(join(tmpdir(), "harness-jev-audit-disabled-"))
   try {
     const sink = createAuditSink({ auditEnabled: false }, root)
     const record = buildAuditRecord({
       taskId: "task-123",
-      model: "jev-1.13-free",
+      requestedModel: "jev-1.13-free",
       signals: validSignal,
       latencyMs: 120,
       status: "ok",

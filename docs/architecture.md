@@ -46,8 +46,9 @@ The plugin includes an optional, disabled-by-default integration with OpenCode Z
 - Jev evaluates each admitted user prompt against a fixed set of closed questions (estimated difficulty, architecture/design/security relevance, primary context).
 - The deterministic Harness policy ignores the signals and returns `action: "none"`; routing, context, permissions, and actions remain unchanged.
 - The call is triggered from the V2 `prompt` admission hook, keyed by `messageID` to avoid duplicate estimates when admission retries. It is fire-and-forget so that Jev latency or failures never block prompt admission.
-- At most one Jev request is made per admitted user prompt, with a configurable timeout and at most one retry.
-- Redacted audit records are written only when `HARNESS_JEV_AUDIT=1`. They never contain prompts, source code, secrets, or repository contents.
+- At most one Jev request is made per admitted user prompt, with a configurable timeout and at most one retry. The timeout covers the request, headers, body read, and JSON parsing.
+- Enabling Jev sends the first 2,000 characters of each admitted user prompt to OpenCode Zen for evaluation. The local audit does not persist that text.
+- Redacted audit records are written only when `HARNESS_JEV_AUDIT=1`. They contain requested/actual model, usage tokens when provided, signals, latency, and sanitized status/error. They never contain prompts, source code, secrets, or repository contents.
 
 This experiment does not implement advisor mode, automatic routing, LLM fallback, or cost/quality claims. Those require a separate, data-driven evaluation.
 

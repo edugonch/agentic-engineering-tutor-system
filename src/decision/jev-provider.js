@@ -119,6 +119,26 @@ function isPlainObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value)
 }
 
+function validateUsage(value) {
+  if (value === undefined) return { ok: true, usage: undefined }
+  if (!isPlainObject(value)) {
+    return { ok: false, error: "usage must be an object" }
+  }
+  const unexpected = Object.keys(value).filter(
+    (key) => key !== "input_tokens" && key !== "output_tokens",
+  )
+  if (unexpected.length) {
+    return { ok: false, error: `unexpected usage fields: ${unexpected.join(", ")}` }
+  }
+  for (const key of ["input_tokens", "output_tokens"]) {
+    const val = value[key]
+    if (val !== undefined && (!Number.isInteger(val) || val < 0)) {
+      return { ok: false, error: `${key} must be a non-negative integer` }
+    }
+  }
+  return { ok: true, usage: value }
+}
+
 function validateJevResponse(body) {
   if (!isPlainObject(body)) {
     return { ok: false, error: "Jev response body must be an object" }
@@ -137,6 +157,11 @@ function validateJevResponse(body) {
   }
   if (!isPlainObject(body.answers)) {
     return { ok: false, error: "Jev response must include an answers object" }
+  }
+
+  const usageValidated = validateUsage(body.usage)
+  if (!usageValidated.ok) {
+    return { ok: false, error: usageValidated.error }
   }
 
   const required = ["difficulty", "needsArchitecture", "needsDesign", "needsSecurity", "primaryContext"]
@@ -197,6 +222,7 @@ function validateJevResponse(body) {
 
   return {
     ok: true,
+    actualModel: body.model,
     signals: {
       difficulty: roundedDifficulty,
       needsArchitecture: answers.needsArchitecture.noul,
@@ -204,6 +230,7 @@ function validateJevResponse(body) {
       needsSecurity: answers.needsSecurity.noul,
       primaryContext: contextAnswer.choice,
     },
+    usage: usageValidated.usage,
   }
 }
 
@@ -219,6 +246,37 @@ function isRetryableStatus(status) {
 
 function isRetryableError(error) {
   return error.name === "AbortError" || error.name === "TypeError"
+}
+
+/**
+ * Execute a timed fetch that covers the request, headers, body reading and
+ * JSON parsing. The timer is not cleared until the whole operation finishes or
+ * fails, so a stalled body read aborts within the configured timeout.
+ */
+async function timedJevFetch(fetchImpl, endpoint, init, timeoutMs) {
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    const response = await fetchImpl(endpoint, {
+      ...init,
+      signal: controller.signal,
+    })
+    if (!response.ok) {
+      const error = new Error(`Jev HTTP ${response.status}`)
+      error.status = response.status
+      throw error
+    }
+    try {
+      return await response.json()
+    } catch (parseError) {
+      if (parseError.name === "AbortError") {
+        throw parseError
+      }
+      throw new Error(`Jev response is not valid JSON: ${parseError.message}`)
+    }
+  } finally {
+    clearTimeout(timeoutId)
+  }
 }
 
 /**
@@ -247,41 +305,13 @@ export function createJevDecisionProvider(settings, deps = {}) {
       let lastError
       const attempts = 1 + settings.maxRetries
       for (let attempt = 1; attempt <= attempts; attempt += 1) {
-        const controller = new AbortController()
-        const timeoutId = setTimeout(() => controller.abort(), settings.timeoutMs)
         try {
-          const response = await fetchImpl(settings.endpoint, {
-            method: "POST",
-            headers,
-            body: JSON.stringify(body),
-            signal: controller.signal,
-          })
-          clearTimeout(timeoutId)
-
-          if (!response.ok) {
-            const error = new Error(`Jev HTTP ${response.status}`)
-            error.status = response.status
-            if (isRetryableStatus(response.status) && attempt < attempts) {
-              lastError = error
-              continue
-            }
-            return {
-              ok: false,
-              latencyMs: Date.now() - start,
-              error,
-            }
-          }
-
-          let json
-          try {
-            json = await response.json()
-          } catch (parseError) {
-            return {
-              ok: false,
-              latencyMs: Date.now() - start,
-              error: new Error(`Jev response is not valid JSON: ${parseError.message}`),
-            }
-          }
+          const json = await timedJevFetch(
+            fetchImpl,
+            settings.endpoint,
+            { method: "POST", headers, body: JSON.stringify(body) },
+            settings.timeoutMs,
+          )
 
           const validated = validateJevResponse(json)
           if (!validated.ok) {
@@ -294,11 +324,12 @@ export function createJevDecisionProvider(settings, deps = {}) {
 
           return {
             ok: true,
+            actualModel: validated.actualModel,
             signals: validated.signals,
+            usage: validated.usage,
             latencyMs: Date.now() - start,
           }
         } catch (error) {
-          clearTimeout(timeoutId)
           if (error.name === "AbortError") {
             const timeoutError = new Error("Jev request timed out")
             timeoutError.status = 408
@@ -313,6 +344,10 @@ export function createJevDecisionProvider(settings, deps = {}) {
             }
           }
           if (isRetryableError(error) && attempt < attempts) {
+            lastError = error
+            continue
+          }
+          if (error.status && isRetryableStatus(error.status) && attempt < attempts) {
             lastError = error
             continue
           }

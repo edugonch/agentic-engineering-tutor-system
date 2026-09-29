@@ -123,7 +123,11 @@ Optional overrides:
 | `HARNESS_JEV_AUDIT` | unset | Set to `1` to persist redacted audit records |
 | `HARNESS_JEV_AUDIT_PATH` | `.harness/audit/jev-decisions.ndjson` | NDJSON audit path relative to the project root |
 
-When Jev is disabled or misconfigured, or when Jev returns an error or times out, the orchestrator behaves exactly as before. Audit records contain only a non-sensitive task identifier, schema version, model, signals, latency, and a sanitized status or error. They never include prompts, source code, secrets, or repository contents.
+When Jev is disabled or misconfigured, or when Jev returns an error or times out, the orchestrator behaves exactly as before.
+
+**Data transmission:** enabling Jev sends the first 2,000 characters of each admitted user prompt to OpenCode Zen for evaluation. The local audit does not persist that text.
+
+Audit records contain only a non-sensitive task identifier, schema version, requested/actual model, signals, usage tokens (when provided), latency, and a sanitized status or error. They never include prompts, source code, secrets, or repository contents.
 
 The Jev integration uses the OpenCode V2 `prompt` admission hook, keyed by `messageID` to avoid duplicate calls when admission is retried. Prompt hooks are not an exactly-once boundary, so the implementation limits Jev to at most one in-flight request per admitted message and never awaits the call in the hook.
 

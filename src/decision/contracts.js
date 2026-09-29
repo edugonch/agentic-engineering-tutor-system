@@ -77,7 +77,7 @@ export function validateDecisionSignal(value) {
 
 /**
  * @typedef {object} DecisionProvider
- * @property {(task: {taskId: string, state: string}) => Promise<{ok: boolean, signals?: DecisionSignal, latencyMs: number, error?: Error}>} estimate
+ * @property {(task: {taskId: string, state: string}) => Promise<{ok: boolean, signals?: DecisionSignal, actualModel?: string, usage?: {input_tokens?: number, output_tokens?: number}, latencyMs: number, error?: Error}>} estimate
  */
 
 /**
@@ -124,8 +124,10 @@ export function createShadowPolicy() {
  * @property {string} timestamp ISO 8601
  * @property {string} schemaVersion
  * @property {string} taskId non-sensitive identifier
- * @property {string} model
+ * @property {string} requestedModel model asked for in the request
+ * @property {string} [actualModel] model returned by Jev in the response
  * @property {DecisionSignal} [signals]
+ * @property {{input_tokens?: number, output_tokens?: number}} [usage]
  * @property {number} latencyMs
  * @property {"ok" | "error" | "skipped"} status
  * @property {string} [error] sanitized, no secrets
@@ -135,8 +137,10 @@ const AUDIT_ALLOWED_TOP_KEYS = new Set([
   "timestamp",
   "schemaVersion",
   "taskId",
-  "model",
+  "requestedModel",
+  "actualModel",
   "signals",
+  "usage",
   "latencyMs",
   "status",
   "error",
@@ -165,6 +169,23 @@ export function validateDecisionAudit(value) {
   if (value.signals !== undefined) {
     const result = validateDecisionSignal(value.signals)
     if (!result.ok) return result
+  }
+  if (value.usage !== undefined) {
+    if (!value.usage || typeof value.usage !== "object" || Array.isArray(value.usage)) {
+      return { ok: false, error: "usage must be a plain object" }
+    }
+    const unexpectedUsage = Object.keys(value.usage).filter(
+      (key) => key !== "input_tokens" && key !== "output_tokens",
+    )
+    if (unexpectedUsage.length) {
+      return { ok: false, error: `unexpected usage fields: ${unexpectedUsage.join(", ")}` }
+    }
+    for (const key of ["input_tokens", "output_tokens"]) {
+      const val = value.usage[key]
+      if (val !== undefined && (!Number.isInteger(val) || val < 0)) {
+        return { ok: false, error: `${key} must be a non-negative integer` }
+      }
+    }
   }
   return { ok: true, audit: value }
 }
