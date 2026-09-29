@@ -9,7 +9,7 @@ The Harness treats the whole project as a continuing story, Epics as finite chap
 This is an early implementation, not a production automation system. Version 0.1 provides:
 
 - OpenCode plugin tools to initialize new or imported projects, inventory existing projects, inspect Harness files, validate Epic/WU contracts, and search the preserved reference library selectively.
-- OpenCode-native orchestrator, builder, researcher, and reviewer profiles, installed into the target project on explicit initialization.
+- OpenCode-native orchestrator, builder, researcher, designer, and reviewer profiles, installed into the target project on explicit initialization. The designer is selected only for user-facing UI work within an activated WU.
 - OpenCode-native skills for new-project intake, existing-project import, architecture decisions, story/Epic design, bounded research, and WU authoring.
 - A bounded, read-only existing-project inventory that helps the orchestrator find current project markers and likely governance sources before it proposes a migration.
 - Per-agent step limits, role permissions that restrict the orchestrator to named subagents and prevent recursive delegation, a per-session-run tool-call circuit breaker, a delegation cap, a pre-request output-token cap, and a retry limit.
