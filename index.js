@@ -505,7 +505,7 @@ export default Plugin.define({
             binaries: Object.fromEntries((contract.commands ?? []).map((check) => [check.program, resolveBinary(check.program)])),
             browser: detectBrowser(),
           }
-          return json(checkExecutionReadiness({ contract, phase: input.phase ?? "BUILD", probe, budget, info }))
+          return json(await checkExecutionReadiness({ contract, phase: input.phase ?? "BUILD", probe, budget, info }))
         },
       })
     })

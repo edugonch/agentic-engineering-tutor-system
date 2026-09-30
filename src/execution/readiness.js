@@ -53,16 +53,17 @@ export function deriveRequirements(contract, { phase = "BUILD" } = {}) {
   return requirements
 }
 
-export function evaluateReadiness(requirements, probe) {
-  const checked = requirements.map((requirement) => {
-    const result = probe(requirement.capability, requirement) ?? {}
-    return {
+export async function evaluateReadiness(requirements, probe) {
+  const checked = []
+  for (const requirement of requirements) {
+    const result = (await probe(requirement.capability, requirement)) ?? {}
+    checked.push({
       capability: requirement.capability,
       volatility: requirement.volatility,
       status: result.status ?? "READY",
       reason: result.reason ?? null,
-    }
-  })
+    })
+  }
   const blocked = checked.filter((entry) => entry.status === "BLOCKED")
   return { status: blocked.length ? "BLOCKED_CAPABILITY" : "READY", requirements: checked }
 }
@@ -97,9 +98,9 @@ export function buildFingerprint(info = {}) {
   }
 }
 
-export function checkExecutionReadiness({ contract, phase = "BUILD", probe, budget, info = {} }) {
+export async function checkExecutionReadiness({ contract, phase = "BUILD", probe, budget, info = {} }) {
   const requirements = deriveRequirements(contract, { phase })
-  const capability = evaluateReadiness(requirements, probe)
+  const capability = await evaluateReadiness(requirements, probe)
   const budgetResult = budgetStatus(budget ?? { remaining: Number.POSITIVE_INFINITY })
 
   const status = capability.status !== "READY"
