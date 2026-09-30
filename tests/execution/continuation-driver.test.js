@@ -82,3 +82,17 @@ test("a disabled driver ignores everything", async () => {
   assert.equal(await driver.onIdle("s1"), false)
   assert.equal(prompts.length, 0)
 })
+
+test("flags forbidden probe actions and records a block reason", () => {
+  const driver = createContinuationDriver({ session: {} }, { enabled: true, maxContinuations: 1 })
+  driver.registerProbe({ sessionID: "ses_s1", steps: 2 })
+  assert.equal(driver.isForbiddenProbeAction("webfetch"), true)
+  assert.equal(driver.isForbiddenProbeAction("read"), false)
+  assert.equal(driver.isForbiddenProbeAction("shell"), false)
+
+  const blk = driver.markBlocked("ses_s1", "permission.rejected:webfetch")
+  assert.equal(blk.blocked, true)
+  const probe = driver.getProbe("ses_s1")
+  assert.equal(probe.blocked, true)
+  assert.equal(probe.blockReason, "permission.rejected:webfetch")
+})

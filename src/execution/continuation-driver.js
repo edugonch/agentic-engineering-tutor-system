@@ -69,6 +69,11 @@ function sessionIdFromEvent(event) {
 // session.idle as a defensive fallback in case older runtimes use it.
 const IDLE_EVENT_TYPES = new Set(["session.execution.succeeded", "session.idle"])
 
+// D2 hard-stop primitive: a probe session attempting one of these innocuous
+// actions is denied at the permission boundary and blocked. Never widened, and
+// never evaded through another tool/session.
+const FORBIDDEN_PROBE_ACTIONS = new Set(["webfetch"])
+
 export function createContinuationDriver(ctx, opts = {}) {
   const { enabled, maxContinuations } = { ...readContinuationSettings(), ...opts }
   const probes = new Map() // sessionID -> { steps, stepCount, continuationsUsed, blocked, sentinel }
@@ -111,14 +116,21 @@ export function createContinuationDriver(ctx, opts = {}) {
   function registerProbe({ sessionID, steps, sentinel }) {
     if (!sessionID) throw new Error("registerProbe requires sessionID.")
     if (!Number.isInteger(steps) || steps < 1) throw new Error("registerProbe requires a positive integer steps.")
-    probes.set(sessionID, { steps, stepCount: 0, continuationsUsed: 0, blocked: false, sentinel: sentinel ?? null })
+    probes.set(sessionID, { steps, stepCount: 0, continuationsUsed: 0, blocked: false, blockReason: null, sentinel: sentinel ?? null })
     return { registered: true, sessionID, steps, sentinel: sentinel ?? null }
   }
 
-  function markBlocked(sessionID) {
+  function markBlocked(sessionID, reason) {
     const probe = probes.get(sessionID)
-    if (probe) probe.blocked = true
+    if (probe) {
+      probe.blocked = true
+      probe.blockReason = reason ?? null
+    }
     return { blocked: Boolean(probe), sessionID }
+  }
+
+  function isForbiddenProbeAction(action) {
+    return FORBIDDEN_PROBE_ACTIONS.has(action)
   }
 
   function getProbe(sessionID) {
@@ -163,6 +175,7 @@ export function createContinuationDriver(ctx, opts = {}) {
     isInternalPrompt,
     registerProbe,
     markBlocked,
+    isForbiddenProbeAction,
     getProbe,
     listProbes,
     onEvent,

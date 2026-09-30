@@ -46,3 +46,14 @@ test("probe rejects an unsafe probe_id", async () => {
     )
   } finally { await rm(root, { recursive: true, force: true }) }
 })
+
+test("probe block records a durable BLOCKED_PERMISSION", async () => {
+  const root = await mkdtemp(join(tmpdir(), "harness-probe-block-"))
+  try {
+    await runContinuationProbe(root, { action: "init", probe_id: "p1", session_id: "ses-1" })
+    const block = await runContinuationProbe(root, { action: "block", probe_id: "p1", session_id: "ses-1", note: "permission.rejected:webfetch" })
+    assert.equal(block.blocker.class, "BLOCKED_PERMISSION")
+    const verify = await runContinuationProbe(root, { action: "verify", probe_id: "p1", session_id: "ses-1" })
+    assert.equal(verify.blocker.class, "BLOCKED_PERMISSION")
+  } finally { await rm(root, { recursive: true, force: true }) }
+})

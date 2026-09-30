@@ -65,6 +65,16 @@ export async function runContinuationProbe(projectRoot, input) {
     return { action, ...(await snapshotReport(controller, id, holder)), lease }
   }
 
+  if (action === "block") {
+    await controller.acquire(holder)
+    const snap = await controller.snapshot()
+    await controller.commit(
+      { operation_id: `${id}:block`, operation_type: "BLOCK", body: { class: "BLOCKED_PERMISSION", reason: String(input.note ?? "permission.rejected") } },
+      { holder_session_id: holder, expected_revision: snap.state.revision },
+    )
+    return { action: "block", ...(await snapshotReport(controller, id, holder)) }
+  }
+
   // verify (default)
   const report = await snapshotReport(controller, id, holder)
   return { action: "verify", ...report, invariants: computeInvariants(report, id) }

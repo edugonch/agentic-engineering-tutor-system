@@ -153,6 +153,14 @@ export default Plugin.define({
     // delegation guard; an unavailable Harness role must be denied here.
     await ctx.permission.hook("evaluate", async (event) => {
       await guardHarnessSubagentPermission(event, ctx.agent)
+      // D2 hard-stop primitive: a registered probe session requesting a
+      // forbidden action is denied and blocked; the driver never continues it
+      // and never evades the denial through another route.
+      if (continuation.isForbiddenProbeAction(event.action) && continuation.getProbe(event.sessionID)) {
+        event.effect = "deny"
+        event.message = "BLOCKED_PERMISSION: this probe action is denied by the Phase 0 hard-stop primitive."
+        continuation.markBlocked(event.sessionID, `permission.rejected:${event.action}`)
+      }
     })
 
     await ctx.tool.transform((editor) => {
@@ -313,7 +321,7 @@ export default Plugin.define({
         name: "harness_continuation_probe",
         description: "Phase 0 spike instrument. Drives an isolated continuation experiment under .harness/execution/probe/<probe_id>/: init approves an execution mandate and records a checkpoint; checkpoint settles billable phase time; verify reports the invariant matrix (stable execution/mandate/WU identity, non-resetting budget, no duplicate dispatch, monotonic fencing token, no synthesized approval, no unexpected blocker). It never edits OpenCode config, permissions, or agents, and never simulates the model.",
         input: objectInput({
-          action: { type: "string", enum: ["init", "checkpoint", "verify"], default: "verify" },
+          action: { type: "string", enum: ["init", "checkpoint", "verify", "block"], default: "verify" },
           probe_id: { type: "string", minLength: 1 },
           session_id: { type: "string", minLength: 1, description: "OpenCode session ID holding the execution lease." },
           mandate_id: { type: "string", minLength: 1 },
@@ -354,6 +362,7 @@ export default Plugin.define({
               : continuation.listProbes(),
             subscription_errors: continuation.getSubscriptionErrors(),
             recent_events: continuation.listEvents(),
+            guard_snapshot: input.session_id ? guard.snapshot(input.session_id) : null,
           })
         },
       })
