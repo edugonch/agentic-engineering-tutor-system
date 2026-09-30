@@ -18,7 +18,7 @@ Control-plane durable (event log autoritativo, fencing, presupuesto, lifecycle d
 
 ### Evidence that the story is moving in the right direction
 
-PHASE_0/1/2 PASS sobre el control-plane durable; una WU real gobernada end-to-end bajo mandato (origen DERIVED, autorización AUTHORIZED_BY_MANDATE) con verificación independiente y cierre durable.
+PHASE_0/1/2 PASS sobre el control-plane durable; PHASE_3 (3A + 3B) PASS: una WU real (`resolveBinary` executable-bit) gobernada end-to-end bajo mandato (origen DERIVED, autorización AUTHORIZED_BY_MANDATE) con builder y reviewer reales, candidate inmutable, verificación reproducible y cierre durable.
 
 ## Chapter sequence
 
@@ -26,10 +26,10 @@ List finite Epics in narrative order. The project may continue beyond the curren
 
 | Chapter | User change | Start condition | Ending / demo | Status |
 |---|---|---|---|---|
-| E01 | [OWNER INPUT REQUIRED] | [OWNER INPUT REQUIRED] | [OWNER INPUT REQUIRED] | DRAFT |
+| E01 | First governed WU end-to-end (`resolveBinary` executable-bit) | PHASE_0/1/2/3A = PASS | WU-01 `complete_wu` with a PASS review bound to verification receipts | COMPLETE |
 
 ## Continuity notes
 
-- What each completed chapter made possible: [record evidence]
-- Open questions that do not block the next step: [defer; do not create automatic work]
-- Changes to the intended destination: [record owner decision and date]
+- What each completed chapter made possible: E01 demonstrated the Harness governing a real WU end-to-end — owner-approved Epic → `approve_mandate` → DERIVED WU → `harness-builder` → immutable candidate → reproducible verification → `harness-reviewer` (independent PASS) → durable closure, with zero human intervention between activation and completion.
+- Open questions that do not block the next step: reviewer identity attestation; second review of the same candidate; per-WU dispatch settlement (all deferred to later hardening).
+- Changes to the intended destination: NONE.
