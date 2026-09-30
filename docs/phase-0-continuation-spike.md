@@ -108,17 +108,38 @@ A probe marked blocked (`harness_continuation_spike block`) exhausted its 2
 steps, ended its turn with `session.execution.succeeded`, and the driver did
 **not** continue (`continuationsUsed: 0`).
 
+### C2 — turn guard: NOT reset on internal continuation
+
+After the internal continuation prompt, `guard.calls` kept accumulating (2 reads
+across two allowances → `calls: 2`); a subsequent **human** prompt reset it
+(`calls` dropped to 1 after the new turn). The internal-marker path
+(`isInternalPrompt`) skips `guard.reset`, the human path does not.
+
+### D2 — real `permission.rejected`: hard-stop primitive
+
+A probe session was directed to `webfetch` (a forbidden probe action). The
+plugin's `permission.evaluate` hook denied it at the permission boundary,
+marked the probe blocked, and the durable `block` action recorded a
+`BLOCKED_PERMISSION` event. Observed:
+
+- `blocked: true`, `blockReason: "permission.rejected:webfetch"`;
+- `continuationsUsed: 0` (the driver never continued);
+- durable `blocker.class: "BLOCKED_PERMISSION"` at revision 7;
+- one dispatch only (`dsp-0001`); forward dispatch is structurally rejected;
+- a subsequent `session.execution.succeeded` did **not** wake the driver.
+
 ### Status
 
-The **central hypothesis is empirically confirmed**: the plugin can turn `steps`
-exhaustion into a recoverable pause, continue autonomously via
-`ctx.session.prompt`, and stop at a blocker. Still to verify before a full PASS:
+**`PHASE_0 = PASS`.** The full rubric is now demonstrated empirically:
 
-- **Turn-guard-not-reset** and **permission-preserved** across the continuation
-  are code-enforced (`isInternalPrompt` marker) and unit-tested, but not yet
-  observed end-to-end in the runtime.
-- **Real `permission.rejected` → durable `BLOCKED_PERMISSION`** auto-wiring is
-  Phase 3/4 work; the D spike used the explicit `block` action as a stand-in.
+- `steps` restored across continuation ✅
+- turn guard **not** reset on internal continuation, reset on human prompt ✅
+- effective permissions preserved (denial scoped to `webfetch`; `read` still allowed) ✅
+- real `permission.rejected` → durable `BLOCKED_PERMISSION` ✅
+- no autonomous continuation after the blocker ✅
 
-`PHASE_0 = UNVERIFIED` on the full rubric; the continuation hypothesis is proven.
+Two runtime-shape bugs were found and fixed along the way (event type
+`session.execution.succeeded`, sessionID at `data.sessionID`), which unit tests
+could not have surfaced — exactly why the empirical close mattered.
+
 
