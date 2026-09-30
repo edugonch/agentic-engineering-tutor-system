@@ -19,6 +19,7 @@ import { join } from "node:path"
 import { readLog, validateLog } from "./event-log.js"
 import { project, deriveBudget } from "./state.js"
 import { createExecutionController } from "./execution.js"
+import { createCandidateRegistry } from "./candidate-registry.js"
 import { DISPATCH_STATUS, RESERVATION_STATUS } from "./constants.js"
 
 function sanitizeId(raw, label) {
@@ -119,10 +120,11 @@ async function commitAction(controller, holder, operation_id, operation_type, bo
   return res
 }
 
-export async function runExecutionController(projectRoot, input) {
+export async function runExecutionController(projectRoot, input, candidateRegistry) {
   const executionId = sanitizeId(input.execution_id, "execution_id")
   const dir = join(projectRoot, ".harness", "execution", "controller", executionId)
   const controller = await createExecutionController({ dir, lease_ttl_ms: 30000 })
+  const registry = candidateRegistry ?? createCandidateRegistry({ dir: join(projectRoot, ".harness", "execution") })
   const holder = String(input.session_id ?? `controller:${executionId}`)
   const action = String(input.action ?? "status")
 
@@ -191,10 +193,16 @@ export async function runExecutionController(projectRoot, input) {
   if (action === "record_candidate") {
     const candidateId = String(input.candidate_id ?? "")
     if (!candidateId) throw new Error("record_candidate requires candidate_id.")
-    const manifestHash = String(input.manifest_hash ?? "")
-    const treeHash = String(input.tree_hash ?? "")
-    if (!manifestHash || !treeHash) throw new Error("record_candidate requires manifest_hash and tree_hash.")
-    const res = await commitAction(controller, holder, `${executionId}:candidate:${candidateId}`, "FREEZE_CANDIDATE", { candidate_id: candidateId, manifest_hash: manifestHash, tree_hash: treeHash, manifest: input.manifest ?? null })
+    const candidate = await registry.load(candidateId)
+    if (!candidate) throw new Error(`Cannot record unknown candidate ${candidateId}: not present in the candidate registry.`)
+    const lease = await controller.acquire(holder)
+    const snap = await controller.snapshot()
+    const wuId = snap.state.wu?.wu_id ?? null
+    if (!wuId) throw new Error("record_candidate requires an active WU (activate_wu first).")
+    const res = await controller.commit(
+      { operation_id: `${executionId}:candidate:${candidateId}`, operation_type: "FREEZE_CANDIDATE", body: { candidate_id: candidateId, wu_id: wuId, manifest_hash: candidate.manifest_hash, tree_hash: candidate.tree_hash, manifest: candidate.manifest ?? null } },
+      { holder_session_id: holder, expected_revision: snap.state.revision, lease_fencing_token: lease.fencing_token },
+    )
     return { action, commit_status: res.status, candidate_id: candidateId, ...(await summary(controller)) }
   }
 
@@ -205,8 +213,17 @@ export async function runExecutionController(projectRoot, input) {
     return { action, commit_status: res.status, candidate_id: candidateId, ...(await summary(controller)) }
   }
 
+  if (action === "complete_wu") {
+    const candidateId = String(input.candidate_id ?? "")
+    if (!candidateId) throw new Error("complete_wu requires candidate_id.")
+    const res = await commitAction(controller, holder, `${executionId}:wu-complete:${candidateId}`, "WU_COMPLETE", { candidate_id: candidateId })
+    return { action, commit_status: res.status, candidate_id: candidateId, ...(await summary(controller)) }
+  }
+
   if (action === "checkpoint") {
-    const res = await commitAction(controller, holder, `${executionId}:checkpoint`, "CHECKPOINT", { note: input.note ?? null })
+    const checkpointId = String(input.checkpoint_id ?? "")
+    if (!checkpointId) throw new Error("checkpoint requires checkpoint_id.")
+    const res = await commitAction(controller, holder, `${executionId}:checkpoint:${checkpointId}`, "CHECKPOINT", { note: input.note ?? null })
     return { action, commit_status: res.status, ...(await summary(controller)) }
   }
 

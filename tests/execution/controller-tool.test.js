@@ -1,13 +1,24 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { mkdtemp, rm } from "node:fs/promises"
+import { mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { runExecutionController } from "../../src/execution/controller-tool.js"
+import { freezeCandidate } from "../../src/execution/candidate.js"
+import { createCandidateRegistry } from "../../src/execution/candidate-registry.js"
 
 async function withRoot(fn) {
   const root = await mkdtemp(join(tmpdir(), "harness-tool-"))
   try { return await fn(root) } finally { await rm(root, { recursive: true, force: true }) }
+}
+
+// Freeze a real file into the candidate registry and return the stored candidate.
+async function seedCandidate(root, filename = "change.txt") {
+  await writeFile(join(root, filename), "hello")
+  const registry = createCandidateRegistry({ dir: join(root, ".harness", "execution") })
+  const candidate = await freezeCandidate(root, { paths: [filename] })
+  await registry.store(candidate)
+  return candidate
 }
 
 test("init → status → verify roundtrip", async () => {
@@ -114,32 +125,33 @@ test("release succeeds for a never-launched dispatch", async () => {
   })
 })
 
-test("WU lifecycle: activate_wu → record_candidate → record_review → checkpoint → complete → verify", async () => {
+test("WU lifecycle: activate_wu → record_candidate (registry) → record_review → checkpoint → complete_wu → verify", async () => {
   await withRoot(async (root) => {
     const sid = "ses-1"
+    const candidate = await seedCandidate(root)
+
     await runExecutionController(root, { action: "init", execution_id: "E1", session_id: sid, total_seconds: 100 })
 
     const act = await runExecutionController(root, { action: "activate_wu", execution_id: "E1", session_id: sid, wu_id: "WU-01", mandate_id: "E1-MANDATE-001" })
     assert.equal(act.commit_status, "committed")
-    assert.equal(act.wu.wu_id, "WU-01")
     assert.equal(act.wu.origin, "DERIVED")
     assert.equal(act.wu.execution_authorization, "AUTHORIZED_BY_MANDATE")
 
-    const freeze = await runExecutionController(root, { action: "record_candidate", execution_id: "E1", session_id: sid, candidate_id: "cand-test", manifest_hash: "mh1", tree_hash: "th1" })
+    // record_candidate loads the real candidate from the registry; the caller supplies no hashes.
+    const freeze = await runExecutionController(root, { action: "record_candidate", execution_id: "E1", session_id: sid, candidate_id: candidate.candidate_id })
     assert.equal(freeze.commit_status, "committed")
-    assert.deepEqual(freeze.candidates["cand-test"], { manifest_hash: "mh1", tree_hash: "th1", manifest: null })
+    assert.equal(freeze.candidates[candidate.candidate_id].wu_id, "WU-01")
+    assert.equal(freeze.candidates[candidate.candidate_id].manifest_hash, candidate.manifest_hash)
 
-    const review = await runExecutionController(root, { action: "record_review", execution_id: "E1", session_id: sid, candidate_id: "cand-test", verdict: "PASS", candidate_hashes: { manifest_hash: "mh1", tree_hash: "th1" }, reviewer: "harness-reviewer" })
+    const review = await runExecutionController(root, { action: "record_review", execution_id: "E1", session_id: sid, candidate_id: candidate.candidate_id, verdict: "PASS", candidate_hashes: { manifest_hash: candidate.manifest_hash, tree_hash: candidate.tree_hash }, reviewer: "harness-reviewer" })
     assert.equal(review.commit_status, "committed")
-    assert.equal(review.reviews["cand-test"].verdict, "PASS")
 
-    const checkpoint = await runExecutionController(root, { action: "checkpoint", execution_id: "E1", session_id: sid, note: "frozen+reviewed" })
+    const checkpoint = await runExecutionController(root, { action: "checkpoint", execution_id: "E1", session_id: sid, checkpoint_id: "ck-1", note: "frozen+reviewed" })
     assert.equal(checkpoint.commit_status, "committed")
-    assert.equal(checkpoint.checkpoint.note, "frozen+reviewed")
 
-    const complete = await runExecutionController(root, { action: "complete", execution_id: "E1", session_id: sid, result: "WU-01-done" })
+    const complete = await runExecutionController(root, { action: "complete_wu", execution_id: "E1", session_id: sid, candidate_id: candidate.candidate_id })
     assert.equal(complete.commit_status, "committed")
-    assert.equal(complete.completed, true)
+    assert.equal(complete.wu.completed, true)
 
     const v = await runExecutionController(root, { action: "verify", execution_id: "E1" })
     assert.equal(v.passed, true)
@@ -160,12 +172,86 @@ test("activate_wu with a non-matching mandate_id is rejected (authority is manda
 test("record_review against a different candidate hash is rejected (no cross-candidate accreditation)", async () => {
   await withRoot(async (root) => {
     const sid = "ses-1"
+    const candidate = await seedCandidate(root)
     await runExecutionController(root, { action: "init", execution_id: "E1", session_id: sid, total_seconds: 100 })
     await runExecutionController(root, { action: "activate_wu", execution_id: "E1", session_id: sid, wu_id: "WU-01", mandate_id: "E1-MANDATE-001" })
-    await runExecutionController(root, { action: "record_candidate", execution_id: "E1", session_id: sid, candidate_id: "cand-test", manifest_hash: "mh1", tree_hash: "th1" })
+    await runExecutionController(root, { action: "record_candidate", execution_id: "E1", session_id: sid, candidate_id: candidate.candidate_id })
     await assert.rejects(
-      runExecutionController(root, { action: "record_review", execution_id: "E1", session_id: sid, candidate_id: "cand-test", verdict: "PASS", candidate_hashes: { manifest_hash: "mh1", tree_hash: "WRONG" } }),
+      runExecutionController(root, { action: "record_review", execution_id: "E1", session_id: sid, candidate_id: candidate.candidate_id, verdict: "PASS", candidate_hashes: { manifest_hash: candidate.manifest_hash, tree_hash: "WRONG" } }),
       /hash mismatch/,
+    )
+  })
+})
+
+test("record_candidate with an unknown candidate_id is rejected (registry-bound)", async () => {
+  await withRoot(async (root) => {
+    const sid = "ses-1"
+    await runExecutionController(root, { action: "init", execution_id: "E1", session_id: sid, total_seconds: 100 })
+    await runExecutionController(root, { action: "activate_wu", execution_id: "E1", session_id: sid, wu_id: "WU-01", mandate_id: "E1-MANDATE-001" })
+    await assert.rejects(
+      runExecutionController(root, { action: "record_candidate", execution_id: "E1", session_id: sid, candidate_id: "cand-fake" }),
+      /not present in the candidate registry/,
+    )
+  })
+})
+
+test("complete_wu without a review is rejected", async () => {
+  await withRoot(async (root) => {
+    const sid = "ses-1"
+    const candidate = await seedCandidate(root)
+    await runExecutionController(root, { action: "init", execution_id: "E1", session_id: sid, total_seconds: 100 })
+    await runExecutionController(root, { action: "activate_wu", execution_id: "E1", session_id: sid, wu_id: "WU-01", mandate_id: "E1-MANDATE-001" })
+    await runExecutionController(root, { action: "record_candidate", execution_id: "E1", session_id: sid, candidate_id: candidate.candidate_id })
+    await assert.rejects(
+      runExecutionController(root, { action: "complete_wu", execution_id: "E1", session_id: sid, candidate_id: candidate.candidate_id }),
+      /no review recorded/,
+    )
+  })
+})
+
+test("complete_wu with a CHANGES_REQUIRED review is rejected", async () => {
+  await withRoot(async (root) => {
+    const sid = "ses-1"
+    const candidate = await seedCandidate(root)
+    await runExecutionController(root, { action: "init", execution_id: "E1", session_id: sid, total_seconds: 100 })
+    await runExecutionController(root, { action: "activate_wu", execution_id: "E1", session_id: sid, wu_id: "WU-01", mandate_id: "E1-MANDATE-001" })
+    await runExecutionController(root, { action: "record_candidate", execution_id: "E1", session_id: sid, candidate_id: candidate.candidate_id })
+    await runExecutionController(root, { action: "record_review", execution_id: "E1", session_id: sid, candidate_id: candidate.candidate_id, verdict: "CHANGES_REQUIRED", candidate_hashes: { manifest_hash: candidate.manifest_hash, tree_hash: candidate.tree_hash }, reviewer: "harness-reviewer" })
+    await assert.rejects(
+      runExecutionController(root, { action: "complete_wu", execution_id: "E1", session_id: sid, candidate_id: candidate.candidate_id }),
+      /verdict is CHANGES_REQUIRED/,
+    )
+  })
+})
+
+test("complete_wu with an unsettled dispatch is rejected (budget must be liquidated)", async () => {
+  await withRoot(async (root) => {
+    const sid = "ses-1"
+    const candidate = await seedCandidate(root)
+    await runExecutionController(root, { action: "init", execution_id: "E1", session_id: sid, total_seconds: 100 })
+    await runExecutionController(root, { action: "activate_wu", execution_id: "E1", session_id: sid, wu_id: "WU-01", mandate_id: "E1-MANDATE-001" })
+    await runExecutionController(root, { action: "record_candidate", execution_id: "E1", session_id: sid, candidate_id: candidate.candidate_id })
+    await runExecutionController(root, { action: "record_review", execution_id: "E1", session_id: sid, candidate_id: candidate.candidate_id, verdict: "PASS", candidate_hashes: { manifest_hash: candidate.manifest_hash, tree_hash: candidate.tree_hash }, reviewer: "harness-reviewer" })
+    await runExecutionController(root, { action: "reserve", execution_id: "E1", session_id: sid, dispatch_id: "d1", reserved_seconds: 5 })
+    await assert.rejects(
+      runExecutionController(root, { action: "complete_wu", execution_id: "E1", session_id: sid, candidate_id: candidate.candidate_id }),
+      /not settled/,
+    )
+  })
+})
+
+test("complete_wu with a candidate belonging to a different WU is rejected", async () => {
+  await withRoot(async (root) => {
+    const sid = "ses-1"
+    const candidate = await seedCandidate(root)
+    await runExecutionController(root, { action: "init", execution_id: "E1", session_id: sid, total_seconds: 100 })
+    await runExecutionController(root, { action: "activate_wu", execution_id: "E1", session_id: sid, wu_id: "WU-01", mandate_id: "E1-MANDATE-001" })
+    await runExecutionController(root, { action: "record_candidate", execution_id: "E1", session_id: sid, candidate_id: candidate.candidate_id })
+    await runExecutionController(root, { action: "record_review", execution_id: "E1", session_id: sid, candidate_id: candidate.candidate_id, verdict: "PASS", candidate_hashes: { manifest_hash: candidate.manifest_hash, tree_hash: candidate.tree_hash }, reviewer: "harness-reviewer" })
+    await runExecutionController(root, { action: "activate_wu", execution_id: "E1", session_id: sid, wu_id: "WU-02", mandate_id: "E1-MANDATE-001" })
+    await assert.rejects(
+      runExecutionController(root, { action: "complete_wu", execution_id: "E1", session_id: sid, candidate_id: candidate.candidate_id }),
+      /belongs to WU-01/,
     )
   })
 })

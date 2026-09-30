@@ -1,2 +1,6 @@
 # Runtime durable execution state (regenerable evidence, not source).
 .harness/execution/
+
+# Local install artifacts (plugin installs via git URL, not committed).
+node_modules/
+package-lock.json

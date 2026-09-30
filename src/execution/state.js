@@ -127,6 +127,7 @@ export function applyEvent(previous, event) {
         status: DISPATCH_STATUS.RESERVED,
         session_id: null,
         operation_id: event.operation_id,
+        wu_id: state.wu?.wu_id ?? null,
         reserved_seconds: reserved,
         reservation_status: RESERVATION_STATUS.RESERVED,
         actual_consumption: null,
@@ -214,7 +215,11 @@ export function applyEvent(previous, event) {
       if (!body.candidate_id) throw new Error("FREEZE_CANDIDATE requires candidate_id.")
       if (!body.manifest_hash || !body.tree_hash) throw new Error("FREEZE_CANDIDATE requires manifest_hash and tree_hash.")
       if (state.candidates[body.candidate_id]) throw new Error(`Duplicate candidate: ${body.candidate_id}.`)
+      if (body.wu_id && state.wu && body.wu_id !== state.wu.wu_id) {
+        throw new Error(`FREEZE_CANDIDATE wu mismatch: candidate belongs to ${body.wu_id}, active WU is ${state.wu.wu_id}.`)
+      }
       state.candidates[body.candidate_id] = {
+        wu_id: body.wu_id ?? null,
         manifest_hash: body.manifest_hash,
         tree_hash: body.tree_hash,
         manifest: body.manifest ?? null,
@@ -251,6 +256,31 @@ export function applyEvent(previous, event) {
     case "BLOCK": {
       if (!BLOCKER_CLASSES.includes(body.class)) throw new Error(`Unknown blocker class: ${body.class}.`)
       state.blocker = { class: body.class, reason: body.reason ?? null, at_revision: state.revision }
+      break
+    }
+
+    case "WU_COMPLETE": {
+      if (!state.wu) throw new Error("WU_COMPLETE requires an active WU.")
+      if (state.wu.completed) throw new Error("WU_COMPLETE: the active WU is already complete.")
+      const candidateId = body.candidate_id
+      if (!candidateId) throw new Error("WU_COMPLETE requires candidate_id.")
+      const candidate = state.candidates[candidateId]
+      if (!candidate) throw new Error(`WU_COMPLETE: unknown candidate ${candidateId}.`)
+      if (candidate.wu_id !== state.wu.wu_id) {
+        throw new Error(`WU_COMPLETE: candidate ${candidateId} belongs to ${candidate.wu_id}, not the active WU ${state.wu.wu_id}.`)
+      }
+      const review = state.reviews[candidateId]
+      if (!review) throw new Error(`WU_COMPLETE: no review recorded for candidate ${candidateId}.`)
+      if (review.verdict !== "PASS") {
+        throw new Error(`WU_COMPLETE: review verdict is ${review.verdict}, not PASS.`)
+      }
+      const settled = new Set([DISPATCH_STATUS.RESULT_RECONCILED, DISPATCH_STATUS.RELEASED])
+      const unsettled = Object.entries(state.dispatches).filter(([, d]) => !settled.has(d.status))
+      if (unsettled.length > 0) {
+        throw new Error(`WU_COMPLETE: ${unsettled.length} dispatch(es) not settled (must be RESULT_RECONCILED or RELEASED): ${unsettled.map(([id]) => id).join(", ")}.`)
+      }
+      state.wu.completed = true
+      state.wu.completion = { candidate_id: candidateId, at_revision: state.revision }
       break
     }
 
