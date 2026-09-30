@@ -64,3 +64,18 @@ test("a reconstructed tree hash mismatch fails hard", async () => {
     await assert.rejects(materializeCandidate(candidate), /tree hash differs/)
   } finally { await rm(root, { recursive: true, force: true }) }
 })
+
+test("delete then overlay re-add materializes the file with new content", async () => {
+  const root = await mkdtemp(join(tmpdir(), "harness-ws-readd-"))
+  try {
+    await writeFile(join(root, "old.js"), "v1\n")
+    const base = await captureBaseSnapshot(root, ["old.js"])
+    await writeFile(join(root, "old.js"), "v2\n") // modified after base capture
+    const candidate = await freezeCandidate(root, { base, paths: ["old.js"], deletions: ["old.js"] })
+
+    const { workspace, verified } = await materializeCandidate(candidate)
+    assert.equal(verified, true)
+    assert.equal(await readFile(join(workspace, "old.js"), "utf8"), "v2\n")
+    await disposeWorkspace(workspace)
+  } finally { await rm(root, { recursive: true, force: true }) }
+})

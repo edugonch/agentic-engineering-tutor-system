@@ -3,7 +3,7 @@ import assert from "node:assert/strict"
 import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { captureBaseSnapshot, captureEntries, freezeCandidate, manifestHash, treeHash } from "../../src/execution/candidate.js"
+import { captureBaseSnapshot, captureEntries, composeCandidateEntries, freezeCandidate, manifestHash, treeHash } from "../../src/execution/candidate.js"
 
 test("freezes a complete candidate with all identity layers", async () => {
   const root = await mkdtemp(join(tmpdir(), "harness-cand-"))
@@ -118,5 +118,49 @@ test("captureBaseSnapshot returns a base with frozen content", async () => {
     assert.equal(base.kind, "snapshot")
     assert.equal(base.files[0].path, "pkg.json")
     assert.ok(base.files[0].content)
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+test("compose yields a single entry when base and overlay collide (overlay wins)", () => {
+  const base = [{ path: "app.js", type: "file", mode: "100644", sha256: "a".repeat(64), content: "djE=" }]
+  const overlay = [{ path: "app.js", type: "file", mode: "100644", sha256: "b".repeat(64), content: "djI=" }]
+  const composed = composeCandidateEntries(base, [], overlay)
+  assert.equal(composed.length, 1)
+  assert.equal(composed[0].sha256, "b".repeat(64))
+})
+
+test("delete then overlay re-add leaves exactly one entry with new content", () => {
+  const base = [{ path: "old.js", type: "file", mode: "100644", sha256: "a".repeat(64), content: "djE=" }]
+  const overlay = [{ path: "old.js", type: "file", mode: "100644", sha256: "b".repeat(64), content: "djI=" }]
+  const composed = composeCandidateEntries(base, ["old.js"], overlay)
+  assert.equal(composed.length, 1)
+  assert.equal(composed[0].sha256, "b".repeat(64))
+})
+
+test("a deletion escaping the repo fails closed", async () => {
+  const root = await mkdtemp(join(tmpdir(), "harness-cand-del-escape-"))
+  try {
+    await writeFile(join(root, "a.txt"), "x\n")
+    await assert.rejects(freezeCandidate(root, { paths: ["a.txt"], deletions: ["../outside.txt"] }), /must not contain/)
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+test("duplicate overlay paths fail closed", async () => {
+  const root = await mkdtemp(join(tmpdir(), "harness-cand-dup-"))
+  try {
+    await writeFile(join(root, "a.txt"), "x\n")
+    await assert.rejects(freezeCandidate(root, { paths: ["a.txt", "a.txt"] }), /duplicate overlay/)
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+test("candidate_id is full-length; display_id is a short prefix", async () => {
+  const root = await mkdtemp(join(tmpdir(), "harness-cand-idlen-"))
+  try {
+    await writeFile(join(root, "a.txt"), "x\n")
+    const result = await freezeCandidate(root, { paths: ["a.txt"] })
+    assert.match(result.candidate_id, /^cand-[0-9a-f]{64}$/)
+    assert.match(result.display_id, /^cand-[0-9a-f]{16}$/)
+    assert.equal(result.candidate_id, `cand-${result.candidate_id.slice(5)}`)
+    assert.equal(result.display_id, result.candidate_id.slice(0, 5 + 16))
   } finally { await rm(root, { recursive: true, force: true }) }
 })

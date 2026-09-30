@@ -2,17 +2,18 @@
 // disposable temporary directory and verify its reconstructed tree hash.
 //
 // Materialization order: base (unchanged files) → apply deletions → overlay
-// (changed files) → recompute the complete tree and compare to candidate.tree_hash.
+// (changed files) → recompute the complete tree via composeCandidateEntries and
+// compare to candidate.tree_hash. All paths are re-validated here too, because
+// the candidate may later arrive from durable storage (a distinct trust boundary).
 //
 // This is NOT a sandbox. It protects the repo checkout and reconstructs the
-// candidate from frozen content (so a later working-tree change cannot
-// contaminate the review). Network isolation and OS sandboxing are explicitly
-// out of scope here.
+// candidate from frozen content. Network isolation and OS sandboxing are
+// explicitly out of scope.
 
 import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
-import { captureEntries, treeHash } from "./candidate.js"
+import { assertCandidatePath, captureEntries, composeCandidateEntries, treeHash } from "./candidate.js"
 
 function modeFromGit(gitMode) {
   if (gitMode === "120000") return null // symlink; handled separately
@@ -21,6 +22,7 @@ function modeFromGit(gitMode) {
 }
 
 async function writeEntry(workspace, entry) {
+  assertCandidatePath(entry.path)
   const dest = join(workspace, entry.path)
   await mkdir(dirname(dest), { recursive: true })
   if (entry.type === "symlink") {
@@ -39,18 +41,20 @@ export async function materializeCandidate(candidate) {
     const overlay = candidate.overlay ?? []
     const deletions = candidate.deletions ?? []
 
+    for (const file of baseFiles) assertCandidatePath(file.path)
+    for (const entry of overlay) assertCandidatePath(entry.path)
+    for (const path of deletions) assertCandidatePath(path)
+
     // 1. materialize base (unchanged files)
     for (const file of baseFiles) await writeEntry(workspace, file)
     // 2. apply deletions
     for (const path of deletions) await rm(join(workspace, path), { recursive: false, force: true })
-    // 3. overlay frozen entries (modified/new files)
+    // 3. overlay frozen entries (modified/new files; may re-create a deleted path)
     for (const entry of overlay) await writeEntry(workspace, entry)
 
-    // 4. recompute the complete tree and verify it matches
-    const deletionSet = new Set(deletions)
-    const completePaths = [...new Set([...baseFiles.map((f) => f.path), ...overlay.map((e) => e.path)])]
-      .filter((path) => !deletionSet.has(path))
-    const reconstructed = await captureEntries(workspace, completePaths)
+    // 4. recompute the complete tree (base → delete → overlay) and verify
+    const complete = composeCandidateEntries(baseFiles, deletions, overlay)
+    const reconstructed = await captureEntries(workspace, complete.map((entry) => entry.path))
     const reconstructedHash = treeHash(reconstructed)
     if (reconstructedHash !== candidate.tree_hash) {
       throw new Error(`Reconstructed workspace tree hash differs: ${reconstructedHash} vs ${candidate.tree_hash}`)
