@@ -22,3 +22,16 @@ export function sha256(text) {
 export function stableHash(value) {
   return sha256(stableSerialize(value))
 }
+
+// Operation identity (v2). The operation_id is deliberately excluded: it is the
+// lookup key, not part of the identity. operation_type + body + result fully
+// determine whether reusing an operation_id is a REPLAY or a CONFLICT. Legacy
+// (v1) events hashed only body, so their resolution is handled semantically by
+// the commit path (see execution.js).
+export function operationIdentityHash(operation) {
+  return stableHash({
+    operation_type: operation.operation_type,
+    body: operation.body ?? null,
+    result: operation.result ?? null,
+  })
+}

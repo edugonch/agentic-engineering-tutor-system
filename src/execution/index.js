@@ -1,5 +1,5 @@
 export { OPERATION_TYPES, PHASE_STATES, BILLABLE_PHASES, DISPATCH_STATUS, TERMINAL_DISPATCH_STATUSES, RESERVATION_STATUS, BLOCKER_CLASSES, EXECUTION_AUTHORIZATION } from "./constants.js"
-export { stableSerialize, sha256, stableHash } from "./serialize.js"
+export { stableSerialize, sha256, stableHash, operationIdentityHash } from "./serialize.js"
 export { atomicWriteDurable, fsyncDir } from "./fsync.js"
 export { readLog, writeLog, validateLog } from "./event-log.js"
 export { initialState, project, applyEvent, deriveBudget } from "./state.js"

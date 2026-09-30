@@ -18,7 +18,7 @@ import { randomUUID } from "node:crypto"
 import { readLog, writeLog, validateLog } from "./event-log.js"
 import { applyEvent, project, deriveBudget } from "./state.js"
 import { isLeaseExpired, nextLease, readLease, writeLease } from "./lease.js"
-import { stableHash } from "./serialize.js"
+import { stableHash, operationIdentityHash, stableSerialize } from "./serialize.js"
 import { withMutex } from "./mutex.js"
 import { DISPATCH_STATUS } from "./constants.js"
 
@@ -50,6 +50,24 @@ function classifyDispatch(status) {
 // dispatch identity, and the (immutable) finished result.
 function reconcileOperationId(execution_id, dispatch_id, result) {
   return `${execution_id ?? "execution"}:reconcile:${dispatch_id}:${stableHash(result ?? null)}`
+}
+
+// New events carry this marker and hash {operation_type, body, result}.
+const OPERATION_HASH_VERSION = 2
+
+// Reused operation_id resolution. For v2 events the identity is a hash over
+// {operation_type, body, result}; for legacy (v1) events — which hashed only
+// body — compare the fields semantically so a different operation_type with the
+// same body can never masquerade as a replay.
+function isSameOperation(event, operation) {
+  if (event.operation_hash_version === OPERATION_HASH_VERSION) {
+    return event.operation_hash === operationIdentityHash(operation)
+  }
+  return (
+    event.operation_type === operation.operation_type &&
+    stableSerialize(event.body ?? null) === stableSerialize(operation.body ?? null) &&
+    stableSerialize(event.result ?? null) === stableSerialize(operation.result ?? null)
+  )
 }
 
 export async function createExecutionController({ root, dir, now = () => Date.now(), lease_ttl_ms = 60000 } = {}) {
@@ -95,10 +113,9 @@ export async function createExecutionController({ root, dir, now = () => Date.no
         throw new Error(`Stale revision: expected ${expected_revision}, current ${state.revision}.`)
       }
 
-      const operationHash = stableHash(operation.body ?? null)
       const existing = events.find((event) => event.operation_id === operation.operation_id)
       if (existing) {
-        if (existing.operation_hash !== operationHash) {
+        if (!isSameOperation(existing, operation)) {
           throw new Error(`Operation ${operation.operation_id} was reused with different content; this is a conflict, not a replay.`)
         }
         return { status: "replayed", revision: state.revision, state, result: existing.result ?? null }
@@ -120,7 +137,8 @@ export async function createExecutionController({ root, dir, now = () => Date.no
         event_id: randomUUID(),
         operation_id: operation.operation_id,
         operation_type: operation.operation_type,
-        operation_hash: operationHash,
+        operation_hash_version: OPERATION_HASH_VERSION,
+        operation_hash: operationIdentityHash(operation),
         body: operation.body ?? null,
         result: operation.result ?? null,
         previous_revision: state.revision,
