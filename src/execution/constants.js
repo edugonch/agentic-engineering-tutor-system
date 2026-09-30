@@ -113,3 +113,11 @@ export const EXECUTION_AUTHORIZATION = Object.freeze({
 export const WU_ORIGIN = Object.freeze({
   DERIVED: "DERIVED",
 })
+
+// The kind of authority a mandate carries. PROBE is Phase 0 instrumentation and
+// cannot authorize a governed WU; OWNER_APPROVED_EPIC is the only kind the
+// public activate_wu path accepts.
+export const MANDATE_AUTHORITY = Object.freeze({
+  PROBE: "PROBE",
+  OWNER_APPROVED_EPIC: "OWNER_APPROVED_EPIC",
+})

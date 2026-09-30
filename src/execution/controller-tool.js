@@ -22,7 +22,7 @@ import { createExecutionController } from "./execution.js"
 import { createCandidateRegistry } from "./candidate-registry.js"
 import { readVerificationReceipt } from "./verification-results.js"
 import { findApprovedEpic } from "../project-knowledge.js"
-import { DISPATCH_STATUS, RESERVATION_STATUS } from "./constants.js"
+import { DISPATCH_STATUS, RESERVATION_STATUS, MANDATE_AUTHORITY } from "./constants.js"
 
 function sanitizeId(raw, label) {
   const value = String(raw ?? "")
@@ -58,6 +58,7 @@ async function summary(controller) {
     fencing_token: lease?.fencing_token ?? null,
     blocker: state.blocker,
     completed: state.completed,
+    mandate: state.mandate,
     wu: state.wu,
     candidates: state.candidates,
     reviews: state.reviews,
@@ -140,6 +141,7 @@ export async function runExecutionController(projectRoot, input, candidateRegist
       mandate_revision: mandateRevision,
       max_wus: Number(input.max_wus ?? 4),
       total_seconds: totalSeconds,
+      authority_kind: MANDATE_AUTHORITY.PROBE,
     })
     return { action, commit_status: res.status, ...(await summary(controller)) }
   }
@@ -152,9 +154,10 @@ export async function runExecutionController(projectRoot, input, candidateRegist
     const res = await commitAction(controller, holder, `${executionId}:mandate`, "MANDATE_APPROVE", {
       execution_id: `${executionId}:exec`,
       mandate_id: mandateId,
-      mandate_revision: String(input.mandate_revision ?? epic.source_revision),
-      max_wus: Number(input.max_wus ?? 1),
-      total_seconds: Number(input.total_seconds ?? 60),
+      mandate_revision: epic.source_revision,
+      max_wus: epic.mandate.max_wus,
+      total_seconds: epic.mandate.total_seconds,
+      authority_kind: MANDATE_AUTHORITY.OWNER_APPROVED_EPIC,
       source_artifact_id: epic.source_id,
       source_record_key: epic.record_key,
       source_hash: epic.sha256,
@@ -167,6 +170,10 @@ export async function runExecutionController(projectRoot, input, candidateRegist
     if (!wuId) throw new Error("activate_wu requires wu_id.")
     const mandateId = String(input.mandate_id ?? "")
     if (!mandateId) throw new Error("activate_wu requires mandate_id (must match the approved mandate).")
+    const snap = await controller.snapshot()
+    if (snap.state.mandate?.authority_kind !== MANDATE_AUTHORITY.OWNER_APPROVED_EPIC) {
+      throw new Error("activate_wu requires an OWNER_APPROVED_EPIC mandate (use approve_mandate, not init).")
+    }
     const res = await commitAction(controller, holder, `${executionId}:activate:${wuId}`, "WU_ACTIVATE", { wu_id: wuId, mandate_id: mandateId })
     return { action, commit_status: res.status, wu_id: wuId, ...(await summary(controller)) }
   }

@@ -26,7 +26,7 @@ test("projects a mandate, JIT WU activation, and billable phase", () => {
   ]
   const state = project(events)
   assert.equal(state.execution_id, "exec")
-  assert.deepEqual(state.mandate, { mandate_id: "M1", mandate_revision: "r0", max_wus: 4 })
+  assert.deepEqual(state.mandate, { mandate_id: "M1", mandate_revision: "r0", max_wus: 4, authority_kind: "PROBE" })
   assert.equal(state.wu.execution_authorization, "AUTHORIZED_BY_MANDATE")
   assert.equal(state.wu.origin, "DERIVED")
   assert.equal(state.budget.used_seconds, 100)
@@ -146,4 +146,22 @@ test("RECORD_REVIEW PASS without full verification coverage is rejected", () => 
   const ok = applyEvent(state, ev("RECORD_REVIEW", { candidate_id: "A", verdict: "PASS", candidate_hashes: { manifest_hash: "mhA", tree_hash: "thA" }, verification_evidence_ids: ["v1", "v2"], verified_check_ids: ["unit", "lint"], verification_contract_hash: "ch1" }, 2, 3))
   assert.equal(ok.reviews.A.verdict, "PASS")
   assert.deepEqual(ok.reviews.A.verified_check_ids, ["unit", "lint"])
+})
+
+test("RECORD_REVIEW PASS with duplicate check coverage is rejected", () => {
+  const state = project([
+    ev("MANDATE_APPROVE", { mandate_id: "M1", max_wus: 2, total_seconds: 60 }, 0, 1),
+    ev("FREEZE_CANDIDATE", { candidate_id: "A", manifest_hash: "mhA", tree_hash: "thA", verification_contract_hash: "ch1", required_check_ids: ["unit", "lint"] }, 1, 2),
+  ])
+  assert.throws(
+    () => applyEvent(state, ev("RECORD_REVIEW", { candidate_id: "A", verdict: "PASS", candidate_hashes: { manifest_hash: "mhA", tree_hash: "thA" }, verification_evidence_ids: ["v1", "v2"], verified_check_ids: ["unit", "unit"], verification_contract_hash: "ch1" }, 2, 3)),
+    /duplicate check coverage/,
+  )
+})
+
+test("MANDATE_APPROVE defaults to PROBE and records governed authority_kind", () => {
+  const probe = project([ev("MANDATE_APPROVE", { mandate_id: "M1", max_wus: 2, total_seconds: 60 }, 0, 1)])
+  assert.equal(probe.mandate.authority_kind, "PROBE")
+  const governed = project([ev("MANDATE_APPROVE", { mandate_id: "M1", max_wus: 2, total_seconds: 60, authority_kind: "OWNER_APPROVED_EPIC", source_artifact_id: "epic-1" }, 0, 1)])
+  assert.equal(governed.mandate.authority_kind, "OWNER_APPROVED_EPIC")
 })

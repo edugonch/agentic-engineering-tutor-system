@@ -733,7 +733,9 @@ export async function recordKnowledgeArtifact(projectRoot, input) {
 }
 
 // Locate exactly one APPROVED Epic artifact in the knowledge index. This is the
-// source of human authority a governed mandate (approve_mandate) binds to.
+// source of human authority a governed mandate (approve_mandate) binds to. The
+// envelope (max_wus, total_seconds) is derived from the artifact's machine-readable
+// execution_mandate, never from the caller.
 export async function findApprovedEpic(projectRoot, epicArtifactId) {
   const root = assertRoot(projectRoot)
   const index = await readIndex(root)
@@ -749,5 +751,32 @@ export async function findApprovedEpic(projectRoot, epicArtifactId) {
   if (matches.length > 1) {
     throw new Error(`"${epicArtifactId}" matches multiple APPROVED Epic records; pass the exact record_key.`)
   }
-  return matches[0]
+  const record = matches[0]
+  const content = await readFile(resolve(root, record.archive_path), "utf8")
+  const mandate = parseExecutionMandate(content)
+  if (!mandate) {
+    throw new Error(`Approved Epic ${record.source_id} is missing a machine-readable execution_mandate (max_wus + total_seconds).`)
+  }
+  return {
+    source_id: record.source_id,
+    record_key: record.record_key,
+    source_revision: record.source_revision,
+    sha256: record.sha256,
+    mandate,
+  }
+}
+
+// Extract a machine-readable `execution_mandate: {max_wus, total_seconds}` from
+// an Epic artifact body. Returns null when absent/malformed so the caller fails
+// closed rather than inventing an envelope.
+function parseExecutionMandate(content) {
+  const match = String(content).match(/execution_mandate:\s*(\{[^{}]*\})/)
+  if (!match) return null
+  try {
+    const mandate = JSON.parse(match[1])
+    if (Number.isSafeInteger(mandate.max_wus) && mandate.max_wus >= 1 && Number.isFinite(mandate.total_seconds) && mandate.total_seconds > 0) {
+      return { max_wus: mandate.max_wus, total_seconds: mandate.total_seconds }
+    }
+    return null
+  } catch { return null }
 }

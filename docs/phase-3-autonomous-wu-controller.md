@@ -294,3 +294,16 @@ contract is preserved as history, not silently rewritten):
   `source_record_key`, and `source_hash` in the mandate. Legacy `init` remains for
   probes/tests and adds no source binding, so a mandate can no longer be synthesized
   without a recorded human approval.
+
+## 15. 3A.4 review amendments
+
+- **True set coverage.** `setsEqual` is now a real set comparison, and `RECORD_REVIEW`
+  rejects duplicate evidence ids and duplicate check coverage. `verified_check_ids`
+  must equal `required_check_ids` as sets, so a duplicated receipt cannot fake
+  coverage of an unexecuted check.
+- **Mandate authority_kind + envelope from artifact.** `MANDATE_APPROVE` records
+  `authority_kind` (`PROBE` from legacy `init`, `OWNER_APPROVED_EPIC` from
+  `approve_mandate`). The public `activate_wu` requires `OWNER_APPROVED_EPIC`, so a
+  legacy `init` cannot authorize a governed WU. `approve_mandate` derives
+  `mandate_revision`, `max_wus`, and `total_seconds` from the approved Epic's
+  machine-readable `execution_mandate`; caller overrides are ignored.

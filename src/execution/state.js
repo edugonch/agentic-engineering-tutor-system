@@ -11,6 +11,7 @@ import {
   RESERVATION_STATUS,
   TERMINAL_BLOCKER_CLASSES,
   WU_ORIGIN,
+  MANDATE_AUTHORITY,
 } from "./constants.js"
 
 const FORWARD_EXECUTION_TYPES = new Set([
@@ -21,7 +22,11 @@ const FORWARD_EXECUTION_TYPES = new Set([
   "DISPATCH_LAUNCH",
 ])
 
-const setsEqual = (a, b) => a.length === b.length && a.every((x) => b.includes(x))
+const setsEqual = (a, b) => {
+  const sa = new Set(a)
+  const sb = new Set(b)
+  return sa.size === sb.size && [...sa].every((x) => sb.has(x))
+}
 
 export function initialState() {
   return {
@@ -79,6 +84,7 @@ export function applyEvent(previous, event) {
         mandate_id: body.mandate_id,
         mandate_revision: body.mandate_revision ?? null,
         max_wus: body.max_wus,
+        authority_kind: body.authority_kind ?? MANDATE_AUTHORITY.PROBE,
       }
       // Governed binding (approve_mandate) records the source of human authority;
       // legacy `init` has no source binding. The fields are present only when a
@@ -262,6 +268,8 @@ export function applyEvent(previous, event) {
       const verifiedCheckIds = body.verified_check_ids ?? []
       if (body.verdict === "PASS") {
         if (evidenceIds.length === 0) throw new Error("RECORD_REVIEW: a PASS verdict requires verification evidence.")
+        if (new Set(evidenceIds).size !== evidenceIds.length) throw new Error("RECORD_REVIEW: duplicate evidence ids in a PASS verdict.")
+        if (new Set(verifiedCheckIds).size !== verifiedCheckIds.length) throw new Error("RECORD_REVIEW: duplicate check coverage in a PASS verdict.")
         if (!setsEqual(verifiedCheckIds, candidate.required_check_ids ?? [])) {
           throw new Error(`RECORD_REVIEW: PASS requires full verification coverage (verified ${verifiedCheckIds.join(",") || "none"}, required ${(candidate.required_check_ids ?? []).join(",") || "none"}).`)
         }
