@@ -8,6 +8,7 @@ import {
   DISPATCH_STATUS,
   EXECUTION_AUTHORIZATION,
   OPERATION_TYPES,
+  RESERVATION_STATUS,
   TERMINAL_BLOCKER_CLASSES,
 } from "./constants.js"
 
@@ -25,7 +26,7 @@ export function initialState() {
     execution_id: null,
     mandate: null, // { mandate_id, mandate_revision, max_wus, total_seconds }
     wu: null, // { wu_id, mandate_id, mandate_revision, authorization }
-    budget: { total_seconds: 0, used_seconds: 0, active_phase: null, active_started_at: null },
+    budget: { total_seconds: 0, used_seconds: 0, reserved_seconds: 0, active_phase: null, active_started_at: null },
     dispatches: {}, // dispatch_id -> { status, session_id, operation_id, result, reconciled }
     candidates: {}, // candidate_id -> { manifest_hash, tree_hash, manifest }
     reviews: {}, // candidate_id -> { verdict, candidate_hashes, reviewer }
@@ -118,13 +119,19 @@ export function applyEvent(previous, event) {
     case "DISPATCH_RESERVE": {
       if (!body.dispatch_id) throw new Error("DISPATCH_RESERVE requires dispatch_id.")
       if (state.dispatches[body.dispatch_id]) throw new Error(`Duplicate dispatch reservation: ${body.dispatch_id}.`)
+      const reserved = body.reserved_seconds ?? 0
+      if (!Number.isFinite(reserved) || reserved < 0) throw new Error("DISPATCH_RESERVE reserved_seconds must be a finite non-negative number.")
       state.dispatches[body.dispatch_id] = {
         status: DISPATCH_STATUS.RESERVED,
         session_id: null,
         operation_id: event.operation_id,
+        reserved_seconds: reserved,
+        reservation_status: RESERVATION_STATUS.RESERVED,
+        actual_consumption: null,
         result: null,
         reconciled: null,
       }
+      state.budget.reserved_seconds += reserved
       break
     }
 
@@ -157,7 +164,47 @@ export function applyEvent(previous, event) {
     case "DISPATCH_RECONCILE": {
       const d = state.dispatches[body.dispatch_id]
       if (!d) throw new Error(`Cannot reconcile unknown dispatch ${body.dispatch_id}.`)
+      if (d.status !== DISPATCH_STATUS.FINISHED) throw new Error(`Cannot reconcile dispatch ${body.dispatch_id}: not finished (status ${d.status}).`)
+      if (d.reservation_status !== RESERVATION_STATUS.RESERVED) throw new Error(`Cannot reconcile dispatch ${body.dispatch_id}: reservation already ${d.reservation_status}.`)
+      const reserved = d.reserved_seconds
+      const reported = body.actual_consumption
+      // Conservative policy: unknown consumption is never rewritten to zero; a
+      // missing report consumes the whole reservation.
+      const actual = reported === undefined || reported === null ? reserved : reported
+      if (!Number.isFinite(actual) || actual < 0) throw new Error("DISPATCH_RECONCILE actual_consumption must be a finite non-negative number.")
+      if (actual > reserved) throw new Error(`DISPATCH_RECONCILE consumption ${actual} exceeds reservation ${reserved}; overrun requires an explicit transition, never a silent adjustment.`)
+      d.status = DISPATCH_STATUS.RESULT_RECONCILED
+      d.reservation_status = RESERVATION_STATUS.CONSUMED
+      d.actual_consumption = actual
       d.reconciled = { verdict: body.verdict ?? null, evidence: body.evidence ?? null, at_revision: state.revision }
+      state.budget.reserved_seconds -= reserved
+      state.budget.used_seconds += actual
+      break
+    }
+
+    case "DISPATCH_RELEASE": {
+      const d = state.dispatches[body.dispatch_id]
+      if (!d) throw new Error(`Cannot release unknown dispatch ${body.dispatch_id}.`)
+      if (d.status !== DISPATCH_STATUS.RESERVED && d.status !== DISPATCH_STATUS.PENDING_LAUNCH) {
+        throw new Error(`Cannot release dispatch ${body.dispatch_id}: not in a never-launched state (status ${d.status}).`)
+      }
+      if (d.reservation_status !== RESERVATION_STATUS.RESERVED) throw new Error(`Cannot release dispatch ${body.dispatch_id}: reservation already ${d.reservation_status}.`)
+      const reserved = d.reserved_seconds
+      d.status = DISPATCH_STATUS.RELEASED
+      d.reservation_status = RESERVATION_STATUS.RELEASED
+      state.budget.reserved_seconds -= reserved
+      break
+    }
+
+    case "DISPATCH_MARK_AMBIGUOUS": {
+      const d = state.dispatches[body.dispatch_id]
+      if (!d) throw new Error(`Cannot mark unknown dispatch ${body.dispatch_id} ambiguous.`)
+      if (d.status !== DISPATCH_STATUS.RESERVED && d.status !== DISPATCH_STATUS.PENDING_LAUNCH) {
+        throw new Error(`Cannot mark dispatch ${body.dispatch_id} ambiguous from status ${d.status}.`)
+      }
+      d.status = DISPATCH_STATUS.AMBIGUOUS
+      // The reservation stays held: unknown must never become zero, and there
+      // is no auto-release or auto-retry from AMBIGUOUS.
       break
     }
 
@@ -215,6 +262,17 @@ export function applyEvent(previous, event) {
       throw new Error(`Unhandled operation type: ${event.operation_type}.`)
   }
 
+  assertBudgetInvariants(state.budget)
+
   state.revision = event.next_revision
   return state
+}
+
+// Structural budget invariants enforced on every projection step. These are the
+// fail-closed guards that make "reservation/liquidation is balanced" a property
+// of the projection, not of the caller. They never depend on the wall-clock
+// total (total_seconds is a soft ceiling, checked at readiness, not here).
+function assertBudgetInvariants(budget) {
+  if (budget.reserved_seconds < 0) throw new Error("Invariant violation: reserved_seconds must never be negative.")
+  if (budget.used_seconds < 0) throw new Error("Invariant violation: used_seconds must never be negative.")
 }
