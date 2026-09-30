@@ -66,6 +66,7 @@ const checks = [
   "src/execution/index.js",
   "docs/execution-control-plane.md",
   "docs/phase-0-continuation-spike.md",
+  "docs/phase-1-verification-substrate.md",
 ]
 
 for (const path of checks) {
