@@ -175,3 +175,34 @@ The original Workshop Waitlist defect is resolved: the reviewer can now
 independently re-verify a frozen candidate without shell access or repository
 mutation.
 
+## Readiness E2E results (2026-09-30)
+
+`harness_check_execution_readiness` verified in runtime:
+
+| Check | Result |
+|---|---|
+| BUILD with a valid `node` contract | ✅ `READY` (7/7 requirements) |
+| `NETWORK_FORBIDDEN` contract | ✅ `BLOCKED_CAPABILITY` (only `network.isolation`) |
+| REVIEW phase | ✅ re-checks only VOLATILE requirements |
+| fingerprint | node v26.3.0, platform/arch, PATH digest, resolved binaries |
+
+Two runtime-shape bugs were found and fixed during this E2E (the reason the
+empirical pass mattered, again):
+
+1. The readiness `probe` is async but `evaluateReadiness` did not await it, so
+   every capability silently defaulted to `READY`. Fixed by awaiting.
+2. `ctx.agent.list()` returns an `{ data: [...] }` envelope, not a plain array,
+   so `harness-builder`/`harness-reviewer` were mis-reported as absent. Fixed by
+   extracting records defensively.
+
+## PHASE_1 = PASS
+
+The full Phase 1 rubric is demonstrated: a reproducible, content-addressed
+candidate; an isolated verification workspace; a typed verification contract
+frozen into the candidate identity; a reviewer that runs only declared checks
+through `harness_run_verification`; and a diagnostic readiness preflight that
+blocks BUILD when REVIEW cannot complete. Fault-injection tests 1–10 are covered
+(#5 process-group cleanup is verified on the timeout path; the orphaned
+grandchild escape is a documented POSIX limitation, out of scope for this phase).
+
+
