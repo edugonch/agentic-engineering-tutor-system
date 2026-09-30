@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "records": [
+    {
+      "source_id": "epic-phase3-wu01-v1",
+      "source_system": "harness-artifact",
+      "source_ref": ".harness/epics/epic-phase3-wu01-v1.md",
+      "source_revision": "e23ae7d14654ad4b2bb22b285c24b9f36f6642803d1f2fa6ee42c18fee91be57",
+      "retrieved_at": "2026-09-30T21:47:56.635Z",
+      "classification": "EPIC",
+      "declared_authority": "APPROVED",
+      "import_status": "OWNER_APPROVED_ARTIFACT",
+      "sha256": "e23ae7d14654ad4b2bb22b285c24b9f36f6642803d1f2fa6ee42c18fee91be57",
+      "byte_size": 972,
+      "media_type": "text",
+      "relationships": [
+        "docs/phase-3-autonomous-wu-controller.md"
+      ],
+      "source_relationships": [
+        "docs/phase-3-autonomous-wu-controller.md"
+      ],
+      "unresolved_relationships": [],
+      "archive_path": ".harness/epics/epic-phase3-wu01-v1.md",
+      "declared_title": "First governed WU: resolveBinary executable-bit",
+      "record_key": "9fbb02574c872960e9b2a4520e28f9203132534721055f0c0c5830a37fa7543d"
+    }
+  ],
+  "updated_at": "2026-09-30T21:47:56.635Z"
+}
