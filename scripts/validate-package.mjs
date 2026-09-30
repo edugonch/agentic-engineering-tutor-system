@@ -65,6 +65,7 @@ const checks = [
   "src/execution/continuation-driver.js",
   "src/execution/verification-workspace.js",
   "src/execution/verification.js",
+  "src/execution/verification-contract.js",
   "src/execution/candidate-registry.js",
   "src/execution/index.js",
   "docs/execution-control-plane.md",

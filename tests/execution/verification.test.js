@@ -4,7 +4,7 @@ import { access, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { freezeCandidate } from "../../src/execution/candidate.js"
-import { resolveCheck, runCommand, runDeclaredCheck, sanitizedEnv, validateVerificationContract } from "../../src/execution/verification.js"
+import { resolveCheck, runCandidateVerification, runCommand, runDeclaredCheck, sanitizedEnv, validateVerificationContract } from "../../src/execution/verification.js"
 
 const contract = {
   commands: [
@@ -101,4 +101,34 @@ test("runCommand caps output and kills its process group", async () => {
   assert.equal(result.ok, true)
   assert.equal(result.truncated, true)
   assert.ok(result.stdout.length <= 100)
+})
+
+test("runCandidateVerification runs only the frozen contract's checks", async () => {
+  const root = await mkdtemp(join(tmpdir(), "harness-verify-candidate-"))
+  try {
+    await writeFile(join(root, "app.js"), "console.log('hi')\n")
+    const frozen = {
+      source_wu_id: "WU-01",
+      commands: [{ id: "run", program: "node", args: ["-e", "console.log('from frozen contract')"] }],
+      capabilities: ["shell.node"],
+    }
+    const candidate = await freezeCandidate(root, { paths: ["app.js"], verification_contract: frozen })
+
+    const pass = await runCandidateVerification(candidate, "run")
+    assert.equal(pass.status, "PASS")
+    assert.match(pass.stdout, /from frozen contract/)
+
+    const undeclared = await runCandidateVerification(candidate, "not-there")
+    assert.equal(undeclared.status, "BLOCKED_UNDECLARED_CHECK")
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+test("runCandidateVerification blocks when the candidate has no contract", async () => {
+  const root = await mkdtemp(join(tmpdir(), "harness-verify-nocontract-"))
+  try {
+    await writeFile(join(root, "app.js"), "x\n")
+    const candidate = await freezeCandidate(root, { paths: ["app.js"] })
+    const result = await runCandidateVerification(candidate, "run")
+    assert.equal(result.status, "BLOCKED_NO_CONTRACT")
+  } finally { await rm(root, { recursive: true, force: true }) }
 })

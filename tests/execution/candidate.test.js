@@ -164,3 +164,17 @@ test("candidate_id is full-length; display_id is a short prefix", async () => {
     assert.equal(result.display_id, result.candidate_id.slice(0, 5 + 16))
   } finally { await rm(root, { recursive: true, force: true }) }
 })
+
+test("same tree, different verification contract → different candidate_id", async () => {
+  const root = await mkdtemp(join(tmpdir(), "harness-cand-contract-"))
+  try {
+    await writeFile(join(root, "app.js"), "app\n")
+    const contractA = { source_wu_id: "WU-01", commands: [{ id: "unit", program: "node", args: ["--test", "a.test.js"] }] }
+    const contractB = { source_wu_id: "WU-01", commands: [{ id: "unit", program: "node", args: ["--test", "b.test.js"] }] }
+    const a = await freezeCandidate(root, { paths: ["app.js"], verification_contract: contractA })
+    const b = await freezeCandidate(root, { paths: ["app.js"], verification_contract: contractB })
+    assert.equal(a.tree_hash, b.tree_hash) // identical code tree
+    assert.notEqual(a.manifest_hash, b.manifest_hash) // different obligation
+    assert.notEqual(a.candidate_id, b.candidate_id)
+  } finally { await rm(root, { recursive: true, force: true }) }
+})

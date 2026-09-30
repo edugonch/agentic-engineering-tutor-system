@@ -146,3 +146,14 @@ export async function runDeclaredCheck(candidate, contract, checkId, { timeoutMs
     await disposeWorkspace(workspace)
   }
 }
+
+// Run a check against the candidate's FROZEN verification contract (not a
+// free-form contract supplied by the reviewer). This is the only path the
+// harness_run_verification tool calls.
+export async function runCandidateVerification(candidate, checkId, { timeoutMs } = {}) {
+  const contract = candidate.verification_contract
+  if (!contract) {
+    return { status: "BLOCKED_NO_CONTRACT", check_id: checkId, reason: "the candidate has no frozen verification contract." }
+  }
+  return runDeclaredCheck(candidate, contract, checkId, { timeoutMs })
+}

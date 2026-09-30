@@ -87,3 +87,24 @@ test("deduplicates blobs shared across candidates", async () => {
     assert.equal(await readFile(join(registry.blobsDir, sharedBlob), "utf8"), "shared\n")
   } finally { await rm(root, { recursive: true, force: true }) }
 })
+
+test("round-trips the frozen verification contract", async () => {
+  const root = await mkdtemp(join(tmpdir(), "harness-registry-contract-"))
+  try {
+    await writeFile(join(root, "app.js"), "app\n")
+    const contract = {
+      source_wu_id: "WU-01",
+      source_wu_revision: "rev-1",
+      source_wu_hash: "abc123",
+      commands: [{ id: "unit", program: "node", args: ["--test", "app.test.js"] }],
+      capabilities: ["shell.node"],
+      environment: { network_policy: "UNRESTRICTED" },
+    }
+    const candidate = await freezeCandidate(root, { paths: ["app.js"], verification_contract: contract })
+    const registry = createCandidateRegistry({ dir: join(root, ".harness", "execution") })
+    await registry.store(candidate)
+    const loaded = await registry.load(candidate.candidate_id)
+    assert.deepEqual(loaded.verification_contract, contract)
+    assert.equal(loaded.manifest.verification_contract.contract_hash, loaded.manifest.verification_contract.contract_hash)
+  } finally { await rm(root, { recursive: true, force: true }) }
+})

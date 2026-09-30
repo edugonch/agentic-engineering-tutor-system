@@ -19,6 +19,7 @@ import { createHash } from "node:crypto"
 import { mkdir, readFile, writeFile } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import { assertCandidatePath, composeCandidateEntries, manifestHash, treeHash } from "./candidate.js"
+import { verificationContractHash } from "./verification-contract.js"
 
 const sha256 = (buf) => createHash("sha256").update(buf).digest("hex")
 
@@ -89,6 +90,7 @@ export function createCandidateRegistry({ dir, limits = {} } = {}) {
       overlay_hash: candidate.overlay_hash,
       tree_hash: candidate.tree_hash,
       manifest: candidate.manifest,
+      verification_contract: candidate.verification_contract,
     }
     const entryPath = join(candidatesDir, `${candidate.candidate_id}.json`)
     await mkdir(candidatesDir, { recursive: true })
@@ -157,6 +159,15 @@ export function createCandidateRegistry({ dir, limits = {} } = {}) {
       throw new Error("CANDIDATE_HASH_MISMATCH on load: stored hashes do not recompute.")
     }
 
+    // Verify the frozen verification contract (if present) hashes correctly.
+    if (entry.verification_contract) {
+      const expected = entry.manifest?.verification_contract?.contract_hash
+      const actual = verificationContractHash(entry.verification_contract)
+      if (actual !== expected) {
+        throw new Error(`VERIFICATION_CONTRACT_HASH_MISMATCH on load: ${actual} vs ${expected}.`)
+      }
+    }
+
     return {
       candidate_id,
       display_id: `cand-${digest.slice(0, 16)}`,
@@ -167,6 +178,7 @@ export function createCandidateRegistry({ dir, limits = {} } = {}) {
       base: entry.manifest.base ? { ...entry.manifest.base, files: baseFiles } : null,
       overlay,
       deletions,
+      verification_contract: entry.verification_contract ?? null,
     }
   }
 

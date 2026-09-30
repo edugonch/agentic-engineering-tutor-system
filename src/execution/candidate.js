@@ -22,6 +22,7 @@ import { createHash } from "node:crypto"
 import { lstat, readFile, readlink } from "node:fs/promises"
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path"
 import { stableSerialize } from "./serialize.js"
+import { verificationContractHash } from "./verification-contract.js"
 
 const sha256 = (value) => createHash("sha256").update(value).digest("hex")
 
@@ -128,7 +129,7 @@ export async function captureBaseSnapshot(root, paths) {
 }
 
 // Reproducible freeze: validate → capture → verify working paths unchanged → publish.
-export async function freezeCandidate(root, { base = null, paths = [], deletions = [] } = {}) {
+export async function freezeCandidate(root, { base = null, paths = [], deletions = [], verification_contract = null } = {}) {
   for (const path of paths) assertCandidatePath(path)
   for (const path of deletions) assertCandidatePath(path)
 
@@ -154,6 +155,14 @@ export async function freezeCandidate(root, { base = null, paths = [], deletions
     base: base ? { kind: base.kind ?? "snapshot", commit: base.commit ?? null, files: baseFiles.map(identityOnly) } : null,
     deletions: sortedDeletions,
     overlay: overlay.map(identityOnly),
+    verification_contract: verification_contract
+      ? {
+          contract_hash: verificationContractHash(verification_contract),
+          source_wu_id: verification_contract.source_wu_id ?? null,
+          source_wu_revision: verification_contract.source_wu_revision ?? null,
+          source_wu_hash: verification_contract.source_wu_hash ?? null,
+        }
+      : null,
     captured_at: new Date().toISOString(), // metadata only, not identity
   }
 
@@ -174,5 +183,6 @@ export async function freezeCandidate(root, { base = null, paths = [], deletions
     base: base ? { ...base, files: baseFiles } : null,
     overlay,
     deletions: sortedDeletions,
+    verification_contract,
   }
 }
