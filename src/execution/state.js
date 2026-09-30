@@ -26,7 +26,8 @@ export function initialState() {
     revision: 0,
     execution_id: null,
     mandate: null, // { mandate_id, mandate_revision, max_wus, total_seconds }
-    wu: null, // { wu_id, mandate_id, mandate_revision, origin, execution_authorization }
+    wu: null, // { wu_id, mandate_id, mandate_revision, origin, execution_authorization, completed }
+    activated_wu_ids: [], // history of every WU id ever activated (enforces max_wus + single-active-WU)
     budget: { total_seconds: 0, used_seconds: 0, reserved_seconds: 0, active_phase: null, active_started_at: null },
     dispatches: {}, // dispatch_id -> { status, session_id, operation_id, result, reconciled }
     candidates: {}, // candidate_id -> { manifest_hash, tree_hash, manifest }
@@ -87,13 +88,24 @@ export function applyEvent(previous, event) {
       if (body.mandate_id !== state.mandate.mandate_id) {
         throw new Error(`WU_ACTIVATE mandate mismatch: ${body.mandate_id} vs ${state.mandate.mandate_id}.`)
       }
+      if (state.wu && !state.wu.completed) {
+        throw new Error(`WU_ACTIVATE blocked: active WU ${state.wu.wu_id} is not complete.`)
+      }
+      if (state.activated_wu_ids.includes(body.wu_id)) {
+        throw new Error(`WU_ACTIVATE blocked: WU ${body.wu_id} was already activated.`)
+      }
+      if (state.activated_wu_ids.length >= state.mandate.max_wus) {
+        throw new Error(`WU_ACTIVATE blocked: mandate max_wus (${state.mandate.max_wus}) reached.`)
+      }
       state.wu = {
         wu_id: body.wu_id,
         mandate_id: state.mandate.mandate_id,
         mandate_revision: state.mandate.mandate_revision,
         origin: WU_ORIGIN.DERIVED,
         execution_authorization: EXECUTION_AUTHORIZATION.AUTHORIZED_BY_MANDATE,
+        completed: false,
       }
+      state.activated_wu_ids.push(body.wu_id)
       break
     }
 
@@ -238,6 +250,7 @@ export function applyEvent(previous, event) {
         verdict: body.verdict ?? null,
         candidate_hashes: { manifest_hash: candidate.manifest_hash, tree_hash: candidate.tree_hash },
         reviewer: body.reviewer ?? null,
+        verification_evidence_ids: body.verification_evidence_ids ?? [],
       }
       break
     }
@@ -285,6 +298,9 @@ export function applyEvent(previous, event) {
     }
 
     case "COMPLETE": {
+      if (state.wu && !state.wu.completed) {
+        throw new Error(`COMPLETE blocked: active WU ${state.wu.wu_id} is not complete.`)
+      }
       state.completed = true
       state.completion = { result: body.result ?? null, at_revision: state.revision }
       break

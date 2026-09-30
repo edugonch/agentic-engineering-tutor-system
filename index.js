@@ -21,7 +21,7 @@ import {
   isJevReady,
   readJevSettings,
 } from "./src/decision/index.js"
-import { runContinuationProbe, createContinuationDriver, createCandidateRegistry, captureBaseSnapshot, freezeCandidate, runCandidateVerification, checkExecutionReadiness, pathDigest, validateVerificationContract, runExecutionController } from "./src/execution/index.js"
+import { runContinuationProbe, createContinuationDriver, createCandidateRegistry, captureBaseSnapshot, freezeCandidate, runCandidateVerification, checkExecutionReadiness, pathDigest, validateVerificationContract, runExecutionController, createVerificationReceipt, writeVerificationReceipt } from "./src/execution/index.js"
 
 const json = (value) => ({ content: JSON.stringify(value, null, 2) })
 const objectInput = (properties, required = []) => ({
@@ -410,7 +410,7 @@ export default Plugin.define({
           wu_id: { type: "string", minLength: 1 },
           candidate_id: { type: "string", minLength: 1, description: "Content-addressed candidate id already stored in the candidate registry; record_candidate loads it and derives authoritative hashes." },
           verdict: { type: "string" },
-          candidate_hashes: { type: "object" },
+          verification_evidence_ids: { type: "array", items: { type: "string" }, description: "Durable evidence receipts (verify-<hash>) from harness_run_verification, bound to the candidate and PASS." },
           reviewer: { type: "string" },
           checkpoint_id: { type: "string", minLength: 1, description: "Explicit checkpoint key so repeated checkpoints do not collide on the operation id." },
           note: { type: "string" },
@@ -464,7 +464,17 @@ export default Plugin.define({
           if (!candidate) {
             return json({ status: "BLOCKED_UNKNOWN_CANDIDATE", candidate_id: input.candidate_id, reason: "no candidate with this id is in the registry." })
           }
-          return json(await runCandidateVerification(candidate, input.verification_check_id))
+          const result = await runCandidateVerification(candidate, input.verification_check_id)
+          // Persist an immutable evidence receipt for checks that actually ran,
+          // so a later RECORD_REVIEW can cite durable evidence rather than a
+          // caller-declared "PASS".
+          let evidence_id = null
+          if (result.status === "PASS" || result.status === "FAIL") {
+            const receipt = createVerificationReceipt(result)
+            await writeVerificationReceipt(join(requireProjectRoot(), ".harness", "execution", "verification-results"), receipt)
+            evidence_id = receipt.evidence_id
+          }
+          return json({ ...result, evidence_id })
         },
       })
 

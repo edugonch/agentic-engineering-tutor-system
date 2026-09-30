@@ -87,4 +87,40 @@ test("initial state has revision 0 and empty projections", () => {
   assert.equal(s.revision, 0)
   assert.equal(s.blocker, null)
   assert.deepEqual(s.dispatches, {})
+  assert.deepEqual(s.activated_wu_ids, [])
+})
+
+test("WU_ACTIVATE rejects a second WU while the first is incomplete", () => {
+  let state = project([
+    ev("MANDATE_APPROVE", { mandate_id: "M1", max_wus: 2, total_seconds: 60 }, 0, 1),
+    ev("WU_ACTIVATE", { wu_id: "WU-01", mandate_id: "M1" }, 1, 2),
+  ])
+  assert.throws(
+    () => applyEvent(state, ev("WU_ACTIVATE", { wu_id: "WU-02", mandate_id: "M1" }, 2, 3)),
+    /not complete/,
+  )
+})
+
+test("WU_ACTIVATE rejects activation beyond mandate max_wus", () => {
+  let state = initialState()
+  state = applyEvent(state, ev("MANDATE_APPROVE", { mandate_id: "M1", max_wus: 1, total_seconds: 60 }, 0, 1))
+  state = applyEvent(state, ev("WU_ACTIVATE", { wu_id: "WU-01", mandate_id: "M1" }, 1, 2))
+  state = applyEvent(state, ev("FREEZE_CANDIDATE", { candidate_id: "c1", wu_id: "WU-01", manifest_hash: "mh", tree_hash: "th" }, 2, 3))
+  state = applyEvent(state, ev("RECORD_REVIEW", { candidate_id: "c1", verdict: "PASS", candidate_hashes: { manifest_hash: "mh", tree_hash: "th" } }, 3, 4))
+  state = applyEvent(state, ev("WU_COMPLETE", { candidate_id: "c1" }, 4, 5))
+  assert.equal(state.wu.completed, true)
+  assert.throws(
+    () => applyEvent(state, ev("WU_ACTIVATE", { wu_id: "WU-02", mandate_id: "M1" }, 5, 6)),
+    /max_wus/,
+  )
+})
+
+test("COMPLETE (Epic) rejects while the active WU is incomplete", () => {
+  let state = initialState()
+  state = applyEvent(state, ev("MANDATE_APPROVE", { mandate_id: "M1", max_wus: 2, total_seconds: 60 }, 0, 1))
+  state = applyEvent(state, ev("WU_ACTIVATE", { wu_id: "WU-01", mandate_id: "M1" }, 1, 2))
+  assert.throws(
+    () => applyEvent(state, ev("COMPLETE", { result: "done" }, 2, 3)),
+    /active WU/,
+  )
 })

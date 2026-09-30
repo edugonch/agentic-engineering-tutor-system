@@ -20,6 +20,7 @@ import { readLog, validateLog } from "./event-log.js"
 import { project, deriveBudget } from "./state.js"
 import { createExecutionController } from "./execution.js"
 import { createCandidateRegistry } from "./candidate-registry.js"
+import { readVerificationReceipt } from "./verification-results.js"
 import { DISPATCH_STATUS, RESERVATION_STATUS } from "./constants.js"
 
 function sanitizeId(raw, label) {
@@ -209,7 +210,27 @@ export async function runExecutionController(projectRoot, input, candidateRegist
   if (action === "record_review") {
     const candidateId = String(input.candidate_id ?? "")
     if (!candidateId) throw new Error("record_review requires candidate_id.")
-    const res = await commitAction(controller, holder, `${executionId}:review:${candidateId}`, "RECORD_REVIEW", { candidate_id: candidateId, verdict: input.verdict ?? null, candidate_hashes: input.candidate_hashes ?? {}, reviewer: input.reviewer ?? null })
+    const evidenceIds = Array.isArray(input.verification_evidence_ids) ? input.verification_evidence_ids : []
+    if (evidenceIds.length === 0) {
+      throw new Error("record_review requires verification_evidence_ids (durable evidence from harness_run_verification).")
+    }
+    const receiptsDir = join(projectRoot, ".harness", "execution", "verification-results")
+    const lease = await controller.acquire(holder)
+    const snap = await controller.snapshot()
+    const frozenCandidate = snap.state.candidates[candidateId]
+    if (!frozenCandidate) throw new Error(`record_review: candidate ${candidateId} not recorded (record_candidate first).`)
+    const contractHash = frozenCandidate.manifest?.verification_contract?.contract_hash ?? null
+    for (const evidenceId of evidenceIds) {
+      const receipt = await readVerificationReceipt(receiptsDir, evidenceId)
+      if (!receipt) throw new Error(`record_review: evidence ${evidenceId} not found.`)
+      if (receipt.candidate_id !== candidateId) throw new Error(`record_review: evidence ${evidenceId} belongs to ${receipt.candidate_id}, not ${candidateId}.`)
+      if (contractHash !== null && receipt.verification_contract_hash !== contractHash) throw new Error(`record_review: evidence ${evidenceId} contract hash ${receipt.verification_contract_hash} does not match candidate contract ${contractHash}.`)
+      if (receipt.status !== "PASS") throw new Error(`record_review: evidence ${evidenceId} status is ${receipt.status}, not PASS.`)
+    }
+    const res = await controller.commit(
+      { operation_id: `${executionId}:review:${candidateId}`, operation_type: "RECORD_REVIEW", body: { candidate_id: candidateId, verdict: input.verdict ?? null, candidate_hashes: { manifest_hash: frozenCandidate.manifest_hash, tree_hash: frozenCandidate.tree_hash }, reviewer: input.reviewer ?? null, verification_evidence_ids: evidenceIds } },
+      { holder_session_id: holder, expected_revision: snap.state.revision, lease_fencing_token: lease.fencing_token },
+    )
     return { action, commit_status: res.status, candidate_id: candidateId, ...(await summary(controller)) }
   }
 

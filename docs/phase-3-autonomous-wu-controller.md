@@ -256,3 +256,24 @@ history; only the latest binding drives `COMPLETE`.
 - **Two-authority candidate model.** Registry owns immutable content; event log owns
   lifecycle; review binds to both via hashes.
 - **Plugin pinned to SHA** for architecture/validation work (no `#main` ambiguity).
+
+## 13. 3A review amendments
+
+The 3A review round found the original bootstrap incomplete for real autonomy. The
+following amendments supersede the matching parts of §5–§11 above (the original
+contract is preserved as history, not silently rewritten):
+
+- **`record_candidate(candidate_id)` is registry-bound.** The caller cannot supply
+  authoritative hashes. The action loads the candidate from the registry, fails closed
+  on a missing candidate, derives `manifest_hash`/`tree_hash`/`manifest`, and binds the
+  candidate to the active `wu_id`.
+- **`WU_COMPLETE ≠ COMPLETE`.** `complete_wu` closes one WU with structural
+  preconditions; `COMPLETE` remains Epic-level (`EPIC_EXECUTION_VERIFIED`) and is
+  rejected while an active WU is incomplete.
+- **Activation / max-WU enforcement.** `WU_ACTIVATE` rejects a second WU while the
+  active WU is incomplete, rejects re-activating the same id, and rejects activation
+  beyond `mandate.max_wus`. The projection carries `activated_wu_ids`.
+- **Evidence-bound review.** `record_review` requires `verification_evidence_ids[]`
+  (immutable `harness_run_verification` receipts) and validates that each cited receipt
+  belongs to the candidate, matches the contract hash, and is `PASS`. A `PASS` can no
+  longer be declared by the caller alone.
