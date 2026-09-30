@@ -1,15 +1,19 @@
 // Candidate identity + reproducible freeze.
 //
-// A candidate is described by two independent hashes:
+// A candidate is a COMPLETE, reproducible tree:
 //
-//   manifest_hash — identity of the candidate description (base, entries,
-//                   deletions); volatile metadata (timestamp) is excluded.
-//   tree_hash     — identity of the material tree reconstructed from entries.
+//   base (unchanged files, with content)  − deletions  + overlay (changed files)
 //
-// freezeCandidate captures the actual working tree (files by content hash,
-// symlinks as symlinks without following), verifies nothing changed during the
-// capture (freeze-race detection), and fails closed on a symlink that escapes
-// the repository root.
+// Its identity has four layers:
+//
+//   manifest_hash — description: base identity + deletions + overlay identity
+//   overlay_hash  — the changed material only
+//   tree_hash     — the complete resulting tree (base − deletions + overlay)
+//   candidate_id  — full identity: hash(manifest_hash, tree_hash)
+//
+// candidate_id therefore changes if ANY of base, deletions, or overlay change —
+// even when the changed material is identical. A review binds to one exact
+// candidate, never to a partial overlay.
 
 import { createHash } from "node:crypto"
 import { lstat, readFile, readlink } from "node:fs/promises"
@@ -28,11 +32,14 @@ function gitMode(info) {
   return (info.mode & 0o111) !== 0 ? "100755" : "100644"
 }
 
+const identityOnly = ({ content: _content, ...identity }) => identity
+
 export function manifestHash(manifest) {
   const { captured_at: _timestamp, ...identity } = manifest ?? {}
   return sha256(stableSerialize(identity))
 }
 
+// Hash a list of content entries (files and symlinks) deterministically.
 export function treeHash(entries) {
   const lines = entries
     .map((entry) => {
@@ -48,8 +55,11 @@ export function treeHash(entries) {
   return sha256(lines)
 }
 
-// Capture one path as a content entry. Returns null for non-content entries
-// (directories, sockets, devices), which are not part of the candidate tree.
+function candidateDigest(manifest_hash, tree_hash) {
+  return sha256(`${manifest_hash}\u0000${tree_hash}`)
+}
+
+// Capture one path as a content entry. Returns null for non-content entries.
 // Fails closed on a symlink whose target escapes the repository root.
 export async function captureEntry(root, relPath) {
   if (isAbsolute(relPath)) throw new Error("entry paths must be relative to the project root.")
@@ -80,28 +90,51 @@ export async function captureEntries(root, paths) {
   return entries
 }
 
+// Capture a base snapshot (unchanged files, with content) for a non-Git base.
+export async function captureBaseSnapshot(root, paths) {
+  const files = await captureEntries(root, paths)
+  return { kind: "snapshot", commit: null, files }
+}
+
 // Reproducible freeze: scan → capture → verify working paths unchanged → publish.
-// Returns entries WITH frozen content (base64) for materialization; the manifest
-// holds identity-only entries so the content encoding never affects identity.
-export async function freezeCandidate(root, { paths = [], deletions = [], base = null } = {}) {
-  const entries = await captureEntries(root, paths)
+export async function freezeCandidate(root, { base = null, paths = [], deletions = [] } = {}) {
+  const overlay = await captureEntries(root, paths)
 
   // Freeze-race detection: a second, fresh capture must hash identically.
   const recheck = await captureEntries(root, paths)
-  if (treeHash(entries) !== treeHash(recheck)) {
+  if (treeHash(overlay) !== treeHash(recheck)) {
     throw new Error("CANDIDATE_CHANGED_DURING_FREEZE: a path changed while the candidate was being captured.")
   }
 
-  const identityEntries = entries.map(({ content: _content, ...identity }) => identity)
+  const baseFiles = base?.files ?? []
+  const deletionSet = new Set(deletions)
+
+  // Complete resulting tree = base (minus deletions) + overlay.
+  const completeEntries = [
+    ...baseFiles.filter((file) => !deletionSet.has(file.path)),
+    ...overlay,
+  ].sort((a, b) => a.path.localeCompare(b.path))
+
   const manifest = {
-    base,
-    deletions: [...new Set(deletions)].sort(),
-    entries: identityEntries,
+    base: base ? { kind: base.kind ?? "snapshot", commit: base.commit ?? null, files: baseFiles.map(identityOnly) } : null,
+    deletions: [...deletionSet].sort(),
+    overlay: overlay.map(identityOnly),
     captured_at: new Date().toISOString(), // metadata only, not identity
   }
-  const manifest_hash = manifestHash(manifest)
-  const tree_hash = treeHash(entries)
-  const candidate_id = `cand-${tree_hash.slice(0, 16)}`
 
-  return { candidate_id, manifest_hash, tree_hash, manifest, entries }
+  const manifest_hash = manifestHash(manifest)
+  const overlay_hash = treeHash(overlay)
+  const tree_hash = treeHash(completeEntries)
+  const candidate_id = `cand-${candidateDigest(manifest_hash, tree_hash).slice(0, 16)}`
+
+  return {
+    candidate_id,
+    manifest_hash,
+    overlay_hash,
+    tree_hash,
+    manifest,
+    base: base ? { ...base, files: baseFiles } : null,
+    overlay,
+    deletions: [...deletionSet].sort(),
+  }
 }

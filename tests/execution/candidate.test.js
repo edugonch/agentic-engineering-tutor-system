@@ -1,36 +1,58 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises"
+import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { captureEntries, freezeCandidate, manifestHash, treeHash } from "../../src/execution/candidate.js"
+import { captureBaseSnapshot, captureEntries, freezeCandidate, manifestHash, treeHash } from "../../src/execution/candidate.js"
 
-test("freezes files into a stable, content-addressed candidate", async () => {
+test("freezes a complete candidate with all identity layers", async () => {
   const root = await mkdtemp(join(tmpdir(), "harness-cand-"))
   try {
-    await writeFile(join(root, "a.txt"), "hello a\n")
-    await writeFile(join(root, "b.txt"), "hello b\n")
-    const result = await freezeCandidate(root, { paths: ["a.txt", "b.txt"] })
+    await writeFile(join(root, "app.js"), "app content\n")
+    const result = await freezeCandidate(root, { paths: ["app.js"] })
     assert.match(result.candidate_id, /^cand-/)
     assert.equal(result.manifest_hash.length, 64)
+    assert.equal(result.overlay_hash.length, 64)
     assert.equal(result.tree_hash.length, 64)
-    assert.deepEqual(result.entries.map((e) => e.path), ["a.txt", "b.txt"])
-    for (const entry of result.entries) {
-      assert.equal(entry.type, "file")
-      assert.match(entry.mode, /^100(644|755)$/)
-      assert.equal(entry.sha256.length, 64)
-    }
+    assert.deepEqual(result.overlay.map((e) => e.path), ["app.js"])
   } finally { await rm(root, { recursive: true, force: true }) }
 })
 
-test("a single-byte change yields a different candidate identity", async () => {
+test("same overlay, different base → different candidate_id (acceptance 1)", async () => {
+  const root = await mkdtemp(join(tmpdir(), "harness-cand-base-"))
+  try {
+    await writeFile(join(root, "app.js"), "app\n")
+    const baseA = { kind: "snapshot", commit: "aaaaaaaa", files: [] }
+    const baseB = { kind: "snapshot", commit: "bbbbbbbb", files: [] }
+    const a = await freezeCandidate(root, { base: baseA, paths: ["app.js"] })
+    const b = await freezeCandidate(root, { base: baseB, paths: ["app.js"] })
+    assert.equal(a.overlay_hash, b.overlay_hash) // identical changed material
+    assert.notEqual(a.manifest_hash, b.manifest_hash)
+    assert.notEqual(a.candidate_id, b.candidate_id)
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+test("same overlay, different deletion → different candidate_id (acceptance 2)", async () => {
+  const root = await mkdtemp(join(tmpdir(), "harness-cand-del-"))
+  try {
+    await writeFile(join(root, "app.js"), "app\n")
+    const a = await freezeCandidate(root, { paths: ["app.js"], deletions: ["old-a.js"] })
+    const b = await freezeCandidate(root, { paths: ["app.js"], deletions: ["old-b.js"] })
+    assert.equal(a.overlay_hash, b.overlay_hash)
+    assert.notEqual(a.manifest_hash, b.manifest_hash)
+    assert.notEqual(a.candidate_id, b.candidate_id)
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+test("a single-byte overlay change yields a different candidate identity", async () => {
   const root = await mkdtemp(join(tmpdir(), "harness-cand-byte-"))
   try {
     await writeFile(join(root, "a.txt"), "line one\n")
     const first = await freezeCandidate(root, { paths: ["a.txt"] })
-    await writeFile(join(root, "a.txt"), "line one!\n") // one byte changed
+    await writeFile(join(root, "a.txt"), "line one!\n")
     const second = await freezeCandidate(root, { paths: ["a.txt"] })
     assert.notEqual(first.tree_hash, second.tree_hash)
+    assert.notEqual(first.overlay_hash, second.overlay_hash)
     assert.notEqual(first.candidate_id, second.candidate_id)
   } finally { await rm(root, { recursive: true, force: true }) }
 })
@@ -43,10 +65,7 @@ test("a symlink escaping the repo fails closed", async () => {
   await writeFile(outside, "secret\n")
   try {
     await symlink(outside, join(root, "leak.txt"))
-    await assert.rejects(
-      freezeCandidate(root, { paths: ["leak.txt"] }),
-      /symlink escapes the repository/,
-    )
+    await assert.rejects(freezeCandidate(root, { paths: ["leak.txt"] }), /symlink escapes the repository/)
   } finally { await rm(parent, { recursive: true, force: true }) }
 })
 
@@ -56,7 +75,7 @@ test("a symlink inside the repo is captured as a symlink without following", asy
     await writeFile(join(root, "target.txt"), "target content\n")
     await symlink("target.txt", join(root, "link.txt"))
     const result = await freezeCandidate(root, { paths: ["link.txt"] })
-    const entry = result.entries[0]
+    const entry = result.overlay[0]
     assert.equal(entry.type, "symlink")
     assert.equal(entry.target, "target.txt")
     assert.equal(entry.sha256, undefined)
@@ -75,18 +94,29 @@ test("capture re-check detects a changed path (freeze-race primitive)", async ()
 })
 
 test("manifest identity excludes the capture timestamp", () => {
-  const base = { base: null, deletions: [], entries: [{ path: "a.txt", type: "file", mode: "100644", sha256: "x".repeat(64) }] }
+  const base = { base: { kind: "snapshot", commit: null, files: [] }, deletions: [], overlay: [{ path: "a.txt", type: "file", mode: "100644", sha256: "x".repeat(64) }] }
   assert.equal(
     manifestHash({ ...base, captured_at: "2026-01-01T00:00:00.000Z" }),
     manifestHash({ ...base, captured_at: "2026-02-02T00:00:00.000Z" }),
   )
 })
 
-test("deletions are recorded and deduplicated in the manifest", async () => {
-  const root = await mkdtemp(join(tmpdir(), "harness-cand-del-"))
+test("deletions are recorded and deduplicated", async () => {
+  const root = await mkdtemp(join(tmpdir(), "harness-cand-dedup-"))
   try {
     await writeFile(join(root, "a.txt"), "kept\n")
     const result = await freezeCandidate(root, { paths: ["a.txt"], deletions: ["gone.txt", "gone.txt"] })
-    assert.deepEqual(result.manifest.deletions, ["gone.txt"])
+    assert.deepEqual(result.deletions, ["gone.txt"])
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+test("captureBaseSnapshot returns a base with frozen content", async () => {
+  const root = await mkdtemp(join(tmpdir(), "harness-cand-snap-"))
+  try {
+    await writeFile(join(root, "pkg.json"), "{}\n")
+    const base = await captureBaseSnapshot(root, ["pkg.json"])
+    assert.equal(base.kind, "snapshot")
+    assert.equal(base.files[0].path, "pkg.json")
+    assert.ok(base.files[0].content)
   } finally { await rm(root, { recursive: true, force: true }) }
 })

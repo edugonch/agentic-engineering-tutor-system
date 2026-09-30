@@ -1,5 +1,8 @@
-// Verification workspace: materialize a frozen candidate into a disposable
-// temporary directory and verify its reconstructed tree hash.
+// Verification workspace: materialize a COMPLETE candidate tree into a
+// disposable temporary directory and verify its reconstructed tree hash.
+//
+// Materialization order: base (unchanged files) → apply deletions → overlay
+// (changed files) → recompute the complete tree and compare to candidate.tree_hash.
 //
 // This is NOT a sandbox. It protects the repo checkout and reconstructs the
 // candidate from frozen content (so a later working-tree change cannot
@@ -17,23 +20,37 @@ function modeFromGit(gitMode) {
   return 0o644
 }
 
+async function writeEntry(workspace, entry) {
+  const dest = join(workspace, entry.path)
+  await mkdir(dirname(dest), { recursive: true })
+  if (entry.type === "symlink") {
+    await symlink(entry.target, dest)
+  } else if (entry.content != null) {
+    await writeFile(dest, Buffer.from(entry.content, "base64"), { mode: modeFromGit(entry.mode) })
+  } else {
+    throw new Error(`entry ${entry.path} has no frozen content to materialize.`)
+  }
+}
+
 export async function materializeCandidate(candidate) {
   const workspace = await mkdtemp(join(tmpdir(), "harness-verify-"))
   try {
-    for (const entry of candidate.entries) {
-      const dest = join(workspace, entry.path)
-      await mkdir(dirname(dest), { recursive: true })
-      if (entry.type === "symlink") {
-        await symlink(entry.target, dest)
-      } else if (entry.content != null) {
-        await writeFile(dest, Buffer.from(entry.content, "base64"), { mode: modeFromGit(entry.mode) })
-      } else {
-        throw new Error(`entry ${entry.path} has no frozen content to materialize.`)
-      }
-    }
+    const baseFiles = candidate.base?.files ?? []
+    const overlay = candidate.overlay ?? []
+    const deletions = candidate.deletions ?? []
 
-    // Verify the reconstruction matches the frozen candidate exactly.
-    const reconstructed = await captureEntries(workspace, candidate.entries.map((entry) => entry.path))
+    // 1. materialize base (unchanged files)
+    for (const file of baseFiles) await writeEntry(workspace, file)
+    // 2. apply deletions
+    for (const path of deletions) await rm(join(workspace, path), { recursive: false, force: true })
+    // 3. overlay frozen entries (modified/new files)
+    for (const entry of overlay) await writeEntry(workspace, entry)
+
+    // 4. recompute the complete tree and verify it matches
+    const deletionSet = new Set(deletions)
+    const completePaths = [...new Set([...baseFiles.map((f) => f.path), ...overlay.map((e) => e.path)])]
+      .filter((path) => !deletionSet.has(path))
+    const reconstructed = await captureEntries(workspace, completePaths)
     const reconstructedHash = treeHash(reconstructed)
     if (reconstructedHash !== candidate.tree_hash) {
       throw new Error(`Reconstructed workspace tree hash differs: ${reconstructedHash} vs ${candidate.tree_hash}`)
