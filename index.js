@@ -2,6 +2,7 @@ import { Plugin } from "@opencode/plugin"
 import { fileURLToPath } from "node:url"
 import { join } from "node:path"
 import { existsSync } from "node:fs"
+import { resolveBinary } from "./src/resolve-binary.js"
 import { applyOutputTokenCap, createTurnGuard, readGuardSettings } from "./src/turn-guard.js"
 import { getProjectStatus, initializeProject } from "./src/scaffold.js"
 import { analyzeExistingProject } from "./src/project-analysis.js"
@@ -30,15 +31,6 @@ const objectInput = (properties, required = []) => ({
   required,
   additionalProperties: false,
 })
-
-function resolveBinary(program) {
-  if (!program) return null
-  for (const dir of (process.env.PATH ?? "").split(":")) {
-    const candidate = join(dir, program)
-    try { if (existsSync(candidate)) return candidate } catch {}
-  }
-  return null
-}
 
 const BROWSER_CANDIDATES = [
   "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
