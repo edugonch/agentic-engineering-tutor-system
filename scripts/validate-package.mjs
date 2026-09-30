@@ -119,7 +119,7 @@ for (const marker of ["opencode plugin add 'github:edugonch/agentic-engineering-
   if (!readme.includes(marker)) errors.push(`README.md: missing installer/bootstrap instruction ${marker}`)
 }
 const entry = await readFile(join(root, "index.js"), "utf8")
-for (const marker of ["Plugin.define", 'ctx.session.hook("context"', 'ctx.tool.hook("execute.before"', 'ctx.permission.hook("evaluate"', 'ctx.session.hook("retry"', 'name: "harness_search_knowledge"', 'name: "harness_import_project_knowledge"', 'name: "harness_search_project_knowledge"', 'name: "harness_record_knowledge_artifact"', 'name: "harness_check_agent_readiness"', 'name: "harness_continuation_probe"', 'name: "harness_continuation_spike"', "createContinuationDriver(", "recordArtifactWithActivationGate(", "registerHarnessCommand(ctx)"]) {
+for (const marker of ["Plugin.define", 'ctx.session.hook("context"', 'ctx.tool.hook("execute.before"', 'ctx.permission.hook("evaluate"', 'ctx.session.hook("retry"', 'name: "harness_search_knowledge"', 'name: "harness_import_project_knowledge"', 'name: "harness_search_project_knowledge"', 'name: "harness_record_knowledge_artifact"', 'name: "harness_check_agent_readiness"', 'name: "harness_continuation_probe"', 'name: "harness_continuation_spike"', 'name: "harness_freeze_candidate"', 'name: "harness_run_verification"', "createContinuationDriver(", "createCandidateRegistry(", "recordArtifactWithActivationGate(", "registerHarnessCommand(ctx)"]) {
   if (!entry.includes(marker)) errors.push(`index.js: missing V2 runtime contract ${marker}`)
 }
 

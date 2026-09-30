@@ -1,5 +1,6 @@
 import { Plugin } from "@opencode/plugin"
 import { fileURLToPath } from "node:url"
+import { join } from "node:path"
 import { applyOutputTokenCap, createTurnGuard, readGuardSettings } from "./src/turn-guard.js"
 import { getProjectStatus, initializeProject } from "./src/scaffold.js"
 import { analyzeExistingProject } from "./src/project-analysis.js"
@@ -19,7 +20,7 @@ import {
   isJevReady,
   readJevSettings,
 } from "./src/decision/index.js"
-import { runContinuationProbe, createContinuationDriver } from "./src/execution/index.js"
+import { runContinuationProbe, createContinuationDriver, createCandidateRegistry, captureBaseSnapshot, freezeCandidate, runCandidateVerification } from "./src/execution/index.js"
 
 const json = (value) => ({ content: JSON.stringify(value, null, 2) })
 const objectInput = (properties, required = []) => ({
@@ -41,6 +42,8 @@ export default Plugin.define({
       if (!projectRoot) throw new Error("OpenCode did not provide this plugin location's canonical project root.")
       return projectRoot
     }
+
+    const candidateRegistry = createCandidateRegistry({ dir: join(requireProjectRoot(), ".harness", "execution") })
 
     // AgentEditor can update existing agents but cannot add new definitions.
     // Keep the Harness roles available by managing their global profile files
@@ -364,6 +367,55 @@ export default Plugin.define({
             recent_events: continuation.listEvents(),
             guard_snapshot: input.session_id ? guard.snapshot(input.session_id) : null,
           })
+        },
+      })
+
+      editor.add({
+        name: "harness_freeze_candidate",
+        description: "Freeze a Work Unit's working-tree changes into a content-addressed candidate and store it in the candidate registry. Captures a base snapshot, overlay paths, deletions, and a frozen verification contract; returns the candidate_id. Never runs checks.",
+        input: objectInput({
+          wu_id: { type: "string", minLength: 1 },
+          base_paths: { type: "array", items: { type: "string" }, maxItems: 2000 },
+          overlay_paths: { type: "array", items: { type: "string" }, maxItems: 2000 },
+          deletions: { type: "array", items: { type: "string" }, maxItems: 2000 },
+          verification_contract: { type: "object" },
+        }, ["wu_id"]),
+        execute: async (input) => {
+          const root = requireProjectRoot()
+          const base = input.base_paths?.length ? await captureBaseSnapshot(root, input.base_paths) : null
+          const contract = input.verification_contract ?? null
+          if (contract && !contract.source_wu_id) contract.source_wu_id = input.wu_id
+          const candidate = await freezeCandidate(root, {
+            base,
+            paths: input.overlay_paths ?? [],
+            deletions: input.deletions ?? [],
+            verification_contract: contract,
+          })
+          const stored = await candidateRegistry.store(candidate)
+          return json({
+            ...stored,
+            candidate_id: candidate.candidate_id,
+            display_id: candidate.display_id,
+            manifest_hash: candidate.manifest_hash,
+            tree_hash: candidate.tree_hash,
+            verification_contract_hash: candidate.manifest.verification_contract?.contract_hash ?? null,
+          })
+        },
+      })
+
+      editor.add({
+        name: "harness_run_verification",
+        description: "Run one declared verification check against a frozen candidate. Loads the candidate from the registry, uses only its frozen verification contract (never a free-form command), materializes an isolated workspace, executes the check, and returns evidence bound to the candidate and contract. Undeclared checks and missing capabilities are blocked.",
+        input: objectInput({
+          candidate_id: { type: "string", minLength: 1, pattern: "^cand-[0-9a-f]{64}$" },
+          verification_check_id: { type: "string", minLength: 1 },
+        }, ["candidate_id", "verification_check_id"]),
+        execute: async (input) => {
+          const candidate = await candidateRegistry.load(input.candidate_id)
+          if (!candidate) {
+            return json({ status: "BLOCKED_UNKNOWN_CANDIDATE", candidate_id: input.candidate_id, reason: "no candidate with this id is in the registry." })
+          }
+          return json(await runCandidateVerification(candidate, input.verification_check_id))
         },
       })
     })
