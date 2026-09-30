@@ -155,5 +155,6 @@ export async function runCandidateVerification(candidate, checkId, { timeoutMs }
   if (!contract) {
     return { status: "BLOCKED_NO_CONTRACT", check_id: checkId, reason: "the candidate has no frozen verification contract." }
   }
-  return runDeclaredCheck(candidate, contract, checkId, { timeoutMs })
+  const result = await runDeclaredCheck(candidate, contract, checkId, { timeoutMs })
+  return { ...result, verification_contract_hash: candidate.manifest?.verification_contract?.contract_hash ?? null }
 }
