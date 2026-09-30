@@ -1,6 +1,7 @@
 import { Plugin } from "@opencode/plugin"
 import { fileURLToPath } from "node:url"
 import { join } from "node:path"
+import { existsSync } from "node:fs"
 import { applyOutputTokenCap, createTurnGuard, readGuardSettings } from "./src/turn-guard.js"
 import { getProjectStatus, initializeProject } from "./src/scaffold.js"
 import { analyzeExistingProject } from "./src/project-analysis.js"
@@ -20,7 +21,7 @@ import {
   isJevReady,
   readJevSettings,
 } from "./src/decision/index.js"
-import { runContinuationProbe, createContinuationDriver, createCandidateRegistry, captureBaseSnapshot, freezeCandidate, runCandidateVerification } from "./src/execution/index.js"
+import { runContinuationProbe, createContinuationDriver, createCandidateRegistry, captureBaseSnapshot, freezeCandidate, runCandidateVerification, checkExecutionReadiness, pathDigest, validateVerificationContract } from "./src/execution/index.js"
 
 const json = (value) => ({ content: JSON.stringify(value, null, 2) })
 const objectInput = (properties, required = []) => ({
@@ -29,6 +30,27 @@ const objectInput = (properties, required = []) => ({
   required,
   additionalProperties: false,
 })
+
+function resolveBinary(program) {
+  if (!program) return null
+  for (const dir of (process.env.PATH ?? "").split(":")) {
+    const candidate = join(dir, program)
+    try { if (existsSync(candidate)) return candidate } catch {}
+  }
+  return null
+}
+
+const BROWSER_CANDIDATES = [
+  "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+  "/Applications/Chromium.app/Contents/MacOS/Chromium",
+  "/usr/bin/google-chrome",
+  "/usr/bin/chromium",
+  "/usr/bin/chromium-browser",
+]
+
+function detectBrowser() {
+  return BROWSER_CANDIDATES.some((candidate) => { try { return existsSync(candidate) } catch { return false } })
+}
 
 export default Plugin.define({
   id: "opencode.agentic-harness",
@@ -416,6 +438,74 @@ export default Plugin.define({
             return json({ status: "BLOCKED_UNKNOWN_CANDIDATE", candidate_id: input.candidate_id, reason: "no candidate with this id is in the registry." })
           }
           return json(await runCandidateVerification(candidate, input.verification_check_id))
+        },
+      })
+
+      editor.add({
+        name: "harness_check_execution_readiness",
+        description: "Diagnostic preflight, never authority. Evaluates the concrete capabilities a Work Unit's frozen verification contract requires (builder/reviewer, verification runner, binaries, browser, network policy, budget) and returns READY or BLOCKED_CAPABILITY/BLOCKED_BUDGET with every requirement. Requirements are derived from the contract; the caller cannot invent capabilities. BUILD checks stable+volatile; REVIEW re-checks only volatile.",
+        input: objectInput({
+          wu_id: { type: "string", minLength: 1 },
+          phase: { type: "string", enum: ["BUILD", "REVIEW"], default: "BUILD" },
+          verification_contract: { type: "object" },
+          candidate_id: { type: "string", pattern: "^cand-[0-9a-f]{64}$" },
+          remaining_budget: { type: "number", minimum: 0 },
+        }, ["wu_id"]),
+        execute: async (input) => {
+          let contract = input.verification_contract ?? null
+          if (input.candidate_id) {
+            const candidate = await candidateRegistry.load(input.candidate_id)
+            if (!candidate) return json({ status: "BLOCKED", reason: `unknown candidate ${input.candidate_id}` })
+            contract = candidate.verification_contract
+          }
+          if (!contract) {
+            return json({ status: "BLOCKED", reason: "no verification contract available to derive requirements; pass verification_contract or candidate_id." })
+          }
+
+          let agents = new Set()
+          let tools = new Set()
+          try { agents = new Set(((await ctx.agent.list()) || []).map((agent) => agent.id ?? agent.name)) } catch {}
+          try { tools = new Set(((await ctx.tool.list()) || []).map((tool) => tool.id)) } catch {}
+
+          const probe = async (capability, requirement) => {
+            switch (capability) {
+              case "contract.valid":
+                try { validateVerificationContract(contract); return { status: "READY" } }
+                catch (error) { return { status: "BLOCKED", reason: String(error?.message ?? error) } }
+              case "builder.present":
+                return agents.has("harness-builder") ? { status: "READY" } : { status: "BLOCKED", reason: "harness-builder is not available." }
+              case "reviewer.present":
+                return agents.has("harness-reviewer") ? { status: "READY" } : { status: "BLOCKED", reason: "harness-reviewer is not available." }
+              case "verification.runner":
+                return tools.has("harness_run_verification") ? { status: "READY" } : { status: "BLOCKED", reason: "harness_run_verification is not registered." }
+              case "reviewer.execute_declared_checks":
+                return (agents.has("harness-reviewer") && tools.has("harness_run_verification")) ? { status: "READY" } : { status: "BLOCKED", reason: "reviewer cannot execute declared checks." }
+              case "workspace.supported":
+                return { status: "READY" }
+              case "network.isolation":
+                return { status: "BLOCKED", reason: "network isolation is not yet enforceable." }
+              default:
+                if (capability.startsWith("binary.")) {
+                  return resolveBinary(requirement.program) ? { status: "READY" } : { status: "BLOCKED", reason: `binary ${requirement.program} not found on PATH.` }
+                }
+                if (capability === "browser.headless") {
+                  return detectBrowser() ? { status: "READY" } : { status: "BLOCKED", reason: "browser runtime unavailable." }
+                }
+                return { status: "BLOCKED", reason: `unknown capability: ${capability}` }
+            }
+          }
+
+          const budget = { remaining: Number.isFinite(input.remaining_budget) ? input.remaining_budget : Number.POSITIVE_INFINITY }
+          const info = {
+            pluginRevision: null,
+            nodeVersion: process.version,
+            platform: process.platform,
+            arch: process.arch,
+            pathDigest: pathDigest(process.env.PATH),
+            binaries: Object.fromEntries((contract.commands ?? []).map((check) => [check.program, resolveBinary(check.program)])),
+            browser: detectBrowser(),
+          }
+          return json(checkExecutionReadiness({ contract, phase: input.phase ?? "BUILD", probe, budget, info }))
         },
       })
     })

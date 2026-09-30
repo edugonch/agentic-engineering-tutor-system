@@ -10,6 +10,7 @@ export { materializeCandidate, disposeWorkspace } from "./verification-workspace
 export { validateVerificationContract, resolveCheck, sanitizedEnv, runCommand, runDeclaredCheck, runCandidateVerification } from "./verification.js"
 export { verificationContractHash } from "./verification-contract.js"
 export { createCandidateRegistry } from "./candidate-registry.js"
+export { deriveRequirements, evaluateReadiness, budgetStatus, checkExecutionReadiness, pathDigest, buildFingerprint } from "./readiness.js"
 export { createExecutionController } from "./execution.js"
 export { runContinuationProbe } from "./probe.js"
 export { createContinuationDriver, shouldContinue, readContinuationSettings } from "./continuation-driver.js"
