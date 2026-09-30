@@ -150,3 +150,28 @@ additional Phase 3 state transitions, merge/deploy, general builder permissions,
 and multiple repair cycles. Phase 1 has one mission: make "independent review"
 mean re-verifying an immutable, reproducible candidate without letting the
 reviewer mutate what it reviews.
+
+## Runtime E2E results (2026-09-30)
+
+Runtime: OpenCode v2.0.18, plugin `d3b9d57`, node v26.3.0. A real `node --test`
+fixture was frozen and reviewed through the plugin tools.
+
+| Check | Result |
+|---|---|
+| `harness_freeze_candidate` → registry durable → full `candidate_id` | ✅ `cand-<64 hex>` stored |
+| `harness_run_verification(candidate_id, "unit")` → `node --test` | ✅ `PASS`, exit 0, 2 tests, TAP in stdout |
+| candidate persists (blobs + entry on disk) | ✅ `candidate-blobs/` + `candidates/` |
+| working tree not mutated | ✅ fixture unchanged after review |
+| check runs in an isolated workspace | ✅ fingerprint cwd = disposable temp dir |
+| `tree_hash` / `contract_hash` match at review | ✅ |
+| evidence returns candidate_id/check_id/exit/stdout/stderr/fingerprint | ✅ |
+| undeclared check | ✅ `BLOCKED_UNDECLARED_CHECK` |
+| unknown candidate_id | ✅ `BLOCKED_UNKNOWN_CANDIDATE` |
+| `NETWORK_FORBIDDEN` contract | ✅ `BLOCKED_CAPABILITY` |
+| corrupted blob | ✅ fail closed `BLOB_HASH_MISMATCH` |
+| real `harness-reviewer` consuming the tool | ✅ returned `PASS` with evidence, no shell, no edits |
+
+The original Workshop Waitlist defect is resolved: the reviewer can now
+independently re-verify a frozen candidate without shell access or repository
+mutation.
+
