@@ -14,7 +14,9 @@ export const OPERATION_TYPES = Object.freeze([
   "DISPATCH_PREPARE", // reserved -> pending_launch (before a session id is known)
   "DISPATCH_LAUNCH", // pending_launch/reserved -> launched, attach session id
   "DISPATCH_FINISH", // launched -> finished, attach result
-  "DISPATCH_RECONCILE", // record reconciliation evidence; never changes status
+  "DISPATCH_RECONCILE", // finished -> result_reconciled, settle reservation into consumption
+  "DISPATCH_RELEASE", // reserved/pending_launch (never launched) -> released, return reservation
+  "DISPATCH_MARK_AMBIGUOUS", // reserved/pending_launch -> ambiguous (identity unknown); reservation stays held
   "FREEZE_CANDIDATE", // pin an immutable candidate (manifest hash + tree hash)
   "RECORD_REVIEW", // bind a review verdict to one exact candidate's hashes
   "CHECKPOINT", // persist a resumable checkpoint
@@ -38,6 +40,32 @@ export const DISPATCH_STATUS = Object.freeze({
   PENDING_LAUNCH: "pending_launch",
   LAUNCHED: "launched",
   FINISHED: "finished",
+  RESULT_RECONCILED: "result_reconciled",
+  RELEASED: "released",
+  AMBIGUOUS: "ambiguous",
+})
+
+// Naming encodes the launch boundary, and the values are intentionally
+// distinct so no two states can silently alias:
+//   PENDING_LAUNCH   = we are before/during the launch boundary.
+//   LAUNCHED         = launch confirmed AND external identity known.
+//   AMBIGUOUS        = the side effect may have occurred, but we do not have
+//                      enough identity; never auto-launch/retry from here.
+//   FINISHED         = the identified execution terminated (result attached).
+//   RESULT_RECONCILED = the result has been durably incorporated.
+export const TERMINAL_DISPATCH_STATUSES = new Set([
+  DISPATCH_STATUS.RESULT_RECONCILED,
+  DISPATCH_STATUS.RELEASED,
+  DISPATCH_STATUS.AMBIGUOUS,
+])
+
+// Reservation sub-state, independent of the dispatch lifecycle. A dispatch may
+// hold a reservation while its status is anything except RELEASED /
+// RESULT_RECONCILED. The aggregate reserved_seconds is a projection of these.
+export const RESERVATION_STATUS = Object.freeze({
+  RESERVED: "reserved",
+  RELEASED: "released",
+  CONSUMED: "consumed",
 })
 
 // Typed blocker classes. Only a subset allow automatic recovery, and that
