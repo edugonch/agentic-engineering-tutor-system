@@ -243,6 +243,21 @@ export async function createExecutionController({ root, dir, now = () => Date.no
     )
   }
 
+  // Reconcile one FINISHED dispatch by id, using the SAME deterministic
+  // operation identity as reconcileAll. Idempotent: a retry replays instead of
+  // double-consuming. Never accepts a caller-supplied consumption amount.
+  const reconcileOne = async (dispatch_id, { holder_session_id, lease_fencing_token }) => {
+    const snap = await snapshot()
+    const d = snap.state.dispatches[dispatch_id]
+    if (!d) return { dispatch_id, found: false }
+    const operation_id = reconcileOperationId(snap.state.execution_id, dispatch_id, d.result)
+    const res = await commit(
+      { operation_id, operation_type: "DISPATCH_RECONCILE", body: { dispatch_id } },
+      { holder_session_id, expected_revision: snap.state.revision, lease_fencing_token },
+    )
+    return { dispatch_id, found: true, status: res.status }
+  }
+
   return {
     dir: execDir,
     snapshot,
@@ -251,6 +266,7 @@ export async function createExecutionController({ root, dir, now = () => Date.no
     reconcileDispatch,
     recover,
     reconcileAll,
+    reconcileOne,
     releaseDispatch,
     budget,
   }

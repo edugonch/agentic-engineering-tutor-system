@@ -21,7 +21,7 @@ import {
   isJevReady,
   readJevSettings,
 } from "./src/decision/index.js"
-import { runContinuationProbe, createContinuationDriver, createCandidateRegistry, captureBaseSnapshot, freezeCandidate, runCandidateVerification, checkExecutionReadiness, pathDigest, validateVerificationContract } from "./src/execution/index.js"
+import { runContinuationProbe, createContinuationDriver, createCandidateRegistry, captureBaseSnapshot, freezeCandidate, runCandidateVerification, checkExecutionReadiness, pathDigest, validateVerificationContract, runExecutionController } from "./src/execution/index.js"
 
 const json = (value) => ({ content: JSON.stringify(value, null, 2) })
 const objectInput = (properties, required = []) => ({
@@ -390,6 +390,25 @@ export default Plugin.define({
             guard_snapshot: input.session_id ? guard.snapshot(input.session_id) : null,
           })
         },
+      })
+
+      editor.add({
+        name: "harness_execution_controller",
+        description: "Phase 2 durable execution control surface. Drives the recoverable execution machine under .harness/execution/controller/<execution_id>/. Actions: init (approve a mandate), reserve, prepare_launch, record_launch, mark_ambiguous, record_finish, reconcile, release, recover (read-only classification), status, verify (read-only invariant check). It is instrumentation, not new authority: every mutation routes through the controller commit path with operation_id + expected_revision + lease fencing. It never writes state.json or the event log directly, never edits OpenCode config/permissions/agents, and never simulates the model. Use verify after any restart to prove the durable core is intact.",
+        input: objectInput({
+          action: { type: "string", enum: ["init", "status", "reserve", "prepare_launch", "record_launch", "mark_ambiguous", "record_finish", "recover", "reconcile", "release", "verify"], default: "status" },
+          execution_id: { type: "string", minLength: 1, description: "Stable isolation key; durable state lives under .harness/execution/controller/<execution_id>/." },
+          session_id: { type: "string", minLength: 1, description: "OpenCode session ID holding the execution lease (required for mutations)." },
+          mandate_id: { type: "string", minLength: 1 },
+          mandate_revision: { type: "string", minLength: 1 },
+          max_wus: { type: "integer", minimum: 1 },
+          total_seconds: { type: "number", exclusiveMinimum: 0 },
+          dispatch_id: { type: "string", minLength: 1 },
+          reserved_seconds: { type: "number", minimum: 0 },
+          launch_session_id: { type: "string", minLength: 1, description: "External identity persisted at record_launch (distinct from the lease-holding session_id)." },
+          result: { type: "string", description: "Opaque result attached at record_finish." },
+        }, ["action", "execution_id"]),
+        execute: async (input) => json(await runExecutionController(requireProjectRoot(), input)),
       })
 
       editor.add({
