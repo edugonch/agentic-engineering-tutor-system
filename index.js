@@ -396,11 +396,12 @@ export default Plugin.define({
         name: "harness_execution_controller",
         description: "Phase 2 durable execution control surface. Drives the recoverable execution machine under .harness/execution/controller/<execution_id>/. Dispatch actions: init (approve a mandate), reserve, prepare_launch, record_launch, mark_ambiguous, record_finish, reconcile, release, recover (read-only classification), status, verify (read-only invariant check). WU lifecycle actions (Phase 3): activate_wu, record_candidate (loads the candidate from the registry; the caller cannot supply hashes), record_review, complete_wu (WU close), checkpoint, block. complete remains Epic-level (EPIC_EXECUTION_VERIFIED). It is instrumentation, not new authority: every mutation routes through the controller commit path with operation_id + expected_revision + lease fencing. It never writes state.json or the event log directly, never edits OpenCode config/permissions/agents, and never simulates the model. Use verify after any restart to prove the durable core is intact.",
         input: objectInput({
-          action: { type: "string", enum: ["init", "status", "reserve", "prepare_launch", "record_launch", "mark_ambiguous", "record_finish", "recover", "reconcile", "release", "verify", "activate_wu", "record_candidate", "record_review", "complete_wu", "checkpoint", "block", "complete"], default: "status" },
+          action: { type: "string", enum: ["init", "approve_mandate", "status", "reserve", "prepare_launch", "record_launch", "mark_ambiguous", "record_finish", "recover", "reconcile", "release", "verify", "activate_wu", "record_candidate", "record_review", "complete_wu", "checkpoint", "block", "complete"], default: "status" },
           execution_id: { type: "string", minLength: 1, description: "Stable isolation key; durable state lives under .harness/execution/controller/<execution_id>/." },
           session_id: { type: "string", minLength: 1, description: "OpenCode session ID holding the execution lease (required for mutations)." },
           mandate_id: { type: "string", minLength: 1 },
           mandate_revision: { type: "string", minLength: 1 },
+          epic_artifact_id: { type: "string", minLength: 1, description: "APPROVED Epic artifact id/record_key in the knowledge index (approve_mandate)." },
           max_wus: { type: "integer", minimum: 1 },
           total_seconds: { type: "number", exclusiveMinimum: 0 },
           dispatch_id: { type: "string", minLength: 1 },

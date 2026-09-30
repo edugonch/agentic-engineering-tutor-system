@@ -7,6 +7,7 @@ import { runExecutionController } from "../../src/execution/controller-tool.js"
 import { freezeCandidate } from "../../src/execution/candidate.js"
 import { createCandidateRegistry } from "../../src/execution/candidate-registry.js"
 import { createVerificationReceipt, writeVerificationReceipt } from "../../src/execution/verification-results.js"
+import { recordKnowledgeArtifact } from "../../src/project-knowledge.js"
 
 async function withRoot(fn) {
   const root = await mkdtemp(join(tmpdir(), "harness-tool-"))
@@ -28,16 +29,38 @@ async function seedCandidate(root, filename = "change.txt") {
   return candidate
 }
 
-// Persist an immutable PASS receipt bound to the candidate and return its evidence id.
-async function seedReceipt(root, candidate, { status = "PASS" } = {}) {
+// Persist an immutable receipt bound to the candidate and return its evidence id.
+async function seedReceipt(root, candidate, { checkId = "check-1", status = "PASS" } = {}) {
   return writeVerificationReceipt(join(root, ".harness", "execution", "verification-results"), createVerificationReceipt({
     candidate_id: candidate.candidate_id,
     verification_contract_hash: candidate.manifest.verification_contract.contract_hash,
-    check_id: "check-1",
+    check_id: checkId,
     status,
     exitCode: status === "PASS" ? 0 : 1,
     fingerprint: { node: "test", cwd: "/tmp", timestamp: new Date().toISOString() },
   }))
+}
+
+// Freeze a real file with an explicit multi-check contract.
+async function seedCandidateWithContract(root, commands, filename = "change.txt") {
+  await writeFile(join(root, filename), "hello")
+  const registry = createCandidateRegistry({ dir: join(root, ".harness", "execution") })
+  const candidate = await freezeCandidate(root, { paths: [filename], verification_contract: { commands, environment: { network_policy: "UNRESTRICTED" }, source_wu_id: "WU-01" } })
+  await registry.store(candidate)
+  return candidate
+}
+
+// Record an Epic artifact into the knowledge index (APPROVED or RAW).
+async function seedEpicArtifact(root, { artifactId = "epic-001", status = "APPROVED" } = {}) {
+  return recordKnowledgeArtifact(root, {
+    artifact_type: "epic",
+    artifact_id: artifactId,
+    title: "Test Epic",
+    content: "test epic",
+    status,
+    owner_confirmed: true,
+    source_refs: ["https://example.com/epic-source"],
+  })
 }
 
 test("init → status → verify roundtrip", async () => {
@@ -286,5 +309,67 @@ test("complete_wu with an unsettled dispatch is rejected (budget must be liquida
       runExecutionController(root, { action: "complete_wu", execution_id: "E1", session_id: sid, candidate_id: candidate.candidate_id }),
       /not settled/,
     )
+  })
+})
+
+test("record_review PASS with incomplete verification coverage is rejected", async () => {
+  await withRoot(async (root) => {
+    const sid = "ses-1"
+    const candidate = await seedCandidateWithContract(root, [
+      { id: "unit", program: "node", args: ["-e", "process.exit(0)"] },
+      { id: "lint", program: "node", args: ["-e", "process.exit(0)"] },
+    ])
+    const unitEvidence = await seedReceipt(root, candidate, { checkId: "unit", status: "PASS" })
+    await runExecutionController(root, { action: "init", execution_id: "E1", session_id: sid, total_seconds: 100 })
+    await runExecutionController(root, { action: "activate_wu", execution_id: "E1", session_id: sid, wu_id: "WU-01", mandate_id: "E1-MANDATE-001" })
+    await runExecutionController(root, { action: "record_candidate", execution_id: "E1", session_id: sid, candidate_id: candidate.candidate_id })
+    await assert.rejects(
+      runExecutionController(root, { action: "record_review", execution_id: "E1", session_id: sid, candidate_id: candidate.candidate_id, verdict: "PASS", reviewer: "harness-reviewer", verification_evidence_ids: [unitEvidence] }),
+      /coverage/,
+    )
+  })
+})
+
+test("record_review CHANGES_REQUIRED with a FAIL receipt is accepted", async () => {
+  await withRoot(async (root) => {
+    const sid = "ses-1"
+    const candidate = await seedCandidate(root)
+    const failEvidence = await seedReceipt(root, candidate, { status: "FAIL" })
+    await runExecutionController(root, { action: "init", execution_id: "E1", session_id: sid, total_seconds: 100 })
+    await runExecutionController(root, { action: "activate_wu", execution_id: "E1", session_id: sid, wu_id: "WU-01", mandate_id: "E1-MANDATE-001" })
+    await runExecutionController(root, { action: "record_candidate", execution_id: "E1", session_id: sid, candidate_id: candidate.candidate_id })
+    const review = await runExecutionController(root, { action: "record_review", execution_id: "E1", session_id: sid, candidate_id: candidate.candidate_id, verdict: "CHANGES_REQUIRED", reviewer: "harness-reviewer", verification_evidence_ids: [failEvidence] })
+    assert.equal(review.commit_status, "committed")
+  })
+})
+
+test("approve_mandate without an approved Epic is rejected", async () => {
+  await withRoot(async (root) => {
+    await assert.rejects(
+      runExecutionController(root, { action: "approve_mandate", execution_id: "E1", session_id: "ses-1", epic_artifact_id: "epic-nonexistent" }),
+      /No APPROVED Epic artifact/,
+    )
+  })
+})
+
+test("approve_mandate with a non-approved (RAW) Epic is rejected", async () => {
+  await withRoot(async (root) => {
+    await seedEpicArtifact(root, { status: "RAW" })
+    await assert.rejects(
+      runExecutionController(root, { action: "approve_mandate", execution_id: "E1", session_id: "ses-1", epic_artifact_id: "epic-001" }),
+      /No APPROVED Epic artifact/,
+    )
+  })
+})
+
+test("approve_mandate with an approved Epic binds source authority", async () => {
+  await withRoot(async (root) => {
+    const sid = "ses-1"
+    await seedEpicArtifact(root, { status: "APPROVED" })
+    const res = await runExecutionController(root, { action: "approve_mandate", execution_id: "E1", session_id: sid, epic_artifact_id: "epic-001", max_wus: 1, total_seconds: 100 })
+    assert.equal(res.commit_status, "committed")
+    assert.equal(res.source_artifact_id, "epic-001")
+    const act = await runExecutionController(root, { action: "activate_wu", execution_id: "E1", session_id: sid, wu_id: "WU-01", mandate_id: "E1-MANDATE-001" })
+    assert.equal(act.commit_status, "committed")
   })
 })

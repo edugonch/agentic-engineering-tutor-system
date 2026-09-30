@@ -21,6 +21,7 @@ import { project, deriveBudget } from "./state.js"
 import { createExecutionController } from "./execution.js"
 import { createCandidateRegistry } from "./candidate-registry.js"
 import { readVerificationReceipt } from "./verification-results.js"
+import { findApprovedEpic } from "../project-knowledge.js"
 import { DISPATCH_STATUS, RESERVATION_STATUS } from "./constants.js"
 
 function sanitizeId(raw, label) {
@@ -143,6 +144,24 @@ export async function runExecutionController(projectRoot, input, candidateRegist
     return { action, commit_status: res.status, ...(await summary(controller)) }
   }
 
+  if (action === "approve_mandate") {
+    const epicArtifactId = String(input.epic_artifact_id ?? "")
+    if (!epicArtifactId) throw new Error("approve_mandate requires epic_artifact_id (an APPROVED Epic artifact in the knowledge index).")
+    const epic = await findApprovedEpic(projectRoot, epicArtifactId)
+    const mandateId = String(input.mandate_id ?? `${executionId}-MANDATE-001`)
+    const res = await commitAction(controller, holder, `${executionId}:mandate`, "MANDATE_APPROVE", {
+      execution_id: `${executionId}:exec`,
+      mandate_id: mandateId,
+      mandate_revision: String(input.mandate_revision ?? epic.source_revision),
+      max_wus: Number(input.max_wus ?? 1),
+      total_seconds: Number(input.total_seconds ?? 60),
+      source_artifact_id: epic.source_id,
+      source_record_key: epic.record_key,
+      source_hash: epic.sha256,
+    })
+    return { action, commit_status: res.status, source_artifact_id: epic.source_id, source_hash: epic.sha256, ...(await summary(controller)) }
+  }
+
   if (action === "activate_wu") {
     const wuId = String(input.wu_id ?? "")
     if (!wuId) throw new Error("activate_wu requires wu_id.")
@@ -200,8 +219,10 @@ export async function runExecutionController(projectRoot, input, candidateRegist
     const snap = await controller.snapshot()
     const wuId = snap.state.wu?.wu_id ?? null
     if (!wuId) throw new Error("record_candidate requires an active WU (activate_wu first).")
+    const requiredCheckIds = (candidate.verification_contract?.commands ?? []).map((check) => check.id)
+    const contractHash = candidate.manifest?.verification_contract?.contract_hash ?? null
     const res = await controller.commit(
-      { operation_id: `${executionId}:candidate:${candidateId}`, operation_type: "FREEZE_CANDIDATE", body: { candidate_id: candidateId, wu_id: wuId, manifest_hash: candidate.manifest_hash, tree_hash: candidate.tree_hash, manifest: candidate.manifest ?? null } },
+      { operation_id: `${executionId}:candidate:${candidateId}`, operation_type: "FREEZE_CANDIDATE", body: { candidate_id: candidateId, wu_id: wuId, manifest_hash: candidate.manifest_hash, tree_hash: candidate.tree_hash, manifest: candidate.manifest ?? null, verification_contract_hash: contractHash, required_check_ids: requiredCheckIds } },
       { holder_session_id: holder, expected_revision: snap.state.revision, lease_fencing_token: lease.fencing_token },
     )
     return { action, commit_status: res.status, candidate_id: candidateId, ...(await summary(controller)) }
@@ -210,6 +231,7 @@ export async function runExecutionController(projectRoot, input, candidateRegist
   if (action === "record_review") {
     const candidateId = String(input.candidate_id ?? "")
     if (!candidateId) throw new Error("record_review requires candidate_id.")
+    const verdict = input.verdict ?? null
     const evidenceIds = Array.isArray(input.verification_evidence_ids) ? input.verification_evidence_ids : []
     if (evidenceIds.length === 0) {
       throw new Error("record_review requires verification_evidence_ids (durable evidence from harness_run_verification).")
@@ -219,16 +241,19 @@ export async function runExecutionController(projectRoot, input, candidateRegist
     const snap = await controller.snapshot()
     const frozenCandidate = snap.state.candidates[candidateId]
     if (!frozenCandidate) throw new Error(`record_review: candidate ${candidateId} not recorded (record_candidate first).`)
-    const contractHash = frozenCandidate.manifest?.verification_contract?.contract_hash ?? null
+    const contractHash = frozenCandidate.verification_contract_hash ?? frozenCandidate.manifest?.verification_contract?.contract_hash ?? null
+    const verifiedCheckIds = []
     for (const evidenceId of evidenceIds) {
       const receipt = await readVerificationReceipt(receiptsDir, evidenceId)
       if (!receipt) throw new Error(`record_review: evidence ${evidenceId} not found.`)
       if (receipt.candidate_id !== candidateId) throw new Error(`record_review: evidence ${evidenceId} belongs to ${receipt.candidate_id}, not ${candidateId}.`)
       if (contractHash !== null && receipt.verification_contract_hash !== contractHash) throw new Error(`record_review: evidence ${evidenceId} contract hash ${receipt.verification_contract_hash} does not match candidate contract ${contractHash}.`)
-      if (receipt.status !== "PASS") throw new Error(`record_review: evidence ${evidenceId} status is ${receipt.status}, not PASS.`)
+      if (receipt.status !== "PASS" && receipt.status !== "FAIL") throw new Error(`record_review: evidence ${evidenceId} status is ${receipt.status}, not a run result.`)
+      if (verdict === "PASS" && receipt.status !== "PASS") throw new Error(`record_review: PASS verdict requires all-PASS evidence; ${evidenceId} is ${receipt.status}.`)
+      verifiedCheckIds.push(receipt.check_id)
     }
     const res = await controller.commit(
-      { operation_id: `${executionId}:review:${candidateId}`, operation_type: "RECORD_REVIEW", body: { candidate_id: candidateId, verdict: input.verdict ?? null, candidate_hashes: { manifest_hash: frozenCandidate.manifest_hash, tree_hash: frozenCandidate.tree_hash }, reviewer: input.reviewer ?? null, verification_evidence_ids: evidenceIds } },
+      { operation_id: `${executionId}:review:${candidateId}`, operation_type: "RECORD_REVIEW", body: { candidate_id: candidateId, verdict, candidate_hashes: { manifest_hash: frozenCandidate.manifest_hash, tree_hash: frozenCandidate.tree_hash }, reviewer: input.reviewer ?? null, verification_evidence_ids: evidenceIds, verification_contract_hash: contractHash, verified_check_ids: verifiedCheckIds } },
       { holder_session_id: holder, expected_revision: snap.state.revision, lease_fencing_token: lease.fencing_token },
     )
     return { action, commit_status: res.status, candidate_id: candidateId, ...(await summary(controller)) }

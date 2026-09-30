@@ -731,3 +731,23 @@ export async function recordKnowledgeArtifact(projectRoot, input) {
   return { status: "RECORDED", record_key: record.record_key, artifact_id: input.artifact_id, artifact_type: input.artifact_type, approval_status: input.status, path, source_refs: sourceRefs, parent_refs: parentRefs, sha256: record.sha256 }
   })
 }
+
+// Locate exactly one APPROVED Epic artifact in the knowledge index. This is the
+// source of human authority a governed mandate (approve_mandate) binds to.
+export async function findApprovedEpic(projectRoot, epicArtifactId) {
+  const root = assertRoot(projectRoot)
+  const index = await readIndex(root)
+  const matches = index.records.filter((record) =>
+    record.classification === "EPIC" &&
+    record.declared_authority === "APPROVED" &&
+    record.import_status === "OWNER_APPROVED_ARTIFACT" &&
+    (record.source_id === epicArtifactId || record.record_key === epicArtifactId)
+  )
+  if (matches.length === 0) {
+    throw new Error(`No APPROVED Epic artifact matches "${epicArtifactId}" in the project knowledge index.`)
+  }
+  if (matches.length > 1) {
+    throw new Error(`"${epicArtifactId}" matches multiple APPROVED Epic records; pass the exact record_key.`)
+  }
+  return matches[0]
+}

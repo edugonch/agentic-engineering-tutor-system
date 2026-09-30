@@ -21,6 +21,8 @@ const FORWARD_EXECUTION_TYPES = new Set([
   "DISPATCH_LAUNCH",
 ])
 
+const setsEqual = (a, b) => a.length === b.length && a.every((x) => b.includes(x))
+
 export function initialState() {
   return {
     revision: 0,
@@ -77,6 +79,14 @@ export function applyEvent(previous, event) {
         mandate_id: body.mandate_id,
         mandate_revision: body.mandate_revision ?? null,
         max_wus: body.max_wus,
+      }
+      // Governed binding (approve_mandate) records the source of human authority;
+      // legacy `init` has no source binding. The fields are present only when a
+      // governed mandate supplied them, so the projection never fabricates one.
+      if (body.source_artifact_id !== undefined || body.source_record_key !== undefined || body.source_hash !== undefined) {
+        state.mandate.source_artifact_id = body.source_artifact_id ?? null
+        state.mandate.source_record_key = body.source_record_key ?? null
+        state.mandate.source_hash = body.source_hash ?? null
       }
       state.budget.total_seconds = body.total_seconds
       break
@@ -235,6 +245,8 @@ export function applyEvent(previous, event) {
         manifest_hash: body.manifest_hash,
         tree_hash: body.tree_hash,
         manifest: body.manifest ?? null,
+        verification_contract_hash: body.verification_contract_hash ?? null,
+        required_check_ids: body.required_check_ids ?? [],
       }
       break
     }
@@ -246,11 +258,24 @@ export function applyEvent(previous, event) {
       if (hashes.manifest_hash !== candidate.manifest_hash || hashes.tree_hash !== candidate.tree_hash) {
         throw new Error(`Review hash mismatch for candidate ${body.candidate_id}: a review cannot accredit a different candidate.`)
       }
+      const evidenceIds = body.verification_evidence_ids ?? []
+      const verifiedCheckIds = body.verified_check_ids ?? []
+      if (body.verdict === "PASS") {
+        if (evidenceIds.length === 0) throw new Error("RECORD_REVIEW: a PASS verdict requires verification evidence.")
+        if (!setsEqual(verifiedCheckIds, candidate.required_check_ids ?? [])) {
+          throw new Error(`RECORD_REVIEW: PASS requires full verification coverage (verified ${verifiedCheckIds.join(",") || "none"}, required ${(candidate.required_check_ids ?? []).join(",") || "none"}).`)
+        }
+        if ((body.verification_contract_hash ?? null) !== (candidate.verification_contract_hash ?? null)) {
+          throw new Error("RECORD_REVIEW: verification contract hash mismatch.")
+        }
+      }
       state.reviews[body.candidate_id] = {
         verdict: body.verdict ?? null,
         candidate_hashes: { manifest_hash: candidate.manifest_hash, tree_hash: candidate.tree_hash },
         reviewer: body.reviewer ?? null,
-        verification_evidence_ids: body.verification_evidence_ids ?? [],
+        verification_evidence_ids: evidenceIds,
+        verification_contract_hash: body.verification_contract_hash ?? null,
+        verified_check_ids: verifiedCheckIds,
       }
       break
     }

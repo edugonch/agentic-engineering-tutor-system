@@ -69,15 +69,15 @@ test("a review cannot accredit a different candidate", () => {
   const events = [
     ev("MANDATE_APPROVE", { mandate_id: "M1", max_wus: 4, total_seconds: 60 }, 0, 1),
     ev("FREEZE_CANDIDATE", { candidate_id: "A", manifest_hash: "mhA", tree_hash: "thA" }, 1, 2),
-    ev("RECORD_REVIEW", { candidate_id: "A", verdict: "PASS", candidate_hashes: { manifest_hash: "mhA", tree_hash: "thA" } }, 2, 3),
+    ev("RECORD_REVIEW", { candidate_id: "A", verdict: "CHANGES_REQUIRED", candidate_hashes: { manifest_hash: "mhA", tree_hash: "thA" } }, 2, 3),
   ]
   const state = project(events)
-  assert.equal(state.reviews.A.verdict, "PASS")
+  assert.equal(state.reviews.A.verdict, "CHANGES_REQUIRED")
 
   const mismatch = [
     ev("MANDATE_APPROVE", { mandate_id: "M1", max_wus: 4, total_seconds: 60 }, 0, 1),
     ev("FREEZE_CANDIDATE", { candidate_id: "A", manifest_hash: "mhA", tree_hash: "thA" }, 1, 2),
-    ev("RECORD_REVIEW", { candidate_id: "A", verdict: "PASS", candidate_hashes: { manifest_hash: "mhA", tree_hash: "thB" } }, 2, 3),
+    ev("RECORD_REVIEW", { candidate_id: "A", verdict: "CHANGES_REQUIRED", candidate_hashes: { manifest_hash: "mhA", tree_hash: "thB" } }, 2, 3),
   ]
   assert.throws(() => project(mismatch), /different candidate/)
 })
@@ -106,7 +106,7 @@ test("WU_ACTIVATE rejects activation beyond mandate max_wus", () => {
   state = applyEvent(state, ev("MANDATE_APPROVE", { mandate_id: "M1", max_wus: 1, total_seconds: 60 }, 0, 1))
   state = applyEvent(state, ev("WU_ACTIVATE", { wu_id: "WU-01", mandate_id: "M1" }, 1, 2))
   state = applyEvent(state, ev("FREEZE_CANDIDATE", { candidate_id: "c1", wu_id: "WU-01", manifest_hash: "mh", tree_hash: "th" }, 2, 3))
-  state = applyEvent(state, ev("RECORD_REVIEW", { candidate_id: "c1", verdict: "PASS", candidate_hashes: { manifest_hash: "mh", tree_hash: "th" } }, 3, 4))
+  state = applyEvent(state, ev("RECORD_REVIEW", { candidate_id: "c1", verdict: "PASS", candidate_hashes: { manifest_hash: "mh", tree_hash: "th" }, verification_evidence_ids: ["v1"], verified_check_ids: [] }, 3, 4))
   state = applyEvent(state, ev("WU_COMPLETE", { candidate_id: "c1" }, 4, 5))
   assert.equal(state.wu.completed, true)
   assert.throws(
@@ -123,4 +123,27 @@ test("COMPLETE (Epic) rejects while the active WU is incomplete", () => {
     () => applyEvent(state, ev("COMPLETE", { result: "done" }, 2, 3)),
     /active WU/,
   )
+})
+
+test("MANDATE_APPROVE with a governed source binding stores the authority", () => {
+  const state = project([
+    ev("MANDATE_APPROVE", { execution_id: "exec", mandate_id: "M1", mandate_revision: "rev-1", max_wus: 2, total_seconds: 60, source_artifact_id: "epic-001", source_record_key: "rk-1", source_hash: "h1" }, 0, 1),
+  ])
+  assert.equal(state.mandate.source_artifact_id, "epic-001")
+  assert.equal(state.mandate.source_record_key, "rk-1")
+  assert.equal(state.mandate.source_hash, "h1")
+})
+
+test("RECORD_REVIEW PASS without full verification coverage is rejected", () => {
+  const state = project([
+    ev("MANDATE_APPROVE", { mandate_id: "M1", max_wus: 2, total_seconds: 60 }, 0, 1),
+    ev("FREEZE_CANDIDATE", { candidate_id: "A", manifest_hash: "mhA", tree_hash: "thA", verification_contract_hash: "ch1", required_check_ids: ["unit", "lint"] }, 1, 2),
+  ])
+  assert.throws(
+    () => applyEvent(state, ev("RECORD_REVIEW", { candidate_id: "A", verdict: "PASS", candidate_hashes: { manifest_hash: "mhA", tree_hash: "thA" }, verification_evidence_ids: ["v1"], verified_check_ids: ["unit"], verification_contract_hash: "ch1" }, 2, 3)),
+    /coverage/,
+  )
+  const ok = applyEvent(state, ev("RECORD_REVIEW", { candidate_id: "A", verdict: "PASS", candidate_hashes: { manifest_hash: "mhA", tree_hash: "thA" }, verification_evidence_ids: ["v1", "v2"], verified_check_ids: ["unit", "lint"], verification_contract_hash: "ch1" }, 2, 3))
+  assert.equal(ok.reviews.A.verdict, "PASS")
+  assert.deepEqual(ok.reviews.A.verified_check_ids, ["unit", "lint"])
 })

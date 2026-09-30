@@ -277,3 +277,20 @@ contract is preserved as history, not silently rewritten):
   (immutable `harness_run_verification` receipts) and validates that each cited receipt
   belongs to the candidate, matches the contract hash, and is `PASS`. A `PASS` can no
   longer be declared by the caller alone.
+
+## 14. 3A.3 review amendments
+
+- **Complete verification coverage.** `record_candidate` derives and stores
+  `verification_contract_hash` + `required_check_ids` from the frozen candidate. A
+  `PASS` verdict now requires the cited receipts to cover **all** declared checks
+  (`verified_check_ids == required_check_ids`), and `RECORD_REVIEW` enforces that
+  coverage structurally in `applyEvent` (evidence non-empty, full coverage, contract
+  hash match). `CHANGES_REQUIRED` accepts PASS/FAIL receipts and does not require full
+  coverage.
+- **Governed mandate binding.** A new `approve_mandate` action binds `MANDATE_APPROVE`
+  to exactly one APPROVED Epic artifact in the knowledge index
+  (`classification=EPIC`, `declared_authority=APPROVED`,
+  `import_status=OWNER_APPROVED_ARTIFACT`), storing `source_artifact_id`,
+  `source_record_key`, and `source_hash` in the mandate. Legacy `init` remains for
+  probes/tests and adds no source binding, so a mandate can no longer be synthesized
+  without a recorded human approval.
