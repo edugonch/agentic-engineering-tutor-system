@@ -464,7 +464,16 @@ export default Plugin.define({
 
           let agents = new Set()
           let tools = new Set()
-          try { agents = new Set(((await ctx.agent.list()) || []).map((agent) => agent.id ?? agent.name)) } catch {}
+          try {
+            const ids = new Set()
+            for (const agent of (await ctx.agent.list()) || []) {
+              for (const key of ["name", "id", "agentID", "identifier"]) {
+                const value = agent?.[key]
+                if (typeof value === "string" && value) ids.add(value)
+              }
+            }
+            agents = ids
+          } catch {}
           try { tools = new Set(((await ctx.tool.list()) || []).map((tool) => tool.id)) } catch {}
 
           const probe = async (capability, requirement) => {
