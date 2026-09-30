@@ -61,6 +61,23 @@ export function createContinuationDriver(ctx, opts = {}) {
   const { enabled, maxContinuations } = { ...readContinuationSettings(), ...opts }
   const probes = new Map() // sessionID -> { steps, stepCount, continuationsUsed, blocked, sentinel }
   const internalPrompts = new Set() // sessionIDs with an internal prompt in flight
+  const eventsSeen = [] // ring buffer of sanitized event shapes (for spike diagnostics)
+  const subscriptionErrors = [] // errors from the event subscription
+
+  function recordEvent(event) {
+    eventsSeen.push({
+      type: event?.type ?? null,
+      topLevelKeys: event && typeof event === "object" ? Object.keys(event) : [],
+      propertiesKeys: event?.properties && typeof event.properties === "object" ? Object.keys(event.properties) : [],
+      resolvedSessionID: sessionIdFromEvent(event),
+    })
+    if (eventsSeen.length > 100) eventsSeen.shift()
+  }
+
+  function recordSubscriptionError(message) {
+    subscriptionErrors.push(String(message ?? "unknown error"))
+    if (subscriptionErrors.length > 20) subscriptionErrors.shift()
+  }
 
   function onContext(event) {
     if (!enabled) return
@@ -101,9 +118,11 @@ export function createContinuationDriver(ctx, opts = {}) {
     return [...probes.entries()].map(([sessionID, probe]) => ({ sessionID, ...probe }))
   }
 
-  // Called for every event; only reacts to session.idle for registered probes.
+  // Called for every event; records a sanitized shape, then only reacts to
+  // session.idle for registered probes.
   async function onEvent(event) {
     if (!enabled) return false
+    recordEvent(event)
     if (event?.type !== "session.idle") return false
     const sessionID = sessionIdFromEvent(event)
     if (!sessionID) return false
@@ -136,5 +155,8 @@ export function createContinuationDriver(ctx, opts = {}) {
     listProbes,
     onEvent,
     onIdle,
+    listEvents: () => [...eventsSeen],
+    getSubscriptionErrors: () => [...subscriptionErrors],
+    recordSubscriptionError,
   }
 }

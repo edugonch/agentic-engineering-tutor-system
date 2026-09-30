@@ -352,6 +352,8 @@ export default Plugin.define({
             probes: input.session_id
               ? [continuation.getProbe(input.session_id)].filter(Boolean)
               : continuation.listProbes(),
+            subscription_errors: continuation.getSubscriptionErrors(),
+            recent_events: continuation.listEvents(),
           })
         },
       })
@@ -359,10 +361,14 @@ export default Plugin.define({
 
     if (continuation.enabled) {
       ;(async () => {
-        for await (const event of ctx.event.subscribe({ signal: eventSubscription.signal })) {
-          await continuation.onEvent(event).catch(() => {})
+        try {
+          for await (const event of ctx.event.subscribe({ signal: eventSubscription.signal })) {
+            await continuation.onEvent(event).catch(() => {})
+          }
+        } catch (error) {
+          continuation.recordSubscriptionError(error?.message ?? String(error))
         }
-      })().catch(() => {})
+      })().catch((error) => continuation.recordSubscriptionError(error?.message ?? String(error)))
     }
 
     await registerHarnessCommand(ctx)
