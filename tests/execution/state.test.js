@@ -162,6 +162,13 @@ test("RECORD_REVIEW PASS with duplicate check coverage is rejected", () => {
 test("MANDATE_APPROVE defaults to PROBE and records governed authority_kind", () => {
   const probe = project([ev("MANDATE_APPROVE", { mandate_id: "M1", max_wus: 2, total_seconds: 60 }, 0, 1)])
   assert.equal(probe.mandate.authority_kind, "PROBE")
-  const governed = project([ev("MANDATE_APPROVE", { mandate_id: "M1", max_wus: 2, total_seconds: 60, authority_kind: "OWNER_APPROVED_EPIC", source_artifact_id: "epic-1" }, 0, 1)])
+  const governed = project([ev("MANDATE_APPROVE", { mandate_id: "M1", max_wus: 2, total_seconds: 60, authority_kind: "OWNER_APPROVED_EPIC", source_artifact_id: "epic-1", source_record_key: "rk-1", source_hash: "h1" }, 0, 1)])
   assert.equal(governed.mandate.authority_kind, "OWNER_APPROVED_EPIC")
+})
+
+test("MANDATE_APPROVE OWNER_APPROVED_EPIC without a complete source binding is rejected", () => {
+  assert.throws(
+    () => project([ev("MANDATE_APPROVE", { mandate_id: "M1", max_wus: 2, total_seconds: 60, authority_kind: "OWNER_APPROVED_EPIC" }, 0, 1)]),
+    /source_artifact_id/,
+  )
 })

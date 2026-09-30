@@ -307,3 +307,13 @@ contract is preserved as history, not silently rewritten):
   legacy `init` cannot authorize a governed WU. `approve_mandate` derives
   `mandate_revision`, `max_wus`, and `total_seconds` from the approved Epic's
   machine-readable `execution_mandate`; caller overrides are ignored.
+
+## 16. 3A.5 review amendment
+
+- **Epic integrity check.** `findApprovedEpic` resolves the archive inside the project
+  root, rejects symlinks/non-regular files, recomputes SHA-256, and fails closed with
+  `APPROVED_EPIC_INTEGRITY_MISMATCH` unless the current content matches the approved
+  `record.sha256` (and `source_revision` for Harness artifacts) before parsing
+  `execution_mandate`. `MANDATE_APPROVE` also requires a complete, non-empty source
+  binding (`source_artifact_id` + `source_record_key` + `source_hash`) whenever
+  `authority_kind` is `OWNER_APPROVED_EPIC`.

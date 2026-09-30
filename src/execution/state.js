@@ -94,6 +94,13 @@ export function applyEvent(previous, event) {
         state.mandate.source_record_key = body.source_record_key ?? null
         state.mandate.source_hash = body.source_hash ?? null
       }
+      // A governed mandate must carry a complete, non-empty source binding so the
+      // event log can never record an OWNER_APPROVED_EPIC mandate without authority.
+      if (state.mandate.authority_kind === MANDATE_AUTHORITY.OWNER_APPROVED_EPIC) {
+        if (!state.mandate.source_artifact_id || !state.mandate.source_record_key || !state.mandate.source_hash) {
+          throw new Error("MANDATE_APPROVE: OWNER_APPROVED_EPIC requires source_artifact_id, source_record_key, and source_hash.")
+        }
+      }
       state.budget.total_seconds = body.total_seconds
       break
     }

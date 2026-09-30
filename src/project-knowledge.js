@@ -752,8 +752,25 @@ export async function findApprovedEpic(projectRoot, epicArtifactId) {
     throw new Error(`"${epicArtifactId}" matches multiple APPROVED Epic records; pass the exact record_key.`)
   }
   const record = matches[0]
-  const content = await readFile(resolve(root, record.archive_path), "utf8")
-  const mandate = parseExecutionMandate(content)
+  // Integrity: the archived Epic must hash to the approved record before its
+  // machine-readable mandate is trusted. A hand-edited archive must fail closed.
+  const archivePath = resolve(root, record.archive_path)
+  if (!inside(root, archivePath)) {
+    throw new Error(`APPROVED_EPIC_INTEGRITY_MISMATCH: archive path escapes the project root: ${record.archive_path}.`)
+  }
+  const info = await lstat(archivePath)
+  if (!info.isFile() || info.isSymbolicLink()) {
+    throw new Error(`APPROVED_EPIC_INTEGRITY_MISMATCH: ${record.archive_path} is not a regular file.`)
+  }
+  const bytes = await readFile(archivePath)
+  const actualHash = sha256(bytes)
+  if (actualHash !== record.sha256) {
+    throw new Error(`APPROVED_EPIC_INTEGRITY_MISMATCH: ${record.source_id} content hash ${actualHash} does not match the approved ${record.sha256}.`)
+  }
+  if (record.source_system === "harness-artifact" && actualHash !== record.source_revision) {
+    throw new Error(`APPROVED_EPIC_INTEGRITY_MISMATCH: ${record.source_id} content hash does not match the approved revision ${record.source_revision}.`)
+  }
+  const mandate = parseExecutionMandate(bytes.toString("utf8"))
   if (!mandate) {
     throw new Error(`Approved Epic ${record.source_id} is missing a machine-readable execution_mandate (max_wus + total_seconds).`)
   }

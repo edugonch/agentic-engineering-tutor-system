@@ -1,6 +1,6 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { mkdtemp, rm, writeFile } from "node:fs/promises"
+import { mkdtemp, rm, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { runExecutionController } from "../../src/execution/controller-tool.js"
@@ -392,6 +392,32 @@ test("activate_wu rejects a legacy init (PROBE) mandate", async () => {
     await assert.rejects(
       runExecutionController(root, { action: "activate_wu", execution_id: "E1", session_id: sid, wu_id: "WU-01", mandate_id: "E1-MANDATE-001" }),
       /OWNER_APPROVED_EPIC/,
+    )
+  })
+})
+
+test("approve_mandate rejects an approved Epic whose archive was modified after approval", async () => {
+  await withRoot(async (root) => {
+    const sid = "ses-1"
+    await seedEpicArtifact(root)
+    await writeFile(join(root, ".harness", "epics", "epic-001.md"), "tampered")
+    await assert.rejects(
+      runExecutionController(root, { action: "approve_mandate", execution_id: "E1", session_id: sid, epic_artifact_id: "epic-001" }),
+      /APPROVED_EPIC_INTEGRITY_MISMATCH/,
+    )
+  })
+})
+
+test("approve_mandate rejects an approved Epic replaced by a symlink", async () => {
+  await withRoot(async (root) => {
+    const sid = "ses-1"
+    await seedEpicArtifact(root)
+    const path = join(root, ".harness", "epics", "epic-001.md")
+    await rm(path)
+    await symlink("/etc/passwd", path)
+    await assert.rejects(
+      runExecutionController(root, { action: "approve_mandate", execution_id: "E1", session_id: sid, epic_artifact_id: "epic-001" }),
+      /APPROVED_EPIC_INTEGRITY_MISMATCH/,
     )
   })
 })
