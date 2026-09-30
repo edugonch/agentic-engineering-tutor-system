@@ -48,14 +48,26 @@ const CONTINUE_TEXT =
   "If you have reached the terminal sentinel or a hard blocker, stop and report instead of acting."
 
 function sessionIdFromEvent(event) {
-  return (
-    event?.properties?.sessionID ??
-    event?.properties?.sessionId ??
-    event?.sessionID ??
-    event?.sessionId ??
-    null
-  )
+  if (!event || typeof event !== "object") return null
+  // The event shape is { id, created, type, location, data }; the sessionID is
+  // nested inside `data`. Search iteratively for the first "^ses_" string.
+  const seen = new Set()
+  const stack = [event]
+  while (stack.length) {
+    const obj = stack.pop()
+    if (obj == null || typeof obj !== "object" || seen.has(obj)) continue
+    seen.add(obj)
+    for (const value of Object.values(obj)) {
+      if (typeof value === "string" && /^ses_/.test(value)) return value
+      if (value && typeof value === "object") stack.push(value)
+    }
+  }
+  return null
 }
+
+// A turn ends with session.execution.succeeded (not session.idle). Keep
+// session.idle as a defensive fallback in case older runtimes use it.
+const IDLE_EVENT_TYPES = new Set(["session.execution.succeeded", "session.idle"])
 
 export function createContinuationDriver(ctx, opts = {}) {
   const { enabled, maxContinuations } = { ...readContinuationSettings(), ...opts }
@@ -68,7 +80,7 @@ export function createContinuationDriver(ctx, opts = {}) {
     eventsSeen.push({
       type: event?.type ?? null,
       topLevelKeys: event && typeof event === "object" ? Object.keys(event) : [],
-      propertiesKeys: event?.properties && typeof event.properties === "object" ? Object.keys(event.properties) : [],
+      dataKeys: event?.data && typeof event.data === "object" ? Object.keys(event.data) : [],
       resolvedSessionID: sessionIdFromEvent(event),
     })
     if (eventsSeen.length > 100) eventsSeen.shift()
@@ -118,12 +130,12 @@ export function createContinuationDriver(ctx, opts = {}) {
     return [...probes.entries()].map(([sessionID, probe]) => ({ sessionID, ...probe }))
   }
 
-  // Called for every event; records a sanitized shape, then only reacts to
-  // session.idle for registered probes.
+  // Called for every event; records a sanitized shape, then only reacts to a
+  // turn-end event (session.execution.succeeded) for registered probes.
   async function onEvent(event) {
     if (!enabled) return false
     recordEvent(event)
-    if (event?.type !== "session.idle") return false
+    if (!IDLE_EVENT_TYPES.has(event?.type)) return false
     const sessionID = sessionIdFromEvent(event)
     if (!sessionID) return false
     return onIdle(sessionID)

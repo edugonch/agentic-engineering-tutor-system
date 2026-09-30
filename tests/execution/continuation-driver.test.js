@@ -61,15 +61,16 @@ test("a blocked probe never continues, even after step exhaustion", async () => 
   assert.equal(prompts.length, 0)
 })
 
-test("onEvent reacts only to session.idle for a registered probe", async () => {
+test("onEvent reacts only to turn-end events for a registered probe", async () => {
   const prompts = []
   const driver = createContinuationDriver(stubCtx(prompts), { enabled: true, maxContinuations: 1 })
-  driver.registerProbe({ sessionID: "s1", steps: 1 })
-  driver.onContext({ sessionID: "s1" })
+  driver.registerProbe({ sessionID: "ses_s1", steps: 1 })
+  driver.onContext({ sessionID: "ses_s1" })
 
   assert.equal(await driver.onEvent({ type: "session.updated" }), false) // wrong type
-  assert.equal(await driver.onEvent({ type: "session.idle", properties: { sessionID: "unknown" } }), false) // unregistered
-  assert.equal(await driver.onEvent({ type: "session.idle", properties: { sessionID: "s1" } }), true) // continue
+  assert.equal(await driver.onEvent({ type: "session.execution.succeeded", data: { sessionID: "ses_unknown" } }), false) // unregistered
+  assert.equal(await driver.onEvent({ type: "session.execution.succeeded", data: { sessionID: "ses_s1" } }), true) // continue
+  assert.equal(await driver.onEvent({ type: "session.idle", data: { sessionID: "ses_s1" } }), false) // fallback type, but budget exhausted
   assert.equal(prompts.length, 1)
 })
 
