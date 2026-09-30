@@ -105,3 +105,10 @@ export const EXECUTION_AUTHORIZATION = Object.freeze({
   AUTHORIZED_BY_MANDATE: "AUTHORIZED_BY_MANDATE",
   OWNER_DIRECTED: "OWNER_DIRECTED",
 })
+
+// How a WU came into existence. A WU derived from an approved mandate is
+// DERIVED; it is never APPROVED (that would conflate artifact approval with
+// execution authority).
+export const WU_ORIGIN = Object.freeze({
+  DERIVED: "DERIVED",
+})

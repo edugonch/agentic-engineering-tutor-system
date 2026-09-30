@@ -10,6 +10,7 @@ import {
   OPERATION_TYPES,
   RESERVATION_STATUS,
   TERMINAL_BLOCKER_CLASSES,
+  WU_ORIGIN,
 } from "./constants.js"
 
 const FORWARD_EXECUTION_TYPES = new Set([
@@ -25,7 +26,7 @@ export function initialState() {
     revision: 0,
     execution_id: null,
     mandate: null, // { mandate_id, mandate_revision, max_wus, total_seconds }
-    wu: null, // { wu_id, mandate_id, mandate_revision, authorization }
+    wu: null, // { wu_id, mandate_id, mandate_revision, origin, execution_authorization }
     budget: { total_seconds: 0, used_seconds: 0, reserved_seconds: 0, active_phase: null, active_started_at: null },
     dispatches: {}, // dispatch_id -> { status, session_id, operation_id, result, reconciled }
     candidates: {}, // candidate_id -> { manifest_hash, tree_hash, manifest }
@@ -90,7 +91,8 @@ export function applyEvent(previous, event) {
         wu_id: body.wu_id,
         mandate_id: state.mandate.mandate_id,
         mandate_revision: state.mandate.mandate_revision,
-        authorization: EXECUTION_AUTHORIZATION.AUTHORIZED_BY_MANDATE,
+        origin: WU_ORIGIN.DERIVED,
+        execution_authorization: EXECUTION_AUTHORIZATION.AUTHORIZED_BY_MANDATE,
       }
       break
     }

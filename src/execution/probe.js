@@ -90,7 +90,7 @@ async function snapshotReport(controller, id, holder) {
     mandate_id: state.mandate?.mandate_id ?? null,
     mandate_revision: state.mandate?.mandate_revision ?? null,
     wu_id: state.wu?.wu_id ?? null,
-    authorization: state.wu?.authorization ?? null,
+    authorization: state.wu?.execution_authorization ?? null,
     revision: state.revision,
     budget: {
       total_seconds: state.budget.total_seconds,

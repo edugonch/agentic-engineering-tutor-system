@@ -55,6 +55,10 @@ async function summary(controller) {
     fencing_token: lease?.fencing_token ?? null,
     blocker: state.blocker,
     completed: state.completed,
+    wu: state.wu,
+    candidates: state.candidates,
+    reviews: state.reviews,
+    checkpoint: state.checkpoint,
   }
 }
 
@@ -136,6 +140,15 @@ export async function runExecutionController(projectRoot, input) {
     return { action, commit_status: res.status, ...(await summary(controller)) }
   }
 
+  if (action === "activate_wu") {
+    const wuId = String(input.wu_id ?? "")
+    if (!wuId) throw new Error("activate_wu requires wu_id.")
+    const mandateId = String(input.mandate_id ?? "")
+    if (!mandateId) throw new Error("activate_wu requires mandate_id (must match the approved mandate).")
+    const res = await commitAction(controller, holder, `${executionId}:activate:${wuId}`, "WU_ACTIVATE", { wu_id: wuId, mandate_id: mandateId })
+    return { action, commit_status: res.status, wu_id: wuId, ...(await summary(controller)) }
+  }
+
   if (action === "status") {
     return { action, ...(await summary(controller)) }
   }
@@ -173,6 +186,40 @@ export async function runExecutionController(projectRoot, input) {
     const result = input.result ?? null
     const res = await commitAction(controller, holder, `${executionId}:finish:${dispatchId}`, "DISPATCH_FINISH", { dispatch_id: dispatchId, result })
     return { action, commit_status: res.status, dispatch_id: dispatchId, ...(await summary(controller)) }
+  }
+
+  if (action === "record_candidate") {
+    const candidateId = String(input.candidate_id ?? "")
+    if (!candidateId) throw new Error("record_candidate requires candidate_id.")
+    const manifestHash = String(input.manifest_hash ?? "")
+    const treeHash = String(input.tree_hash ?? "")
+    if (!manifestHash || !treeHash) throw new Error("record_candidate requires manifest_hash and tree_hash.")
+    const res = await commitAction(controller, holder, `${executionId}:candidate:${candidateId}`, "FREEZE_CANDIDATE", { candidate_id: candidateId, manifest_hash: manifestHash, tree_hash: treeHash, manifest: input.manifest ?? null })
+    return { action, commit_status: res.status, candidate_id: candidateId, ...(await summary(controller)) }
+  }
+
+  if (action === "record_review") {
+    const candidateId = String(input.candidate_id ?? "")
+    if (!candidateId) throw new Error("record_review requires candidate_id.")
+    const res = await commitAction(controller, holder, `${executionId}:review:${candidateId}`, "RECORD_REVIEW", { candidate_id: candidateId, verdict: input.verdict ?? null, candidate_hashes: input.candidate_hashes ?? {}, reviewer: input.reviewer ?? null })
+    return { action, commit_status: res.status, candidate_id: candidateId, ...(await summary(controller)) }
+  }
+
+  if (action === "checkpoint") {
+    const res = await commitAction(controller, holder, `${executionId}:checkpoint`, "CHECKPOINT", { note: input.note ?? null })
+    return { action, commit_status: res.status, ...(await summary(controller)) }
+  }
+
+  if (action === "block") {
+    const cls = String(input.class ?? "")
+    if (!cls) throw new Error("block requires class (a BLOCKER_CLASSES value).")
+    const res = await commitAction(controller, holder, `${executionId}:block`, "BLOCK", { class: cls, reason: input.reason ?? null })
+    return { action, commit_status: res.status, ...(await summary(controller)) }
+  }
+
+  if (action === "complete") {
+    const res = await commitAction(controller, holder, `${executionId}:complete`, "COMPLETE", { result: input.result ?? null })
+    return { action, commit_status: res.status, ...(await summary(controller)) }
   }
 
   if (action === "reconcile") {

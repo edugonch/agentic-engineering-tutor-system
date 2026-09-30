@@ -113,3 +113,59 @@ test("release succeeds for a never-launched dispatch", async () => {
     assert.equal(v.passed, true)
   })
 })
+
+test("WU lifecycle: activate_wu → record_candidate → record_review → checkpoint → complete → verify", async () => {
+  await withRoot(async (root) => {
+    const sid = "ses-1"
+    await runExecutionController(root, { action: "init", execution_id: "E1", session_id: sid, total_seconds: 100 })
+
+    const act = await runExecutionController(root, { action: "activate_wu", execution_id: "E1", session_id: sid, wu_id: "WU-01", mandate_id: "E1-MANDATE-001" })
+    assert.equal(act.commit_status, "committed")
+    assert.equal(act.wu.wu_id, "WU-01")
+    assert.equal(act.wu.origin, "DERIVED")
+    assert.equal(act.wu.execution_authorization, "AUTHORIZED_BY_MANDATE")
+
+    const freeze = await runExecutionController(root, { action: "record_candidate", execution_id: "E1", session_id: sid, candidate_id: "cand-test", manifest_hash: "mh1", tree_hash: "th1" })
+    assert.equal(freeze.commit_status, "committed")
+    assert.deepEqual(freeze.candidates["cand-test"], { manifest_hash: "mh1", tree_hash: "th1", manifest: null })
+
+    const review = await runExecutionController(root, { action: "record_review", execution_id: "E1", session_id: sid, candidate_id: "cand-test", verdict: "PASS", candidate_hashes: { manifest_hash: "mh1", tree_hash: "th1" }, reviewer: "harness-reviewer" })
+    assert.equal(review.commit_status, "committed")
+    assert.equal(review.reviews["cand-test"].verdict, "PASS")
+
+    const checkpoint = await runExecutionController(root, { action: "checkpoint", execution_id: "E1", session_id: sid, note: "frozen+reviewed" })
+    assert.equal(checkpoint.commit_status, "committed")
+    assert.equal(checkpoint.checkpoint.note, "frozen+reviewed")
+
+    const complete = await runExecutionController(root, { action: "complete", execution_id: "E1", session_id: sid, result: "WU-01-done" })
+    assert.equal(complete.commit_status, "committed")
+    assert.equal(complete.completed, true)
+
+    const v = await runExecutionController(root, { action: "verify", execution_id: "E1" })
+    assert.equal(v.passed, true)
+  })
+})
+
+test("activate_wu with a non-matching mandate_id is rejected (authority is mandate-bound)", async () => {
+  await withRoot(async (root) => {
+    const sid = "ses-1"
+    await runExecutionController(root, { action: "init", execution_id: "E1", session_id: sid, total_seconds: 100 })
+    await assert.rejects(
+      runExecutionController(root, { action: "activate_wu", execution_id: "E1", session_id: sid, wu_id: "WU-01", mandate_id: "WRONG" }),
+      /mandate mismatch/,
+    )
+  })
+})
+
+test("record_review against a different candidate hash is rejected (no cross-candidate accreditation)", async () => {
+  await withRoot(async (root) => {
+    const sid = "ses-1"
+    await runExecutionController(root, { action: "init", execution_id: "E1", session_id: sid, total_seconds: 100 })
+    await runExecutionController(root, { action: "activate_wu", execution_id: "E1", session_id: sid, wu_id: "WU-01", mandate_id: "E1-MANDATE-001" })
+    await runExecutionController(root, { action: "record_candidate", execution_id: "E1", session_id: sid, candidate_id: "cand-test", manifest_hash: "mh1", tree_hash: "th1" })
+    await assert.rejects(
+      runExecutionController(root, { action: "record_review", execution_id: "E1", session_id: sid, candidate_id: "cand-test", verdict: "PASS", candidate_hashes: { manifest_hash: "mh1", tree_hash: "WRONG" } }),
+      /hash mismatch/,
+    )
+  })
+})

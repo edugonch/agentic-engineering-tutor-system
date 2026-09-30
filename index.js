@@ -394,9 +394,9 @@ export default Plugin.define({
 
       editor.add({
         name: "harness_execution_controller",
-        description: "Phase 2 durable execution control surface. Drives the recoverable execution machine under .harness/execution/controller/<execution_id>/. Actions: init (approve a mandate), reserve, prepare_launch, record_launch, mark_ambiguous, record_finish, reconcile, release, recover (read-only classification), status, verify (read-only invariant check). It is instrumentation, not new authority: every mutation routes through the controller commit path with operation_id + expected_revision + lease fencing. It never writes state.json or the event log directly, never edits OpenCode config/permissions/agents, and never simulates the model. Use verify after any restart to prove the durable core is intact.",
+        description: "Phase 2 durable execution control surface. Drives the recoverable execution machine under .harness/execution/controller/<execution_id>/. Dispatch actions: init (approve a mandate), reserve, prepare_launch, record_launch, mark_ambiguous, record_finish, reconcile, release, recover (read-only classification), status, verify (read-only invariant check). WU lifecycle actions (Phase 3): activate_wu, record_candidate, record_review, checkpoint, block, complete. It is instrumentation, not new authority: every mutation routes through the controller commit path with operation_id + expected_revision + lease fencing. It never writes state.json or the event log directly, never edits OpenCode config/permissions/agents, and never simulates the model. Use verify after any restart to prove the durable core is intact.",
         input: objectInput({
-          action: { type: "string", enum: ["init", "status", "reserve", "prepare_launch", "record_launch", "mark_ambiguous", "record_finish", "recover", "reconcile", "release", "verify"], default: "status" },
+          action: { type: "string", enum: ["init", "status", "reserve", "prepare_launch", "record_launch", "mark_ambiguous", "record_finish", "recover", "reconcile", "release", "verify", "activate_wu", "record_candidate", "record_review", "checkpoint", "block", "complete"], default: "status" },
           execution_id: { type: "string", minLength: 1, description: "Stable isolation key; durable state lives under .harness/execution/controller/<execution_id>/." },
           session_id: { type: "string", minLength: 1, description: "OpenCode session ID holding the execution lease (required for mutations)." },
           mandate_id: { type: "string", minLength: 1 },
@@ -406,7 +406,17 @@ export default Plugin.define({
           dispatch_id: { type: "string", minLength: 1 },
           reserved_seconds: { type: "number", minimum: 0 },
           launch_session_id: { type: "string", minLength: 1, description: "External identity persisted at record_launch (distinct from the lease-holding session_id)." },
-          result: { type: "string", description: "Opaque result attached at record_finish." },
+          result: { type: "string", description: "Opaque result attached at record_finish or complete." },
+          wu_id: { type: "string", minLength: 1 },
+          candidate_id: { type: "string", minLength: 1 },
+          manifest_hash: { type: "string", minLength: 1 },
+          tree_hash: { type: "string", minLength: 1 },
+          manifest: { type: "object" },
+          verdict: { type: "string" },
+          candidate_hashes: { type: "object" },
+          reviewer: { type: "string" },
+          note: { type: "string" },
+          class: { type: "string" },
         }, ["action", "execution_id"]),
         execute: async (input) => json(await runExecutionController(requireProjectRoot(), input)),
       })
