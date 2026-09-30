@@ -67,7 +67,7 @@ export async function captureEntry(root, relPath) {
   }
   if (!info.isFile()) return null
   const content = await readFile(full)
-  return { path: relPath, type: "file", mode: gitMode(info), sha256: sha256(content) }
+  return { path: relPath, type: "file", mode: gitMode(info), sha256: sha256(content), content: content.toString("base64") }
 }
 
 export async function captureEntries(root, paths) {
@@ -81,6 +81,8 @@ export async function captureEntries(root, paths) {
 }
 
 // Reproducible freeze: scan → capture → verify working paths unchanged → publish.
+// Returns entries WITH frozen content (base64) for materialization; the manifest
+// holds identity-only entries so the content encoding never affects identity.
 export async function freezeCandidate(root, { paths = [], deletions = [], base = null } = {}) {
   const entries = await captureEntries(root, paths)
 
@@ -90,10 +92,11 @@ export async function freezeCandidate(root, { paths = [], deletions = [], base =
     throw new Error("CANDIDATE_CHANGED_DURING_FREEZE: a path changed while the candidate was being captured.")
   }
 
+  const identityEntries = entries.map(({ content: _content, ...identity }) => identity)
   const manifest = {
     base,
     deletions: [...new Set(deletions)].sort(),
-    entries,
+    entries: identityEntries,
     captured_at: new Date().toISOString(), // metadata only, not identity
   }
   const manifest_hash = manifestHash(manifest)

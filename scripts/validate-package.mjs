@@ -63,6 +63,8 @@ const checks = [
   "src/execution/execution.js",
   "src/execution/probe.js",
   "src/execution/continuation-driver.js",
+  "src/execution/verification-workspace.js",
+  "src/execution/verification.js",
   "src/execution/index.js",
   "docs/execution-control-plane.md",
   "docs/phase-0-continuation-spike.md",
