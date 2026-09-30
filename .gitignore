@@ -1,0 +1,2 @@
+# Runtime durable execution state (regenerable evidence, not source).
+.harness/execution/
