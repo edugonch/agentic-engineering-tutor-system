@@ -55,8 +55,9 @@ export function sanitizedEnv(workspace) {
 }
 
 // Run a program with argv (no shell), in its own process group. On timeout and
-// on normal close, the whole process group is killed so no workspace process
-// survives the check.
+// on normal close, the whole process group is killed. A grandchild that outlives
+// its parent (and is orphaned out of the group) is a known POSIX limitation:
+// full containment requires cgroups/containers, out of scope for this phase.
 export function runCommand(program, args, { cwd, env = sanitizedEnv(cwd), timeoutMs = 30000, maxOutputBytes = MAX_OUTPUT_BYTES } = {}) {
   return new Promise((resolve) => {
     const startedAt = Date.now()

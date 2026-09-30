@@ -1,6 +1,7 @@
 import test from "node:test"
 import assert from "node:assert/strict"
 import { access, mkdtemp, rm, writeFile } from "node:fs/promises"
+import { existsSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { freezeCandidate } from "../../src/execution/candidate.js"
@@ -131,4 +132,14 @@ test("runCandidateVerification blocks when the candidate has no contract", async
     const result = await runCandidateVerification(candidate, "run")
     assert.equal(result.status, "BLOCKED_NO_CONTRACT")
   } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+test("timeout kills the check and its still-running children (process group)", async () => {
+  const marker = join(tmpdir(), `harness-timeout-${Date.now()}.txt`)
+  const inner = `setTimeout(() => require("fs").writeFileSync(${JSON.stringify(marker)}, "x"), 800)`
+  const check = `require('child_process').spawn('node', ['-e', ${JSON.stringify(inner)}]); setTimeout(() => {}, 5000)`
+  const result = await runCommand("node", ["-e", check], { cwd: tmpdir(), timeoutMs: 500 })
+  assert.equal(result.timedOut, true)
+  await new Promise((resolveDelay) => setTimeout(resolveDelay, 1200))
+  assert.equal(existsSync(marker), false) // child killed with the group on timeout
 })
