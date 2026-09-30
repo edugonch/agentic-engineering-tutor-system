@@ -37,12 +37,12 @@ export async function runContinuationProbe(projectRoot, input) {
     const totalSeconds = Number(input.total_seconds ?? 60)
     const t0 = Date.now()
 
-    await controller.commit({ operation_id: `${id}:mandate`, operation_type: "MANDATE_APPROVE", body: { execution_id: `${id}:exec`, mandate_id: mandateId, mandate_revision: mandateRevision, max_wus: Number(input.max_wus ?? 4), total_seconds: totalSeconds } }, { holder_session_id: holder, expected_revision: 0 })
-    await controller.commit({ operation_id: `${id}:wu`, operation_type: "WU_ACTIVATE", body: { wu_id: `${id}:WU-01`, mandate_id: mandateId } }, { holder_session_id: holder, expected_revision: 1 })
-    await controller.commit({ operation_id: `${id}:phase-start`, operation_type: "PHASE_START", body: { phase: PHASES.ACTIVE, started_at: t0 } }, { holder_session_id: holder, expected_revision: 2 })
-    await controller.commit({ operation_id: `${id}:dispatch-reserve`, operation_type: "DISPATCH_RESERVE", body: { dispatch_id: `${id}:dsp-0001` } }, { holder_session_id: holder, expected_revision: 3 })
-    await controller.commit({ operation_id: `${id}:dispatch-launch`, operation_type: "DISPATCH_LAUNCH", body: { dispatch_id: `${id}:dsp-0001`, session_id: holder } }, { holder_session_id: holder, expected_revision: 4 })
-    await controller.commit({ operation_id: `${id}:checkpoint-0`, operation_type: "CHECKPOINT", body: { note: "initial checkpoint" } }, { holder_session_id: holder, expected_revision: 5 })
+    await controller.commit({ operation_id: `${id}:mandate`, operation_type: "MANDATE_APPROVE", body: { execution_id: `${id}:exec`, mandate_id: mandateId, mandate_revision: mandateRevision, max_wus: Number(input.max_wus ?? 4), total_seconds: totalSeconds } }, { holder_session_id: holder, expected_revision: 0, lease_fencing_token: lease.fencing_token })
+    await controller.commit({ operation_id: `${id}:wu`, operation_type: "WU_ACTIVATE", body: { wu_id: `${id}:WU-01`, mandate_id: mandateId } }, { holder_session_id: holder, expected_revision: 1, lease_fencing_token: lease.fencing_token })
+    await controller.commit({ operation_id: `${id}:phase-start`, operation_type: "PHASE_START", body: { phase: PHASES.ACTIVE, started_at: t0 } }, { holder_session_id: holder, expected_revision: 2, lease_fencing_token: lease.fencing_token })
+    await controller.commit({ operation_id: `${id}:dispatch-reserve`, operation_type: "DISPATCH_RESERVE", body: { dispatch_id: `${id}:dsp-0001` } }, { holder_session_id: holder, expected_revision: 3, lease_fencing_token: lease.fencing_token })
+    await controller.commit({ operation_id: `${id}:dispatch-launch`, operation_type: "DISPATCH_LAUNCH", body: { dispatch_id: `${id}:dsp-0001`, session_id: holder } }, { holder_session_id: holder, expected_revision: 4, lease_fencing_token: lease.fencing_token })
+    await controller.commit({ operation_id: `${id}:checkpoint-0`, operation_type: "CHECKPOINT", body: { note: "initial checkpoint" } }, { holder_session_id: holder, expected_revision: 5, lease_fencing_token: lease.fencing_token })
 
     return {
       action,
@@ -58,19 +58,19 @@ export async function runContinuationProbe(projectRoot, input) {
     const revision = snap.state.revision
     if (snap.state.budget.active_phase === PHASES.ACTIVE) {
       const now = Date.now()
-      await controller.commit({ operation_id: `${id}:phase-end-${revision}`, operation_type: "PHASE_END", body: { phase: PHASES.ACTIVE, ended_at: now } }, { holder_session_id: holder, expected_revision: revision })
-      await controller.commit({ operation_id: `${id}:phase-start-${revision}`, operation_type: "PHASE_START", body: { phase: PHASES.ACTIVE, started_at: now } }, { holder_session_id: holder, expected_revision: revision + 1 })
+      await controller.commit({ operation_id: `${id}:phase-end-${revision}`, operation_type: "PHASE_END", body: { phase: PHASES.ACTIVE, ended_at: now } }, { holder_session_id: holder, expected_revision: revision, lease_fencing_token: lease.fencing_token })
+      await controller.commit({ operation_id: `${id}:phase-start-${revision}`, operation_type: "PHASE_START", body: { phase: PHASES.ACTIVE, started_at: now } }, { holder_session_id: holder, expected_revision: revision + 1, lease_fencing_token: lease.fencing_token })
     }
-    await controller.commit({ operation_id: `${id}:checkpoint-${revision + 2}`, operation_type: "CHECKPOINT", body: { note: input.note ?? "checkpoint" } }, { holder_session_id: holder, expected_revision: revision + 2 })
+    await controller.commit({ operation_id: `${id}:checkpoint-${revision + 2}`, operation_type: "CHECKPOINT", body: { note: input.note ?? "checkpoint" } }, { holder_session_id: holder, expected_revision: revision + 2, lease_fencing_token: lease.fencing_token })
     return { action, ...(await snapshotReport(controller, id, holder)), lease }
   }
 
   if (action === "block") {
-    await controller.acquire(holder)
+    const lease = await controller.acquire(holder)
     const snap = await controller.snapshot()
     await controller.commit(
       { operation_id: `${id}:block`, operation_type: "BLOCK", body: { class: "BLOCKED_PERMISSION", reason: String(input.note ?? "permission.rejected") } },
-      { holder_session_id: holder, expected_revision: snap.state.revision },
+      { holder_session_id: holder, expected_revision: snap.state.revision, lease_fencing_token: lease.fencing_token },
     )
     return { action: "block", ...(await snapshotReport(controller, id, holder)) }
   }

@@ -276,3 +276,19 @@ function assertBudgetInvariants(budget) {
   if (budget.reserved_seconds < 0) throw new Error("Invariant violation: reserved_seconds must never be negative.")
   if (budget.used_seconds < 0) throw new Error("Invariant violation: used_seconds must never be negative.")
 }
+
+// Derived budget view for authorization. The projection reproduces the ledger
+// faithfully (it may describe over-budget history); this function computes the
+// authorization view WITHOUT invalidating anything. available_seconds may be
+// negative (overrun) — that is a reconstructible fact, not a projection error.
+export function deriveBudget(budget) {
+  const available_seconds = budget.total_seconds - budget.used_seconds - budget.reserved_seconds
+  return {
+    total_seconds: budget.total_seconds,
+    used_seconds: budget.used_seconds,
+    reserved_seconds: budget.reserved_seconds,
+    available_seconds,
+    exhausted: available_seconds <= 0,
+    overrun: available_seconds < 0,
+  }
+}

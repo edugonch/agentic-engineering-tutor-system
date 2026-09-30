@@ -2,7 +2,7 @@ export { OPERATION_TYPES, PHASE_STATES, BILLABLE_PHASES, DISPATCH_STATUS, TERMIN
 export { stableSerialize, sha256, stableHash } from "./serialize.js"
 export { atomicWriteDurable, fsyncDir } from "./fsync.js"
 export { readLog, writeLog, validateLog } from "./event-log.js"
-export { initialState, project, applyEvent } from "./state.js"
+export { initialState, project, applyEvent, deriveBudget } from "./state.js"
 export { readLease, writeLease, isLeaseExpired, nextLease } from "./lease.js"
 export { withMutex } from "./mutex.js"
 export { manifestHash, treeHash, captureEntry, captureEntries, freezeCandidate, captureBaseSnapshot, composeCandidateEntries, assertCandidatePath } from "./candidate.js"
