@@ -465,8 +465,10 @@ export default Plugin.define({
           let agents = new Set()
           let tools = new Set()
           try {
+            const response = await ctx.agent.list()
+            const records = Array.isArray(response) ? response : Array.isArray(response?.data) ? response.data : Array.isArray(response?.agents) ? response.agents : []
             const ids = new Set()
-            for (const agent of (await ctx.agent.list()) || []) {
+            for (const agent of records) {
               for (const key of ["name", "id", "agentID", "identifier"]) {
                 const value = agent?.[key]
                 if (typeof value === "string" && value) ids.add(value)
@@ -474,7 +476,11 @@ export default Plugin.define({
             }
             agents = ids
           } catch {}
-          try { tools = new Set(((await ctx.tool.list()) || []).map((tool) => tool.id)) } catch {}
+          try {
+            const response = await ctx.tool.list()
+            const records = Array.isArray(response) ? response : Array.isArray(response?.data) ? response.data : []
+            tools = new Set(records.map((tool) => tool.id ?? tool.name).filter(Boolean))
+          } catch {}
 
           const probe = async (capability, requirement) => {
             switch (capability) {
