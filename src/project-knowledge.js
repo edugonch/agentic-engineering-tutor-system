@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto"
 import { lstat, mkdir, open, readFile, readdir, rename, unlink, writeFile } from "node:fs/promises"
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path"
+import { validateRepairPolicy } from "./execution/repair-policy.js"
 
 const INDEX_PATH = ".harness/knowledge/index.json"
 const INDEX_LOCK_PATH = ".harness/knowledge/index.lock"
@@ -787,12 +788,12 @@ export async function findApprovedEpic(projectRoot, epicArtifactId) {
 // an Epic artifact body. Returns null when absent/malformed so the caller fails
 // closed rather than inventing an envelope.
 function parseExecutionMandate(content) {
-  const match = String(content).match(/execution_mandate:\s*(\{[^{}]*\})/)
-  if (!match) return null
+  const matches = [...String(content).matchAll(/^\s*execution_mandate:[ \t]*(\{[^\r\n]*\})[ \t]*$/gm)]
+  if (matches.length !== 1) return null
   try {
-    const mandate = JSON.parse(match[1])
+    const mandate = JSON.parse(matches[0][1])
     if (Number.isSafeInteger(mandate.max_wus) && mandate.max_wus >= 1 && Number.isFinite(mandate.total_seconds) && mandate.total_seconds > 0) {
-      return { max_wus: mandate.max_wus, total_seconds: mandate.total_seconds }
+      return { max_wus: mandate.max_wus, total_seconds: mandate.total_seconds, ...(mandate.repair_policy !== undefined ? { repair_policy: validateRepairPolicy(mandate.repair_policy) } : {}) }
     }
     return null
   } catch { return null }

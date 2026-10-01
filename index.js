@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url"
 import { join } from "node:path"
 import { existsSync } from "node:fs"
 import { resolveBinary } from "./src/resolve-binary.js"
+import { createExecutionGuard } from './src/execution/runtime-guard.js'
 import { applyOutputTokenCap, createTurnGuard, readGuardSettings } from "./src/turn-guard.js"
 import { getProjectStatus, initializeProject } from "./src/scaffold.js"
 import { analyzeExistingProject } from "./src/project-analysis.js"
@@ -58,6 +59,7 @@ export default Plugin.define({
     }
 
     const candidateRegistry = createCandidateRegistry({ dir: join(requireProjectRoot(), ".harness", "execution") })
+    const executionGuard = createExecutionGuard(requireProjectRoot(), ctx)
 
     // AgentEditor can update existing agents but cannot add new definitions.
     // Keep the Harness roles available by managing their global profile files
@@ -158,12 +160,14 @@ export default Plugin.define({
     })
 
     // Count tool calls and delegations for the session that actually ran them.
-    await ctx.tool.hook("execute.before", (event) => {
+    await ctx.tool.hook("execute.before", async (event) => {
+      await executionGuard.beforeTool(event)
       guard.before(
         { sessionID: event.sessionID, tool: event.tool },
         { args: event.input },
       )
     })
+    await ctx.tool.hook('execute.after', executionGuard.afterTool)
 
     // Enforce the runtime prerequisite at the actual OpenCode permission
     // boundary too. Prompt instructions and a read-only preflight are not a
@@ -178,6 +182,7 @@ export default Plugin.define({
         event.message = "BLOCKED_PERMISSION: this probe action is denied by the Phase 0 hard-stop primitive."
         continuation.markBlocked(event.sessionID, `permission.rejected:${event.action}`)
       }
+      await executionGuard.onPermission(event)
     })
 
     await ctx.tool.transform((editor) => {
@@ -388,7 +393,7 @@ export default Plugin.define({
         name: "harness_execution_controller",
         description: "Phase 2 durable execution control surface. Drives the recoverable execution machine under .harness/execution/controller/<execution_id>/. Dispatch actions: init (approve a mandate), reserve, prepare_launch, record_launch, mark_ambiguous, record_finish, reconcile, release, recover (read-only classification), status, verify (read-only invariant check). WU lifecycle actions (Phase 3): activate_wu, record_candidate (loads the candidate from the registry; the caller cannot supply hashes), record_review, complete_wu (WU close), checkpoint, block. complete remains Epic-level (EPIC_EXECUTION_VERIFIED). It is instrumentation, not new authority: every mutation routes through the controller commit path with operation_id + expected_revision + lease fencing. It never writes state.json or the event log directly, never edits OpenCode config/permissions/agents, and never simulates the model. Use verify after any restart to prove the durable core is intact.",
         input: objectInput({
-          action: { type: "string", enum: ["init", "approve_mandate", "status", "reserve", "prepare_launch", "record_launch", "mark_ambiguous", "record_finish", "recover", "reconcile", "release", "verify", "activate_wu", "record_candidate", "record_review", "complete_wu", "checkpoint", "block", "complete"], default: "status" },
+          action: { type: "string", enum: ["init", "approve_mandate", "status", "reserve", "prepare_launch", "record_launch", "mark_ambiguous", "record_finish", "recover", "reconcile", "release", "verify", "activate_wu", "record_candidate", "record_review", "complete_wu", "checkpoint", "block", "complete", "authorize_repair", "authorize_recovery", "resolve_blocker"], default: "status" },
           execution_id: { type: "string", minLength: 1, description: "Stable isolation key; durable state lives under .harness/execution/controller/<execution_id>/." },
           session_id: { type: "string", minLength: 1, description: "OpenCode session ID holding the execution lease (required for mutations)." },
           mandate_id: { type: "string", minLength: 1 },
@@ -408,8 +413,20 @@ export default Plugin.define({
           checkpoint_id: { type: "string", minLength: 1, description: "Explicit checkpoint key so repeated checkpoints do not collide on the operation id." },
           note: { type: "string" },
           class: { type: "string" },
+          purpose: { type: 'string', enum: ['BUILD', 'REPAIR', 'REVIEW', 'RECOVERY'] },
+          blocker_id: { type: 'string', minLength: 1 },
+          reason: { type: 'string' },
+          failure_signature: { type: 'string', minLength: 1 },
+          evidence: { type: 'object' },
+          recovery_action_id: { type: 'string', minLength: 1 },
+          hypothesis: { type: 'string', minLength: 1 },
+          progress_evidence_ids: { type: 'array', items: { type: 'string' } },
+          findings: { type: 'array', items: { type: 'object' } },
         }, ["action", "execution_id"]),
-        execute: async (input) => json(await runExecutionController(requireProjectRoot(), input, candidateRegistry)),
+        execute: async (input, context) => {
+          if (input.session_id && input.session_id !== context.sessionID) throw new Error('Controller session_id must match the calling OpenCode session.')
+          return json(await runExecutionController(requireProjectRoot(), { ...input, session_id: context.sessionID }, candidateRegistry))
+        },
       })
 
       editor.add({
@@ -555,13 +572,15 @@ export default Plugin.define({
       })
     })
 
-    if (continuation.enabled) {
+    {
       ;(async () => {
         try {
-          for await (const event of ctx.event.subscribe({ signal: eventSubscription.signal })) {
+           for await (const event of ctx.event.subscribe({ signal: eventSubscription.signal })) {
+            await executionGuard.onEvent(event)
             await continuation.onEvent(event).catch(() => {})
           }
         } catch (error) {
+          if (!eventSubscription.signal.aborted) executionGuard.subscriptionFailed(error?.message ?? String(error))
           continuation.recordSubscriptionError(error?.message ?? String(error))
         }
       })().catch((error) => continuation.recordSubscriptionError(error?.message ?? String(error)))

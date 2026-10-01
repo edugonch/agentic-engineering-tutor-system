@@ -19,6 +19,9 @@ export const OPERATION_TYPES = Object.freeze([
   "DISPATCH_MARK_AMBIGUOUS", // reserved/pending_launch -> ambiguous (identity unknown); reservation stays held
   "FREEZE_CANDIDATE", // pin an immutable candidate (manifest hash + tree hash), bound to the active WU
   "RECORD_REVIEW", // bind a review verdict to one exact candidate's hashes
+  "REPAIR_AUTHORIZE", // consume one review-bound repair entitlement
+  "BLOCKER_RECOVERY_AUTHORIZE", // consume one approved recovery attempt
+  "BLOCKER_RESOLVE", // validate recovery evidence, never a PASS
   "WU_COMPLETE", // close one WU: candidate + PASS review + settled dispatches (distinct from EPIC COMPLETE)
   "CHECKPOINT", // persist a resumable checkpoint
   "BLOCK", // record a governed stop (typed blocker class)

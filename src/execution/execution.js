@@ -21,6 +21,9 @@ import { isLeaseExpired, nextLease, readLease, writeLease } from "./lease.js"
 import { stableHash, operationIdentityHash, stableSerialize } from "./serialize.js"
 import { withMutex } from "./mutex.js"
 import { DISPATCH_STATUS } from "./constants.js"
+import { controllerDirectory, assertOwnership } from "./ownership.js"
+import { readPermissionStops, writePermissionStop, permissionStopOperation, effectiveBlocker, assertPermissionAdmission } from './permission-stops.js'
+import { TERMINAL_BLOCKER_CLASSES } from './constants.js'
 
 // Recovery classification is observation only: it never launches, releases,
 // reconciles, or mutates. The four canonical categories cover the actionable
@@ -76,12 +79,15 @@ export async function createExecutionController({ root, dir, now = () => Date.no
   const logPath = join(execDir, "events.ndjson")
   const leasePath = join(execDir, "lease.json")
   const mutexPath = join(execDir, "mutex.lock")
+  const sharedDirectory = controllerDirectory(execDir)
+  const projectCommit = (fn) => sharedDirectory ? withMutex(join(sharedDirectory, '.ownership.lock'), fn) : fn()
 
   const load = async () => {
     const events = validateLog(await readLog(logPath))
     const state = project(events)
     const lease = await readLease(leasePath)
-    return { events, state, lease }
+    const permission_stops = await readPermissionStops(execDir, state)
+    return { events, state, lease, permission_stops, effective_blocker: effectiveBlocker(state, permission_stops) }
   }
 
   const snapshot = async () => withMutex(mutexPath, load)
@@ -94,8 +100,8 @@ export async function createExecutionController({ root, dir, now = () => Date.no
     })
 
   const commit = async (operation, { holder_session_id, expected_revision, lease_fencing_token }) =>
-    withMutex(mutexPath, async () => {
-      const { events, state, lease } = await load()
+    projectCommit(() => withMutex(mutexPath, async () => {
+      const { events, state, lease, permission_stops } = await load()
 
       if (!lease || isLeaseExpired(lease, now)) {
         throw new Error("No valid execution lease; acquire one before committing.")
@@ -121,10 +127,14 @@ export async function createExecutionController({ root, dir, now = () => Date.no
         return { status: "replayed", revision: state.revision, state, result: existing.result ?? null }
       }
 
+      if (operation.operation_type === 'MANDATE_APPROVE' && state.mandate) throw new Error('An execution mandate cannot be replaced or topped up.')
+      await assertOwnership(sharedDirectory, execDir, state, operation)
+      assertPermissionAdmission(permission_stops, operation)
+
       // Budget authorization ceiling: the ledger may describe debt (over-budget
       // history is reconstructible), but the controller may not authorize new
       // debt. Only new reservations are gated; reconcile/phase billing are not.
-      if (operation.operation_type === "DISPATCH_RESERVE") {
+      if (operation.operation_type === "DISPATCH_RESERVE" && !state.mandate?.repair_policy) {
         const requested = operation.body?.reserved_seconds ?? 0
         const { available_seconds } = deriveBudget(state.budget)
         if (requested > 0 && requested > available_seconds) {
@@ -155,7 +165,7 @@ export async function createExecutionController({ root, dir, now = () => Date.no
       await writeLease(leasePath, lease)
 
       return { status: "committed", revision: nextState.revision, state: nextState, event }
-    })
+    }))
 
   // Reconcile a dispatch after recovery. Never auto-relaunches: it reports
   // status and a conservative verdict so the caller investigates first.
@@ -184,7 +194,7 @@ export async function createExecutionController({ root, dir, now = () => Date.no
   // mutates state.
   const recover = async () =>
     withMutex(mutexPath, async () => {
-      const { state, lease } = await load()
+      const { state, lease, permission_stops, effective_blocker } = await load()
       const dispatches = Object.entries(state.dispatches).map(([dispatch_id, d]) => ({
         dispatch_id,
         status: d.status,
@@ -192,7 +202,7 @@ export async function createExecutionController({ root, dir, now = () => Date.no
         reserved_seconds: d.reserved_seconds,
         reservation_status: d.reservation_status,
         actual_consumption: d.actual_consumption,
-        classification: classifyDispatch(d.status),
+        classification: d.status === DISPATCH_STATUS.PENDING_LAUNCH && d.launch_call_id ? 'AMBIGUOUS' : classifyDispatch(d.status),
       }))
       const byClassification = (value) => dispatches.filter((d) => d.classification === value).map((d) => d.dispatch_id)
       const classification = {
@@ -209,7 +219,16 @@ export async function createExecutionController({ root, dir, now = () => Date.no
         execution_id: state.execution_id,
         revision: state.revision,
         budget: deriveBudget(state.budget),
-        blocker: state.blocker,
+        blocker: effective_blocker,
+        permission_stops,
+        wu: state.wu,
+        mandate: state.mandate,
+        candidates: state.candidates,
+        reviews: state.reviews,
+        repair: state.repair ?? null,
+        repair_history: state.repair_history ?? [],
+        recoveries: state.recoveries ?? {},
+        blocker_history: state.blocker_history ?? [],
         fencing_token: lease?.fencing_token ?? null,
         dispatches,
         classification,
@@ -276,6 +295,19 @@ export async function createExecutionController({ root, dir, now = () => Date.no
     return { dispatch_id, found: true, status: res.status }
   }
 
+  const observePermissionRejection = (fact) => projectCommit(() => withMutex(mutexPath, async () => {
+    const { state } = await load()
+    return writePermissionStop(execDir, state, fact)
+  }))
+
+  const reconcilePermissionStops = async ({ holder_session_id, lease_fencing_token }) => {
+    const snap = await snapshot()
+    if (!snap.permission_stops.length) return { status: 'none' }
+    if (snap.state.blocker && TERMINAL_BLOCKER_CLASSES.has(snap.state.blocker.class)) return { status: 'already_stopped' }
+    const operation = permissionStopOperation(snap.permission_stops[0])
+    return commit(operation, { holder_session_id, lease_fencing_token, expected_revision: snap.state.revision })
+  }
+
   return {
     dir: execDir,
     snapshot,
@@ -287,5 +319,7 @@ export async function createExecutionController({ root, dir, now = () => Date.no
     reconcileOne,
     releaseDispatch,
     budget,
+    observePermissionRejection,
+    reconcilePermissionStops,
   }
 }

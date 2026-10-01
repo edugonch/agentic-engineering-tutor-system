@@ -13,6 +13,7 @@ import {
   WU_ORIGIN,
   MANDATE_AUTHORITY,
 } from "./constants.js"
+import { beforeRepairEvent, afterRepairEvent } from "./repair-policy.js"
 
 const FORWARD_EXECUTION_TYPES = new Set([
   "WU_ACTIVATE",
@@ -66,6 +67,12 @@ export function applyEvent(previous, event) {
   }
   const state = structuredClone(previous)
   const body = event.body ?? {}
+
+  if (beforeRepairEvent(state, event)) {
+    assertBudgetInvariants(state.budget)
+    state.revision = event.next_revision
+    return state
+  }
 
   // A terminal blocker is a hard stop: no new WU, billable phase, or dispatch
   // may follow. Audit/record operations remain allowed so evidence and
@@ -350,6 +357,7 @@ export function applyEvent(previous, event) {
       throw new Error(`Unhandled operation type: ${event.operation_type}.`)
   }
 
+  afterRepairEvent(state, event)
   assertBudgetInvariants(state.budget)
 
   state.revision = event.next_revision

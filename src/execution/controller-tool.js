@@ -15,7 +15,9 @@
 // A crash after the side effect but before `record_launch` is exactly the
 // AMBIGUOUS hazard: recovery marks AMBIGUOUS and never auto-launches.
 
-import { join } from "node:path"
+import { join, resolve, relative } from "node:path"
+import { readFile, lstat } from 'node:fs/promises'
+import { sha256 } from './serialize.js'
 import { readLog, validateLog } from "./event-log.js"
 import { project, deriveBudget } from "./state.js"
 import { createExecutionController } from "./execution.js"
@@ -56,13 +58,18 @@ async function summary(controller) {
       actual_consumption: d.actual_consumption,
     })),
     fencing_token: lease?.fencing_token ?? null,
-    blocker: state.blocker,
+    blocker: snap.effective_blocker,
+    permission_stops: snap.permission_stops,
     completed: state.completed,
     mandate: state.mandate,
     wu: state.wu,
     candidates: state.candidates,
     reviews: state.reviews,
     checkpoint: state.checkpoint,
+    repair: state.repair ?? null,
+    repair_history: state.repair_history ?? [],
+    recoveries: state.recoveries ?? {},
+    blocker_history: state.blocker_history ?? [],
   }
 }
 
@@ -150,6 +157,7 @@ export async function runExecutionController(projectRoot, input, candidateRegist
     const epicArtifactId = String(input.epic_artifact_id ?? "")
     if (!epicArtifactId) throw new Error("approve_mandate requires epic_artifact_id (an APPROVED Epic artifact in the knowledge index).")
     const epic = await findApprovedEpic(projectRoot, epicArtifactId)
+    if (epic.mandate.repair_policy) await verifyWUContract(projectRoot, epic.mandate.repair_policy)
     const mandateId = String(input.mandate_id ?? `${executionId}-MANDATE-001`)
     const res = await commitAction(controller, holder, `${executionId}:mandate`, "MANDATE_APPROVE", {
       execution_id: `${executionId}:exec`,
@@ -161,6 +169,7 @@ export async function runExecutionController(projectRoot, input, candidateRegist
       source_artifact_id: epic.source_id,
       source_record_key: epic.record_key,
       source_hash: epic.sha256,
+      ...(epic.mandate.repair_policy ? { repair_policy: epic.mandate.repair_policy, controller_session_id: holder } : {}),
     })
     return { action, commit_status: res.status, source_artifact_id: epic.source_id, source_hash: epic.sha256, ...(await summary(controller)) }
   }
@@ -174,6 +183,7 @@ export async function runExecutionController(projectRoot, input, candidateRegist
     if (snap.state.mandate?.authority_kind !== MANDATE_AUTHORITY.OWNER_APPROVED_EPIC) {
       throw new Error("activate_wu requires an OWNER_APPROVED_EPIC mandate (use approve_mandate, not init).")
     }
+    if (snap.state.mandate.repair_policy) await verifyWUContract(projectRoot, snap.state.mandate.repair_policy)
     const res = await commitAction(controller, holder, `${executionId}:activate:${wuId}`, "WU_ACTIVATE", { wu_id: wuId, mandate_id: mandateId })
     return { action, commit_status: res.status, wu_id: wuId, ...(await summary(controller)) }
   }
@@ -186,7 +196,7 @@ export async function runExecutionController(projectRoot, input, candidateRegist
     const dispatchId = requireDispatchId(input)
     const reserved = Number(input.reserved_seconds)
     if (!Number.isFinite(reserved) || reserved < 0) throw new Error("reserve requires a finite non-negative reserved_seconds.")
-    const res = await commitAction(controller, holder, `${executionId}:reserve:${dispatchId}`, "DISPATCH_RESERVE", { dispatch_id: dispatchId, reserved_seconds: reserved })
+    const res = await commitAction(controller, holder, `${executionId}:reserve:${dispatchId}`, "DISPATCH_RESERVE", { dispatch_id: dispatchId, reserved_seconds: reserved, ...(input.purpose ? { purpose: input.purpose, candidate_id: input.candidate_id ?? null } : {}) })
     return { action, commit_status: res.status, dispatch_id: dispatchId, ...(await summary(controller)) }
   }
 
@@ -229,7 +239,7 @@ export async function runExecutionController(projectRoot, input, candidateRegist
     const requiredCheckIds = (candidate.verification_contract?.commands ?? []).map((check) => check.id)
     const contractHash = candidate.manifest?.verification_contract?.contract_hash ?? null
     const res = await controller.commit(
-      { operation_id: `${executionId}:candidate:${candidateId}`, operation_type: "FREEZE_CANDIDATE", body: { candidate_id: candidateId, wu_id: wuId, manifest_hash: candidate.manifest_hash, tree_hash: candidate.tree_hash, manifest: candidate.manifest ?? null, verification_contract_hash: contractHash, required_check_ids: requiredCheckIds } },
+      { operation_id: `${executionId}:candidate:${candidateId}`, operation_type: "FREEZE_CANDIDATE", body: { candidate_id: candidateId, wu_id: wuId, manifest_hash: candidate.manifest_hash, tree_hash: candidate.tree_hash, manifest: candidate.manifest ?? null, verification_contract_hash: contractHash, required_check_ids: requiredCheckIds, ...(input.dispatch_id ? { dispatch_id: input.dispatch_id } : {}) } },
       { holder_session_id: holder, expected_revision: snap.state.revision, lease_fencing_token: lease.fencing_token },
     )
     return { action, commit_status: res.status, candidate_id: candidateId, ...(await summary(controller)) }
@@ -250,6 +260,7 @@ export async function runExecutionController(projectRoot, input, candidateRegist
     if (!frozenCandidate) throw new Error(`record_review: candidate ${candidateId} not recorded (record_candidate first).`)
     const contractHash = frozenCandidate.verification_contract_hash ?? frozenCandidate.manifest?.verification_contract?.contract_hash ?? null
     const verifiedCheckIds = []
+    const receipts = []
     for (const evidenceId of evidenceIds) {
       const receipt = await readVerificationReceipt(receiptsDir, evidenceId)
       if (!receipt) throw new Error(`record_review: evidence ${evidenceId} not found.`)
@@ -258,9 +269,10 @@ export async function runExecutionController(projectRoot, input, candidateRegist
       if (receipt.status !== "PASS" && receipt.status !== "FAIL") throw new Error(`record_review: evidence ${evidenceId} status is ${receipt.status}, not a run result.`)
       if (verdict === "PASS" && receipt.status !== "PASS") throw new Error(`record_review: PASS verdict requires all-PASS evidence; ${evidenceId} is ${receipt.status}.`)
       verifiedCheckIds.push(receipt.check_id)
+      receipts.push(receipt)
     }
     const res = await controller.commit(
-      { operation_id: `${executionId}:review:${candidateId}`, operation_type: "RECORD_REVIEW", body: { candidate_id: candidateId, verdict, candidate_hashes: { manifest_hash: frozenCandidate.manifest_hash, tree_hash: frozenCandidate.tree_hash }, reviewer: input.reviewer ?? null, verification_evidence_ids: evidenceIds, verification_contract_hash: contractHash, verified_check_ids: verifiedCheckIds } },
+      { operation_id: `${executionId}:review:${candidateId}`, operation_type: "RECORD_REVIEW", body: { candidate_id: candidateId, verdict, candidate_hashes: { manifest_hash: frozenCandidate.manifest_hash, tree_hash: frozenCandidate.tree_hash }, reviewer: input.reviewer ?? null, verification_evidence_ids: evidenceIds, verification_contract_hash: contractHash, verified_check_ids: verifiedCheckIds, ...(snap.state.mandate?.repair_policy ? { dispatch_id: input.dispatch_id, findings: input.findings, evidence_receipts: receipts } : {}) } },
       { holder_session_id: holder, expected_revision: snap.state.revision, lease_fencing_token: lease.fencing_token },
     )
     return { action, commit_status: res.status, candidate_id: candidateId, ...(await summary(controller)) }
@@ -283,7 +295,31 @@ export async function runExecutionController(projectRoot, input, candidateRegist
   if (action === "block") {
     const cls = String(input.class ?? "")
     if (!cls) throw new Error("block requires class (a BLOCKER_CLASSES value).")
-    const res = await commitAction(controller, holder, `${executionId}:block`, "BLOCK", { class: cls, reason: input.reason ?? null })
+    const res = await commitAction(controller, holder, `${executionId}:block${input.blocker_id ? `:${input.blocker_id}` : ''}`, "BLOCK", { class: cls, reason: input.reason ?? null, ...(input.blocker_id ? { blocker_id: input.blocker_id, failure_signature: input.failure_signature, evidence: input.evidence ?? null, origin_session_id: input.origin_session_id ?? null } : {}) })
+    return { action, commit_status: res.status, ...(await summary(controller)) }
+  }
+
+  if (action === 'authorize_repair' || action === 'authorize_recovery') {
+    const repair = action === 'authorize_repair'
+    const key = repair ? input.candidate_id : input.blocker_id
+    if (!key) throw new Error('Authorization requires an exact candidate/blocker identity.')
+    const body = repair
+      ? { candidate_id: key, dispatch_id: input.dispatch_id, hypothesis: input.hypothesis, progress_evidence_ids: input.progress_evidence_ids }
+      : { blocker_id: key, recovery_action_id: input.recovery_action_id, dispatch_id: input.dispatch_id, hypothesis: input.hypothesis, progress_evidence_ids: input.progress_evidence_ids }
+    const res = await commitAction(controller, holder, `${executionId}:${action}:${key}`, repair ? 'REPAIR_AUTHORIZE' : 'BLOCKER_RECOVERY_AUTHORIZE', body)
+    return { action, commit_status: res.status, ...(await summary(controller)) }
+  }
+
+  if (action === 'resolve_blocker') {
+    if (!input.blocker_id) throw new Error('resolve_blocker requires blocker_id.')
+    const evidenceIds = input.verification_evidence_ids ?? []
+    const receipts = []
+    for (const id of evidenceIds) {
+      const r = await readVerificationReceipt(join(projectRoot, '.harness/execution/verification-results'), id)
+      if (!r) throw new Error(`Unknown evidence ${id}.`)
+      receipts.push(r)
+    }
+    const res = await commitAction(controller, holder, `${executionId}:resolve:${input.blocker_id}`, 'BLOCKER_RESOLVE', { blocker_id: input.blocker_id, verification_evidence_ids: evidenceIds, evidence_receipts: receipts })
     return { action, commit_status: res.status, ...(await summary(controller)) }
   }
 
@@ -293,6 +329,11 @@ export async function runExecutionController(projectRoot, input, candidateRegist
   }
 
   if (action === "reconcile") {
+    if (!input.dispatch_id) {
+      const lease = await controller.acquire(holder)
+      const result = await controller.reconcilePermissionStops({ holder_session_id: holder, lease_fencing_token: lease.fencing_token })
+      return { action, permission_reconciliation: result.status, ...(await summary(controller)) }
+    }
     const dispatchId = requireDispatchId(input)
     const lease = await controller.acquire(holder)
     const result = await controller.reconcileOne(dispatchId, { holder_session_id: holder, lease_fencing_token: lease.fencing_token })
@@ -322,4 +363,16 @@ function requireDispatchId(input) {
   const id = String(input.dispatch_id ?? "")
   if (!id) throw new Error("This action requires dispatch_id.")
   return id
+}
+
+async function verifyWUContract(root, policy) {
+  const path = resolve(root, policy.wu_contract_path)
+  const rel = relative(root, path)
+  if (!rel || rel.startsWith('..')) throw new Error('WU contract escapes project root.')
+  let current = root
+  for (const part of rel.split('/')) {
+    current = join(current, part)
+    if ((await lstat(current)).isSymbolicLink()) throw new Error('WU contract cannot use symlink paths.')
+  }
+  if (sha256(await readFile(path)) !== policy.wu_contract_hash) throw new Error('WU contract integrity mismatch.')
 }
