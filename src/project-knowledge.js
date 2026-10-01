@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto"
+import { constants as fsConstants } from "node:fs"
 import { lstat, mkdir, open, readFile, readdir, rename, unlink, writeFile } from "node:fs/promises"
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path"
 import { validateRepairPolicy } from "./execution/repair-policy.js"
@@ -620,15 +621,50 @@ export async function readProjectKnowledge(projectRoot, sourceId, startLine = 1,
   }
 }
 
+async function readExactApprovedContent(root, input) {
+  if (input.status !== "APPROVED" || input.owner_confirmed !== true) {
+    throw new Error("Exact source registration requires APPROVED and explicit owner_confirmed = true.")
+  }
+  if (input.content !== undefined) throw new Error("Exact source registration cannot also supply model-generated content.")
+  const path = input.content_source_path
+  if (typeof path !== "string" || !path || isAbsolute(path) || /[\\\0:]/.test(path)
+      || path.split("/").some(part => !part || part === "." || part === "..")) {
+    throw new Error("Exact content source must be a safe project-relative path without traversal.")
+  }
+  if (typeof input.expected_content_sha256 !== "string" || !/^[a-f0-9]{64}$/.test(input.expected_content_sha256)) {
+    throw new Error("Exact source registration requires expected_content_sha256 as a full SHA256 hash.")
+  }
+  const source = resolve(root, path)
+  if (!inside(root, source) || source === root) throw new Error("Exact content source escapes the project root.")
+  await ensureSafeParents(root, source)
+  const info = await lstat(source)
+  if (!info.isFile() || info.isSymbolicLink()) throw new Error("Exact content source must be a regular non-symlink file.")
+  if (info.size > MAX_ARTIFACT_BYTES) throw new Error(`Artifact content exceeds ${MAX_ARTIFACT_BYTES} bytes.`)
+  // NOFOLLOW rejects a swapped final symlink; NONBLOCK prevents a swapped FIFO
+  // from hanging before descriptor validation. Never reopen the source for write.
+  const handle = await open(source, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK)
+  try {
+    const opened = await handle.stat()
+    if (!opened.isFile() || opened.dev !== info.dev || opened.ino !== info.ino) throw new Error("Exact content source changed before opening.")
+    const bytes = await handle.readFile()
+    await ensureSafeParents(root, source)
+    if (bytes.length > MAX_ARTIFACT_BYTES) throw new Error(`Artifact content exceeds ${MAX_ARTIFACT_BYTES} bytes.`)
+    if (sha256(bytes) !== input.expected_content_sha256) throw new Error("Exact content source SHA256 hash mismatch; authority was not written.")
+    return bytes
+  } finally { await handle.close() }
+}
+
 export async function recordKnowledgeArtifact(projectRoot, input) {
   const root = assertRoot(projectRoot)
   if (!input?.owner_confirmed) throw new Error("Knowledge artifact write stopped: explicit owner authorization for this artifact is required.")
   if (!ARTIFACT_TYPES.has(input.artifact_type)) throw new Error("Unsupported artifact_type.")
   if (!safeId(input.artifact_id)) throw new Error("artifact_id must be a stable ID using letters, numbers, dot, underscore, colon, or hyphen.")
-  if (!String(input.title ?? "").trim() || !String(input.content ?? "").trim()) throw new Error("An artifact title and content are required.")
+  const exactMode = input.content_source_path !== undefined || input.expected_content_sha256 !== undefined
+  if (!String(input.title ?? "").trim() || (!exactMode && !String(input.content ?? "").trim())) throw new Error("An artifact title and content are required.")
   if (!ARTIFACT_STATUSES.has(input.status)) throw new Error("Unsupported artifact status.")
-  if (Buffer.byteLength(input.content, "utf8") > MAX_ARTIFACT_BYTES) throw new Error(`Artifact content exceeds ${MAX_ARTIFACT_BYTES} bytes.`)
-  const sourceRefs = [...new Set(input.source_refs ?? [])]
+  const exactContent = exactMode ? await readExactApprovedContent(root, input) : null
+  if (!exactMode && Buffer.byteLength(input.content, "utf8") > MAX_ARTIFACT_BYTES) throw new Error(`Artifact content exceeds ${MAX_ARTIFACT_BYTES} bytes.`)
+  const sourceRefs = [...new Set([...(input.source_refs ?? []), ...(exactMode ? [input.content_source_path] : [])])]
   const parentRefs = [...new Set(input.parent_refs ?? [])]
   if ([...sourceRefs, ...parentRefs].some((ref) => typeof ref !== "string" || !ref.trim() || ref.length > 4000)) throw new Error("source_refs and parent_refs must contain non-empty exact reference strings of at most 4000 characters.")
   if (["raw-research", "research-compendium", "research-synthesis"].includes(input.artifact_type) && sourceRefs.length === 0) {
@@ -683,8 +719,8 @@ export async function recordKnowledgeArtifact(projectRoot, input) {
   await ensureSafeParents(root, destination)
   await mkdir(dirname(destination), { recursive: true })
   const createdAt = new Date().toISOString()
-  const artifactContent = input.artifact_type === "raw-research" ? String(input.content) : String(input.content).trimEnd()
-  const envelope = [
+  const artifactContent = exactContent ?? (input.artifact_type === "raw-research" ? String(input.content) : String(input.content).trimEnd())
+  const envelope = exactContent ?? [
     "---",
     `artifact_id: ${JSON.stringify(input.artifact_id)}`,
     `artifact_type: ${JSON.stringify(input.artifact_type)}`,
@@ -698,6 +734,7 @@ export async function recordKnowledgeArtifact(projectRoot, input) {
     "",
     artifactContent,
   ].join("\n")
+  const contentHash = sha256(envelope)
   try { await writeFile(destination, envelope, { flag: "wx" }) } catch (error) {
     if (error.code === "EEXIST") throw new Error(`Artifact already exists at ${path}; use a new versioned artifact_id instead of replacing history.`)
     throw error
@@ -706,12 +743,12 @@ export async function recordKnowledgeArtifact(projectRoot, input) {
     source_id: input.artifact_id,
     source_system: "harness-artifact",
     source_ref: path,
-    source_revision: sha256(envelope),
+    source_revision: contentHash,
     retrieved_at: createdAt,
     classification: input.artifact_type.toUpperCase().replaceAll("-", "_"),
     declared_authority: input.status === "APPROVED" ? "APPROVED" : input.status === "RAW" ? "RAW" : "UNKNOWN",
     import_status: input.status === "APPROVED" ? "OWNER_APPROVED_ARTIFACT" : "RECORDED_ARTIFACT",
-    sha256: sha256(envelope),
+    sha256: contentHash,
     byte_size: Buffer.byteLength(envelope, "utf8"),
     media_type: "text",
     relationships: [...new Set([...sourceRefs, ...parentRefs])],
@@ -719,6 +756,7 @@ export async function recordKnowledgeArtifact(projectRoot, input) {
     unresolved_relationships: [],
     archive_path: path,
     declared_title: String(input.title).trim(),
+    ...(exactMode ? { content_source_path: input.content_source_path, expected_content_sha256: input.expected_content_sha256, approval_status: input.status, owner_confirmed: true, artifact_type: input.artifact_type } : {}),
   })
   index.records = index.records.filter((item) => sourceKey(item) !== sourceKey(record))
   index.records.push(record)
