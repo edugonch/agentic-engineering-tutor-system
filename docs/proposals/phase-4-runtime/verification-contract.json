@@ -1,7 +1,7 @@
 {
   "source_wu_id": "WU-P4-RESOLVEBINARY-ABSOLUTE-001",
-  "source_wu_revision": "proposal-v1",
-  "source_wu_hash": "5808858faa80dc8fdc19cfd87306661ddc8e413f790d3d53c34f3623df70aec7",
+  "source_wu_revision": "proposal-v2",
+  "source_wu_hash": "3239664b2de642325aca8b0ff2a7f6c22a3219a6aa247aa01e8e8f94b034ad0f",
   "commands": [
     {
       "id": "resolver-acceptance",

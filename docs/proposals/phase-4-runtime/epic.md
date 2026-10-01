@@ -2,6 +2,10 @@
 
 **PROPOSED — OWNER REVIEW REQUIRED — NO EXECUTION AUTHORITY**
 
+Packet **v2** changes only implementation/WU provenance bindings following the
+exact-approved registration amendment. Approval of packet v1 at `0a9db5c6...`
+does not approve these changed bytes. New explicit owner approval is required.
+
 This document is a finite Epic proposal. Its machine-readable envelope is a
 proposal, not a synthesized live mandate. Nothing here approves an artifact,
 activates a WU, launches a specialist or starts runtime proof. Approval must be a
@@ -29,10 +33,10 @@ one WU and budget, with fresh independent evidence and bounded tooling recovery.
 | Future mandate ID | `P4-RESOLVEBINARY-ABSOLUTE-001-MANDATE-001` |
 | Mandate revision | Content-addressed revision of this exact Epic artifact when explicitly owner-approved; no fabricated revision now |
 | WU contract | `docs/proposals/phase-4-runtime/wu-contract.md` |
-| WU contract SHA-256 | `5808858faa80dc8fdc19cfd87306661ddc8e413f790d3d53c34f3623df70aec7` |
+| WU contract SHA-256 | `3239664b2de642325aca8b0ff2a7f6c22a3219a6aa247aa01e8e8f94b034ad0f` |
 | Verification contract | `docs/proposals/phase-4-runtime/verification-contract.json` |
 | Immutable normative verification hash | `f1d7ae2de6f5ca2ada64f1d62dedb9dddc32c27656fb839aedd350743f1e9753` |
-| Implementation/required loaded revision | `d385a84c5cae0e4fdd342ca856b7c434344c486d` |
+| Implementation/required loaded revision | `f23251c8b820a73fcf0b280a2faf32034fd756a3` |
 | Changed paths | `src/resolve-binary.js`, `tests/resolvebinary-executable.test.js` only |
 | Policy | version 1, `max_wus = 1`, `max_repair_cycles = 1`, cumulative 1800 seconds |
 
@@ -42,6 +46,12 @@ non-executable file null; simple-name PATH search and executable-bit semantics
 preserved. Approval binds that exact document and the complete frozen verification
 commands, not a shortened summary or a substitute task. Approved artifact metadata
 would carry owner authority without editing these proposed contract bytes.
+
+After v2 owner approval, use the amended exact registration inputs:
+`content_source_path = docs/proposals/phase-4-runtime/epic.md` and
+`expected_content_sha256 = SHA256(the exact owner-approved v2 Epic bytes)`.
+Do not supply model-generated `content`. The stored archive/revision must match
+that approved digest; any mismatch stops authority derivation.
 
 ## Explicit proposed injection authority
 
@@ -105,7 +115,7 @@ This line is intentionally compatible with the accepted parser. It is inert here
 the controller additionally requires an integrity-checked owner-APPROVED Epic
 record in the knowledge index, which has **not** been created for this proposal.
 
-execution_mandate: {"max_wus":1,"total_seconds":1800,"repair_policy":{"version":1,"max_repair_cycles":1,"wu_id":"WU-P4-RESOLVEBINARY-ABSOLUTE-001","wu_contract_path":"docs/proposals/phase-4-runtime/wu-contract.md","wu_contract_hash":"5808858faa80dc8fdc19cfd87306661ddc8e413f790d3d53c34f3623df70aec7","allowed_paths":["src/resolve-binary.js","tests/resolvebinary-executable.test.js"],"verification_contract_hash":"f1d7ae2de6f5ca2ada64f1d62dedb9dddc32c27656fb839aedd350743f1e9753","base_files":[{"path":"package.json","type":"file","mode":"100644","sha256":"67a58a43a0ac909e3d1b6c20a0ab6e07bedf9179e60e978302205766dadc0a1d"}],"build_seconds":300,"repair_seconds":300,"review_seconds":300,"recovery_actions":[{"id":"restore-ready","class":"BLOCKED_TOOLING","actor":"harness-builder","tool":"shell","input":{"command":"node -e 'require(\"node:fs\").writeFileSync(\"/Users/poseidon/Documents/agentic-engineering-tutor-system/agentic-engineering-tutor-system/.harness/execution/runtime-fixtures/phase4-resolvebinary-absolute-v1/ready.txt\",\"READY\\n\",{flag:\"wx\",mode:0o600})'","workdir":"/Users/poseidon/Documents/agentic-engineering-tutor-system/agentic-engineering-tutor-system","timeout":10000},"reserved_seconds":120,"success_check_id":"tooling-ready"}]}}
+execution_mandate: {"max_wus":1,"total_seconds":1800,"repair_policy":{"version":1,"max_repair_cycles":1,"wu_id":"WU-P4-RESOLVEBINARY-ABSOLUTE-001","wu_contract_path":"docs/proposals/phase-4-runtime/wu-contract.md","wu_contract_hash":"3239664b2de642325aca8b0ff2a7f6c22a3219a6aa247aa01e8e8f94b034ad0f","allowed_paths":["src/resolve-binary.js","tests/resolvebinary-executable.test.js"],"verification_contract_hash":"f1d7ae2de6f5ca2ada64f1d62dedb9dddc32c27656fb839aedd350743f1e9753","base_files":[{"path":"package.json","type":"file","mode":"100644","sha256":"67a58a43a0ac909e3d1b6c20a0ab6e07bedf9179e60e978302205766dadc0a1d"}],"build_seconds":300,"repair_seconds":300,"review_seconds":300,"recovery_actions":[{"id":"restore-ready","class":"BLOCKED_TOOLING","actor":"harness-builder","tool":"shell","input":{"command":"node -e 'require(\"node:fs\").writeFileSync(\"/Users/poseidon/Documents/agentic-engineering-tutor-system/agentic-engineering-tutor-system/.harness/execution/runtime-fixtures/phase4-resolvebinary-absolute-v1/ready.txt\",\"READY\\n\",{flag:\"wx\",mode:0o600})'","workdir":"/Users/poseidon/Documents/agentic-engineering-tutor-system/agentic-engineering-tutor-system","timeout":10000},"reserved_seconds":120,"success_check_id":"tooling-ready"}]}}
 
 ## Future examination sequence, only after explicit approval
 
