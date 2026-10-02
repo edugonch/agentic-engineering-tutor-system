@@ -113,12 +113,12 @@ Environment overrides:
 
 | Variable | Default | Effect |
 |---|---:|---|
-| `HARNESS_MAX_TOOL_CALLS` | `40` | Tool executions allowed in one OpenCode session run |
-| `HARNESS_MAX_DELEGATIONS` | `3` | Calls to OpenCode's `subagent` tool allowed in one session run |
+| `HARNESS_MAX_TOOL_CALLS` | `250` | Emergency tool-execution ceiling in one OpenCode session run |
+| `HARNESS_MAX_DELEGATIONS` | `16` | Emergency delegation ceiling in one session run |
 | `HARNESS_MAX_IDENTICAL_MUTATIONS` | `4` | Consecutive identical `subagent`, `bash`, `write`, `edit`, `patch`, or `apply_patch` calls before the circuit breaker trips |
 | `HARNESS_MAX_OUTPUT_TOKENS` | Disabled | Optional upper bound for each agent-loop response; when set, OpenCode receives this output-token limit |
 
-Each OpenCode session, including each subagent session, has its own counters; a new prompt resets that session's action budget. The per-session call ceiling and orchestrator delegation ceiling give a finite action bound, while agent `steps` limits usually stop earlier. This is not a precise dollar ceiling: input-token use and provider-side retries/cost reporting can vary. Configure provider spending limits as a second control.
+Each OpenCode session, including each subagent session, has its own counters; a new prompt resets that session's emergency-fuse counters. These ceilings are runaway fuses, not execution budgets or grants of authority: durable budgets, funded reservations, repair/recovery limits and NO_PROGRESS semantics remain independently enforced. Specialists remain unable to delegate. Agent `steps` limits usually stop earlier. This is not a precise dollar ceiling: input-token use and provider-side retries/cost reporting can vary. Configure provider spending limits as a second control.
 
 ## Development
 

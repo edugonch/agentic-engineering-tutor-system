@@ -9,8 +9,9 @@ function positiveInteger(value, fallback) {
 
 export function readGuardSettings(env = {}) {
   return {
-    maxToolCalls: positiveInteger(env.HARNESS_MAX_TOOL_CALLS, 40),
-    maxDelegations: positiveInteger(env.HARNESS_MAX_DELEGATIONS, 3),
+    // Emergency runaway fuses, not durable execution budgets or authority.
+    maxToolCalls: positiveInteger(env.HARNESS_MAX_TOOL_CALLS, 250),
+    maxDelegations: positiveInteger(env.HARNESS_MAX_DELEGATIONS, 16),
     maxIdenticalMutations: positiveInteger(env.HARNESS_MAX_IDENTICAL_MUTATIONS, 4),
     // A provider-agnostic default can break model adapters that reject the
     // output-token parameter OpenCode derives from this option. Keep the

@@ -373,7 +373,7 @@ test('P4 review R1: controller consequential tools cannot bypass a funded dispat
   const guard = createExecutionGuard(root, { session: { get: async () => ({}) } })
   for (const stage of ['before build', 'after rejected review']) {
     if (stage === 'after rejected review') await rejectedA()
-    for (const tool of ['shell', 'patch', 'webfetch', 'execute']) {
+    for (const tool of ['shell', 'patch', 'edit', 'webfetch', 'execute']) {
       await assert.rejects(guard.beforeTool({ sessionID: 'owner', tool, input: {} }), /funded|reservation|dispatch/)
     }
     await guard.beforeTool({ sessionID: 'owner', tool: 'read', input: { path: 'wu.md' } })
@@ -444,3 +444,129 @@ test('P4 review R4: invalid legacy logs are isolated, relevant history and corru
   await writeLog(log, [...events, { ...bad, sequence: events.length + 1, previous_revision: events.length, next_revision: events.length + 1 }])
   await assert.rejects(guard.beforeTool({ sessionID: 'owner', tool: 'read', input: {} }), /dispatch|projection|Phase 4|BLOCKED_PERMISSION/i)
 }))
+
+function wrappedController(input, notation = 'bracket') {
+  return {
+    sessionID: input.session_id ?? 'owner',
+    tool: 'execute',
+    input: { code: `return await ${notation === 'dot' ? 'tools.harness_execution_controller' : 'tools["harness_execution_controller"]'}(${JSON.stringify(input)})` },
+    id: 'wrapped-call',
+  }
+}
+
+test('P4 transport: controller-session wrapped read reaches the same authority checks as direct', async () => fixture(async ({ root, call }) => {
+  const { createExecutionGuard } = await import('../../src/execution/runtime-guard.js')
+  const guard = createExecutionGuard(root, { session: { get: async () => ({}) } })
+  for (const notation of ['bracket', 'dot']) {
+    await guard.beforeTool(wrappedController({ action: 'status', execution_id: 'E' }, notation))
+    // Wrapped mutation from controller session is admitted exactly like a direct call.
+    await guard.beforeTool(wrappedController({ action: 'reserve', execution_id: 'E', dispatch_id: 'wrapped-build', purpose: 'BUILD', reserved_seconds: 10 }, notation))
+  }
+  // The guard itself does not execute the tool; verify controller state is untouched.
+  const s = await call({ action: 'status' })
+  assert.equal(s.budget.reserved_seconds, 0)
+}))
+
+test('P4 transport: wrapped mismatched session_id is rejected for mutations', async () => fixture(async ({ root }) => {
+  const { createExecutionGuard } = await import('../../src/execution/runtime-guard.js')
+  const guard = createExecutionGuard(root, { session: { get: async () => ({}) } })
+  const event = wrappedController({ action: 'reserve', execution_id: 'E', dispatch_id: 'x', purpose: 'BUILD', reserved_seconds: 10 })
+  event.sessionID = 'owner'
+  event.input.code = `return await tools["harness_execution_controller"](${JSON.stringify({ action: 'reserve', execution_id: 'E', dispatch_id: 'x', purpose: 'BUILD', reserved_seconds: 10, session_id: 'other' })})`
+  await assert.rejects(guard.beforeTool(event), /session identity|impersonat/i)
+}))
+
+test('P4 transport: wrapped specialist mutation is rejected', async () => fixture(async ({ root, call }) => {
+  const { createExecutionGuard } = await import('../../src/execution/runtime-guard.js')
+  await call({ action: 'reserve', dispatch_id: 'build', purpose: 'BUILD', reserved_seconds: 10 })
+  await call({ action: 'prepare_launch', dispatch_id: 'build' })
+  await call({ action: 'record_launch', dispatch_id: 'build', launch_session_id: 'build-session' })
+  const guard = createExecutionGuard(root, { session: { get: async () => ({}) } })
+  for (const notation of ['bracket', 'dot']) {
+    const event = wrappedController({ action: 'reserve', execution_id: 'E', dispatch_id: 'other', purpose: 'BUILD', reserved_seconds: 10 }, notation)
+    event.sessionID = 'build-session'
+    await assert.rejects(guard.beforeTool(event), /Specialist cannot mutate/)
+  }
+}))
+
+test('P4 transport: exact live specialist wrapped mutation is denied before the lease, even before its dispatch binding lands', async () => fixture(async ({ root, call }) => {
+  const { createExecutionGuard } = await import('../../src/execution/runtime-guard.js')
+  await call({ action: 'reserve', dispatch_id: 'build', purpose: 'BUILD', reserved_seconds: 10 })
+  await call({ action: 'prepare_launch', dispatch_id: 'build' })
+  const ctx = { session: { get: async ({ sessionID }) => ({ parentID: sessionID === 'child-canary' ? 'owner' : undefined }) } }
+  const code = 'return await tools.harness_execution_controller({\n  action: "checkpoint",\n  execution_id: "E",\n  checkpoint_id: "specialist-mutation-canary"\n})'
+  const core = await createExecutionController({ dir: join(root, '.harness/execution/controller/E') })
+
+  // The specialist mutation and its dispatch-binding call can arrive in the same
+  // assistant turn. The mutation must be denied even when the binding is not yet
+  // visible, before any controller tool execution, lease acquisition or revision.
+  const beforeRace = await core.snapshot()
+  const guard = createExecutionGuard(root, ctx)
+  await assert.rejects(
+    guard.beforeTool({ sessionID: 'child-canary', agent: 'harness-builder', tool: 'execute', input: { code }, id: 'wrapped-race' }),
+    /Specialist cannot mutate execution authority/,
+  )
+  // A direct harness_execution_controller call from the same specialist is identical.
+  await assert.rejects(
+    createExecutionGuard(root, ctx).beforeTool({ sessionID: 'child-canary', agent: 'harness-builder', tool: 'harness_execution_controller', input: { action: 'checkpoint', execution_id: 'E', checkpoint_id: 'direct-race' }, id: 'direct-race' }),
+    /Specialist cannot mutate execution authority/,
+  )
+  const afterRace = await core.snapshot()
+  assert.equal(afterRace.state.revision, beforeRace.state.revision)
+  assert.equal(afterRace.lease?.holder_session_id, beforeRace.lease?.holder_session_id)
+  assert.equal(afterRace.lease?.fencing_token, beforeRace.lease?.fencing_token)
+
+  // Sequential live shape: owner claims the launch, the child binds it with a read,
+  // then the specialty mutation is denied with the same authority error.
+  await guard.beforeTool({ sessionID: 'owner', tool: 'subagent', id: 'launch-canary', input: { agent: 'harness-builder', prompt: 'build exact WU' } })
+  await guard.beforeTool({ sessionID: 'child-canary', agent: 'harness-builder', tool: 'read', input: { path: 'wu.md' }, id: 'bind-read' })
+  const launched = await call({ action: 'status' })
+  assert.equal(launched.dispatches[0].status, 'launched')
+  assert.equal(launched.dispatches[0].session_id, 'child-canary')
+  const beforeBound = await core.snapshot()
+  await assert.rejects(
+    guard.beforeTool({ sessionID: 'child-canary', agent: 'harness-builder', tool: 'execute', input: { code }, id: 'wrapped-launched' }),
+    /Specialist cannot mutate execution authority/,
+  )
+  const afterBound = await core.snapshot()
+  assert.equal(afterBound.state.revision, beforeBound.state.revision)
+  assert.equal(afterBound.lease?.holder_session_id, beforeBound.lease?.holder_session_id)
+  assert.equal(afterBound.lease?.fencing_token, beforeBound.lease?.fencing_token)
+}))
+
+test('P4 transport: unfunded wrapped controller mutation remains rejected under budget exhaustion', async () => fixture(async ({ root, call, rejectedA, authorize }) => {
+  const { createExecutionGuard } = await import('../../src/execution/runtime-guard.js')
+  const a = await rejectedA()
+  await authorize(a)
+  const guard = createExecutionGuard(root, { session: { get: async () => ({}) } })
+  await assert.rejects(guard.beforeTool(wrappedController({ action: 'reserve', execution_id: 'E', dispatch_id: 'escape', purpose: 'BUILD', reserved_seconds: 10 })), /BUDGET_EXHAUSTED|blocked/i)
+}, { seconds: 25 }))
+
+test('P4 transport: generic execute does not acquire controller settlement privileges', async () => fixture(async ({ root }) => {
+  const { createExecutionGuard } = await import('../../src/execution/runtime-guard.js')
+  const guard = createExecutionGuard(root, { session: { get: async () => ({}) } })
+  await assert.rejects(guard.beforeTool({ sessionID: 'owner', tool: 'execute', input: { code: 'return 42' }, id: 'generic' }), /funded|reservation|dispatch/)
+  await assert.rejects(guard.beforeTool({ sessionID: 'owner', tool: 'execute', input: { code: 'return await tools["harness_execution_controller"]({ action: "status", execution_id: "E" }) + 1' }, id: 'generic' }), /funded|reservation|dispatch/)
+  await assert.rejects(guard.beforeTool({ sessionID: 'owner', tool: 'execute', input: { code: 'const x = await tools.harness_execution_controller({ action: "status", execution_id: "E" }); return { x, extra: 42 }' }, id: 'smuggled' }), /funded|reservation|dispatch/)
+}))
+
+test('P4 transport: afterTool records wrapped controller recovery action evidence consistently', async () => fixture(async ({ root, call, rejectedA }) => {
+  const { createExecutionGuard } = await import('../../src/execution/runtime-guard.js')
+  const a = await rejectedA()
+  await call({ action: 'block', blocker_id: 't', class: 'BLOCKED_TOOLING', failure_signature: 'resource' })
+  const input = { action: 'authorize_recovery', blocker_id: 't', recovery_action_id: 'ctl-restore', dispatch_id: 'r', hypothesis: 'restore', progress_evidence_ids: ['t'] }
+  await call(input)
+  await call({ action: 'reserve', dispatch_id: 'r', purpose: 'RECOVERY', candidate_id: a.candidate_id, reserved_seconds: 5 })
+  await call({ action: 'prepare_launch', dispatch_id: 'r' })
+  await call({ action: 'record_launch', dispatch_id: 'r', launch_session_id: 'recovery-session' })
+  const guard = createExecutionGuard(root, { session: { get: async () => ({}) } })
+  const event = wrappedController({ action: 'status', execution_id: 'E' })
+  event.sessionID = 'recovery-session'
+  event.agent = 'harness-builder'
+  await guard.beforeTool(event)
+  await guard.afterTool({ ...event, status: 'completed', result: { ok: true } })
+  const core = await createExecutionController({ dir: join(root, '.harness/execution/controller/E') })
+  const snap = await core.snapshot()
+  assert.equal(snap.state.recoveries.t.action_evidence.status, 'PASS')
+  assert.equal(snap.state.recoveries.t.action_evidence.tool_call_id, 'wrapped-call')
+}, { overrides: { recovery_actions: [{ id: 'ctl-restore', class: 'BLOCKED_TOOLING', actor: 'harness-builder', tool: 'harness_execution_controller', input: { action: 'status', execution_id: 'E' }, reserved_seconds: 5, success_check_id: 'check' }] } }))

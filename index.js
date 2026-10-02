@@ -131,7 +131,7 @@ export default Plugin.define({
       await jevAudit.write(record)
     }
 
-    // A fresh user prompt starts a new per-session action budget.
+    // A fresh user prompt resets per-session emergency fuses, never durable budgets.
     await ctx.session.hook("prompt", (event) => {
       if (!continuation.isInternalPrompt(event.sessionID)) {
         guard.reset(event.sessionID)

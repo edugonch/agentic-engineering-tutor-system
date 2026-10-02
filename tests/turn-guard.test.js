@@ -4,11 +4,31 @@ import { applyOutputTokenCap, createTurnGuard, readGuardSettings } from "../src/
 
 test("applies defaults and ignores invalid limit overrides", () => {
   assert.deepEqual(readGuardSettings({ HARNESS_MAX_TOOL_CALLS: "0" }), {
-    maxToolCalls: 40,
-    maxDelegations: 3,
+    maxToolCalls: 250,
+    maxDelegations: 16,
     maxIdenticalMutations: 4,
     maxOutputTokens: null,
   })
+})
+
+test("default emergency fuses allow governed build-review-repair-review and stop at their ceilings", () => {
+  const guard = createTurnGuard()
+  for (const description of ["build", "review", "repair", "review repaired candidate"]) {
+    assert.doesNotThrow(() => guard.before({ tool: "subagent", sessionID: "governed" }, { args: { description } }))
+  }
+  for (let i = 4; i < 16; i++) {
+    guard.before({ tool: "subagent", sessionID: "governed" }, { args: { description: `work-${i}` } })
+  }
+  assert.throws(() => guard.before({ tool: "subagent", sessionID: "governed" }, { args: { description: "overflow" } }), /exceeded 16 subagent delegations/)
+  for (let i = 0; i < 250; i++) guard.before({ tool: "read", sessionID: "reads" }, { args: {} })
+  assert.throws(() => guard.before({ tool: "read", sessionID: "reads" }, { args: {} }), /exceeded 250 tool calls/)
+})
+
+test("preserves environment overrides for emergency fuses", () => {
+  const settings = readGuardSettings({ HARNESS_MAX_TOOL_CALLS: "41", HARNESS_MAX_DELEGATIONS: "5" })
+  assert.equal(settings.maxToolCalls, 41)
+  assert.equal(settings.maxDelegations, 5)
+  assert.equal(settings.maxIdenticalMutations, 4)
 })
 
 test("leaves provider request options untouched unless the output-token cap is explicitly enabled", () => {

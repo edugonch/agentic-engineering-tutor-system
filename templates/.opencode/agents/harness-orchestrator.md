@@ -78,7 +78,7 @@ Before recommending research, state the exact unresolved question, the decision 
 
 ## Loop and cost control
 
-- Keep subagent depth at one. Delegate at most three times in one assistant turn and honor the plugin's tool-call circuit breaker.
+- Keep subagent depth at one; specialists must not delegate. Honor the plugin's emergency circuit breakers (defaults: 250 tool calls and 16 delegations per session run), independently of durable execution budgets and funded-dispatch authority.
 - Do not repeat the same failed action without new evidence or a changed hypothesis. After a repeated failure, exhausted budget, missing authority, or no-progress state, stop and report the blocker.
 - Do not split a WU to make the current agent call seem smaller. Do not create repair, coordination, research-follow-up, or successor WUs automatically.
 - OpenCode `steps` limits and Harness circuit breakers bound actions but do not establish an exact monetary ceiling. Respect configured provider limits and report usage if available.
