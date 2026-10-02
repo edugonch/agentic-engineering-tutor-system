@@ -2,9 +2,11 @@
 
 **PROPOSED — OWNER REVIEW REQUIRED — NO EXECUTION AUTHORITY**
 
-Packet **v3** changes only implementation/WU provenance bindings and the `-002`
-proposal identity suffix, following the reviewed combined emergency-cap and
-controller-transport amendment. Approval of packet v2 at `f0532e5f...` (or v1 at
+Packet **v4** changes only implementation/WU provenance bindings, adding the
+reviewed Q1 controller authority-boundary correction on top of the combined
+emergency-cap and controller-transport amendment, and keeps the same `-002`
+identities. Packet v3 at `1f1f3753...` was never approved or registered, so no new
+identity suffix is needed; approval of packet v2 at `f0532e5f...` (or v1 at
 `0a9db5c6...`) does not approve these changed bytes. New explicit owner approval
 is required. The superseded `-001` proposal under `docs/proposals/phase-4-runtime/`
 is preserved unchanged; its approved bytes are not rewritten.
@@ -36,10 +38,10 @@ one WU and budget, with fresh independent evidence and bounded tooling recovery.
 | Future mandate ID | `P4-RESOLVEBINARY-ABSOLUTE-002-MANDATE-001` |
 | Mandate revision | Content-addressed revision of this exact Epic artifact when explicitly owner-approved; no fabricated revision now |
 | WU contract | `docs/proposals/phase-4-runtime-002/wu-contract.md` |
-| WU contract SHA-256 | `73227603b3ff0726f4099096abd3d4e08c9992fc4519e7ea1bbbf207f665153e` |
+| WU contract SHA-256 | `274791db70fcb0ae26acf9619d32ebf885a73848a45c3d101c48ead3308b9ba6` |
 | Verification contract | `docs/proposals/phase-4-runtime-002/verification-contract.json` |
 | Immutable normative verification hash | `f1d7ae2de6f5ca2ada64f1d62dedb9dddc32c27656fb839aedd350743f1e9753` |
-| Implementation/required loaded revision | `384bd085fa31085456ac1f2552ad922d2f43e74a` |
+| Implementation/required loaded revision | `b471c6092ef346f5557655bdfb3a67660e3be437` |
 | Changed paths | `src/resolve-binary.js`, `tests/resolvebinary-executable.test.js` only |
 | Policy | version 1, `max_wus = 1`, `max_repair_cycles = 1`, cumulative 1800 seconds |
 
@@ -50,9 +52,9 @@ preserved. Approval binds that exact document and the complete frozen verificati
 commands, not a shortened summary or a substitute task. Approved artifact metadata
 would carry owner authority without editing these proposed contract bytes.
 
-After v3 owner approval, use the amended exact registration inputs:
+After v4 owner approval, use the amended exact registration inputs:
 `content_source_path = docs/proposals/phase-4-runtime-002/epic.md` and
-`expected_content_sha256 = SHA256(the exact owner-approved v3 Epic bytes)`.
+`expected_content_sha256 = SHA256(the exact owner-approved v4 Epic bytes)`.
 Do not supply model-generated `content`. The stored archive/revision must match
 that approved digest; any mismatch stops authority derivation.
 
@@ -118,7 +120,7 @@ This line is intentionally compatible with the accepted parser. It is inert here
 the controller additionally requires an integrity-checked owner-APPROVED Epic
 record in the knowledge index, which has **not** been created for this proposal.
 
-execution_mandate: {"max_wus":1,"total_seconds":1800,"repair_policy":{"version":1,"max_repair_cycles":1,"wu_id":"WU-P4-RESOLVEBINARY-ABSOLUTE-002","wu_contract_path":"docs/proposals/phase-4-runtime-002/wu-contract.md","wu_contract_hash":"73227603b3ff0726f4099096abd3d4e08c9992fc4519e7ea1bbbf207f665153e","allowed_paths":["src/resolve-binary.js","tests/resolvebinary-executable.test.js"],"verification_contract_hash":"f1d7ae2de6f5ca2ada64f1d62dedb9dddc32c27656fb839aedd350743f1e9753","base_files":[{"path":"package.json","type":"file","mode":"100644","sha256":"67a58a43a0ac909e3d1b6c20a0ab6e07bedf9179e60e978302205766dadc0a1d"}],"build_seconds":300,"repair_seconds":300,"review_seconds":300,"recovery_actions":[{"id":"restore-ready","class":"BLOCKED_TOOLING","actor":"harness-builder","tool":"shell","input":{"command":"node -e 'require(\"node:fs\").writeFileSync(\"/Users/poseidon/Documents/agentic-engineering-tutor-system/agentic-engineering-tutor-system/.harness/execution/runtime-fixtures/phase4-resolvebinary-absolute-v1/ready.txt\",\"READY\\n\",{flag:\"wx\",mode:0o600})'","workdir":"/Users/poseidon/Documents/agentic-engineering-tutor-system/agentic-engineering-tutor-system","timeout":10000},"reserved_seconds":120,"success_check_id":"tooling-ready"}]}}
+execution_mandate: {"max_wus":1,"total_seconds":1800,"repair_policy":{"version":1,"max_repair_cycles":1,"wu_id":"WU-P4-RESOLVEBINARY-ABSOLUTE-002","wu_contract_path":"docs/proposals/phase-4-runtime-002/wu-contract.md","wu_contract_hash":"274791db70fcb0ae26acf9619d32ebf885a73848a45c3d101c48ead3308b9ba6","allowed_paths":["src/resolve-binary.js","tests/resolvebinary-executable.test.js"],"verification_contract_hash":"f1d7ae2de6f5ca2ada64f1d62dedb9dddc32c27656fb839aedd350743f1e9753","base_files":[{"path":"package.json","type":"file","mode":"100644","sha256":"67a58a43a0ac909e3d1b6c20a0ab6e07bedf9179e60e978302205766dadc0a1d"}],"build_seconds":300,"repair_seconds":300,"review_seconds":300,"recovery_actions":[{"id":"restore-ready","class":"BLOCKED_TOOLING","actor":"harness-builder","tool":"shell","input":{"command":"node -e 'require(\"node:fs\").writeFileSync(\"/Users/poseidon/Documents/agentic-engineering-tutor-system/agentic-engineering-tutor-system/.harness/execution/runtime-fixtures/phase4-resolvebinary-absolute-v1/ready.txt\",\"READY\\n\",{flag:\"wx\",mode:0o600})'","workdir":"/Users/poseidon/Documents/agentic-engineering-tutor-system/agentic-engineering-tutor-system","timeout":10000},"reserved_seconds":120,"success_check_id":"tooling-ready"}]}}
 
 ## Future examination sequence, only after explicit approval
 
@@ -202,6 +204,17 @@ committed at `384bd085fa31085456ac1f2552ad922d2f43e74a` on
 (manifest `a6701095aea34177ce04a58d5ef231522c49ca98312b0c66c274385769ae1580`,
 tree `2cbca948e22f881f444654fd97024c5b9de9b504a30d1a2bcf75d6dea4a0595b`). All six
 declared checks passed through `harness_run_verification` and a fresh independent
+`harness-reviewer` returned PASS.
+
+The subsequent reviewed Q1 controller authority-boundary correction is committed
+at `b471c6092ef346f5557655bdfb3a67660e3be437` on `phase-4-bounded-repair`, with
+frozen candidate
+`cand-9f7dc2229ebb261b695c3093a09a55dce6a4e8fad104db5122fb0da1437c514c`
+(manifest `3282879d2a0f7f796e473f87289290eeb1d95089d2aeea5d68bf4f6365b15c3f`,
+tree `13fe0e2f94eb94008c850ed7971b30398367daa3c6b7cec303afe7ad4c9bf79c`). It moves
+the specialist controller-mutation guarantee to the real
+`harness_execution_controller` tool boundary so an unrecognized Code Mode wrapper
+cannot bypass it. All six declared checks passed and a fresh independent
 `harness-reviewer` returned PASS; evidence is recorded in
 `docs/phase-4-combined-amendment-review-evidence.md`. The `-001` proposal and its
 approved artifact bytes under `docs/proposals/phase-4-runtime/` remain preserved
@@ -219,6 +232,7 @@ PHASE_4_CONTRACT_GATE = PASS
 PHASE_4_BOOTSTRAP = PASS
 PHASE_4_BOOTSTRAP_REVIEW = PASS
 PHASE_4_COMBINED_AMENDMENT = PASS
+PHASE_4_Q1_AUTHORITY_BOUNDARY = PASS
 PHASE_4_RUNTIME_PROOF = PENDING
 PHASE_4 = UNVERIFIED
 ```

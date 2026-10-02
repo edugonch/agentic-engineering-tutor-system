@@ -5,8 +5,8 @@ owner review, not an activated Work Unit or an authorization to execute.
 
 - Proposed Epic: `EPIC-P4-RESOLVEBINARY-ABSOLUTE-002`.
 - Sole derived WU: `WU-P4-RESOLVEBINARY-ABSOLUTE-002`.
-- Contract revision: `proposal-v3`.
-- Bootstrap source baseline: `384bd085fa31085456ac1f2552ad922d2f43e74a`.
+- Contract revision: `proposal-v4`.
+- Bootstrap source baseline: `b471c6092ef346f5557655bdfb3a67660e3be437`.
 - Frozen Phase 4 design: `docs/phase-4-bounded-repair-and-blocker-resolution.md`,
   SHA-256 `82de3f16a69853871e567c592fe30b56f0c80706ef189b8f77682d7c1c794bda`.
 
