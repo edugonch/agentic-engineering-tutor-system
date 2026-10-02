@@ -1,7 +1,7 @@
 import test from "node:test"
 import assert from "node:assert/strict"
 import { spawnSync } from "node:child_process"
-import { extractControllerInvocation } from "../../src/execution/controller-transport.js"
+import { extractControllerInvocation, extractHarnessToolInvocation } from "../../src/execution/controller-transport.js"
 
 const wrap = (obj) => `return await tools["harness_execution_controller"](${JSON.stringify(obj)})`
 const wrapPretty = (obj) => `return await tools[
@@ -174,4 +174,73 @@ test("non-execute events are ignored", () => {
   assert.equal(extractControllerInvocation({ tool: "read", input: { path: "x" } }), null)
   assert.equal(extractControllerInvocation(null), null)
   assert.equal(extractControllerInvocation({ tool: "execute" }), null)
+})
+
+const WHITELIST = [
+  "harness_execution_controller",
+  "harness_freeze_candidate",
+  "harness_run_verification",
+  "harness_check_agent_readiness",
+  "harness_check_execution_readiness",
+  "harness_project_status",
+]
+
+test("direct whitelisted events are normalized unchanged", () => {
+  for (const tool of WHITELIST) {
+    const input = { wu_id: "W" }
+    assert.deepEqual(extractHarnessToolInvocation({ tool, input }), { tool, input })
+    assert.deepEqual(extractHarnessToolInvocation({ tool }), { tool, input: {} })
+  }
+})
+
+test("direct non-whitelisted events are ignored", () => {
+  for (const tool of ["read", "execute", "harness_search_knowledge", "harness_validate_story", "harness_initialize_project", "harness_record_knowledge_artifact"]) {
+    assert.equal(extractHarnessToolInvocation({ tool, input: {} }), null, tool)
+  }
+})
+
+test("exact wrappers are recognized for every whitelisted tool", () => {
+  for (const tool of WHITELIST) {
+    const dot = `return await tools.${tool}({ wu_id: "W" })`
+    assert.deepEqual(extractHarnessToolInvocation({ tool: "execute", input: { code: dot } }), { tool, input: { wu_id: "W" } }, dot)
+    const bracket = `return await tools["${tool}"]({ wu_id: "W" })`
+    assert.deepEqual(extractHarnessToolInvocation({ tool: "execute", input: { code: bracket } }), { tool, input: { wu_id: "W" } }, bracket)
+  }
+})
+
+test("wrappers for tools outside the whitelist are NOT normalized", () => {
+  for (const tool of ["harness_search_knowledge", "harness_validate_story", "harness_initialize_project", "harness_record_knowledge_artifact", "harness_discover_project_knowledge", "read", "shell", "subagent"]) {
+    const code = `return await tools["${tool}"]({ wu_id: "W" })`
+    assert.equal(extractHarnessToolInvocation({ tool: "execute", input: { code } }), null, code)
+  }
+})
+
+test("alias, dynamic, comment and multi-statement forms remain fail-closed for every whitelisted tool", () => {
+  for (const tool of WHITELIST) {
+    const cases = [
+      `const f = tools["${tool}"]; return await f({ wu_id: "W" })`,
+      `return await tools[name]({ wu_id: "W" })`,
+      `return await tools["harness_" + suffix]({ wu_id: "W" })`,
+      `// tools["${tool}"]({ wu_id: "W" })`,
+      `const x = 1; return await tools["${tool}"]({ wu_id: "W" })`,
+      `return await tools["${tool}"]({ wu_id: "W" }); console.log("done")`,
+      `return await tools["${tool}"]({ wu_id: eval("W") })`,
+      `return await tools['${tool}']({ wu_id: "W" })`,
+      `return await tools["${tool}"]()`,
+      `return await tools["${tool}"]({ wu_id: foo() })`,
+      `return await tools["${tool}"]({ wu_id: "W" }, extra)`,
+      `return await tools["${tool}"]({ get wu_id() { return "W" } })`,
+      `console.log("${tool}")`,
+    ]
+    for (const code of cases) {
+      assert.equal(extractHarnessToolInvocation({ tool: "execute", input: { code } }), null, `${tool}: ${code}`)
+    }
+  }
+})
+
+test("controller projection still only returns the controller tool", () => {
+  const code = 'return await tools.harness_freeze_candidate({ wu_id: "W" })'
+  assert.equal(extractControllerInvocation({ tool: "execute", input: { code } }), null)
+  const codeC = 'return await tools.harness_execution_controller({ action: "status" })'
+  assert.deepEqual(extractControllerInvocation({ tool: "execute", input: { code: codeC } }), { tool: "harness_execution_controller", input: { action: "status" } })
 })

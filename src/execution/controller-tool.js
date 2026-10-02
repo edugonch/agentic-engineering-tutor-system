@@ -25,6 +25,7 @@ import { assertControllerMutationAuthority } from "./controller-authority.js"
 import { createCandidateRegistry } from "./candidate-registry.js"
 import { readVerificationReceipt } from "./verification-results.js"
 import { findApprovedEpic } from "../project-knowledge.js"
+import { controllerStates } from "./ownership.js"
 import { DISPATCH_STATUS, RESERVATION_STATUS, MANDATE_AUTHORITY } from "./constants.js"
 
 function sanitizeId(raw, label) {
@@ -358,6 +359,57 @@ export async function runExecutionController(projectRoot, input, candidateRegist
   }
 
   throw new Error(`Unknown action: ${action}.`)
+}
+
+// Authoritative, transport-independent backstop at the real
+// `harness_freeze_candidate` tool boundary. Runs before any snapshot or
+// registry write. Freeze is owner-only (the calling session must be the
+// bound mandate controller), requires a settled BUILD/REPAIR handoff, no
+// unresolved blocker, and specialists can never freeze — regardless of how
+// the call was written (direct, recognized wrapper, alias or any
+// unrecognized Code Mode form).
+export async function assertToolFreezeAuthority(projectRoot, input, sessionID) {
+  const records = (await controllerStates(join(projectRoot, ".harness", "execution", "controller")))
+    .filter((r) => !r.projection_error && r.state?.mandate?.repair_policy)
+  for (const record of records) {
+    const s = record.state
+    if (s.mandate.controller_session_id !== sessionID) continue
+    if (record.effective_blocker ?? s.blocker) {
+      throw new Error("Freeze requires no unresolved blocker.")
+    }
+    const settled = Object.values(s.dispatches).some(
+      (d) => ["BUILD", "REPAIR"].includes(d.purpose) && d.status === "result_reconciled",
+    )
+    if (!settled) {
+      throw new Error("Freeze requires a settled BUILD/REPAIR handoff.")
+    }
+    return
+  }
+  throw new Error("Only the bound mandate controller session may freeze candidates.")
+}
+
+// Authoritative, transport-independent backstop at the real
+// `harness_run_verification` tool boundary. Runs before any candidate load or
+// execution. Verification requires a live (launched) REVIEW or RECOVERY
+// dispatch bound to the calling session and exactly this candidate — no
+// unreserved verification; anything else fails closed.
+export async function assertToolVerificationAuthority(projectRoot, input, sessionID) {
+  const records = (await controllerStates(join(projectRoot, ".harness", "execution", "controller")))
+    .filter((r) => !r.projection_error && r.state?.mandate?.repair_policy)
+  for (const record of records) {
+    const s = record.state
+    for (const d of Object.values(s.dispatches)) {
+      if (
+        d.status === "launched" &&
+        (d.purpose === "REVIEW" || d.purpose === "RECOVERY") &&
+        d.session_id === sessionID &&
+        d.candidate_id === input?.candidate_id
+      ) {
+        return
+      }
+    }
+  }
+  throw new Error("Verification requires a live REVIEW/RECOVERY dispatch bound to this candidate and session.")
 }
 
 // Authoritative, transport-independent backstop at the real

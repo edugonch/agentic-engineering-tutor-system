@@ -621,3 +621,114 @@ test('P4 transport: afterTool records wrapped controller recovery action evidenc
   assert.equal(snap.state.recoveries.t.action_evidence.status, 'PASS')
   assert.equal(snap.state.recoveries.t.action_evidence.tool_call_id, 'wrapped-call')
 }, { overrides: { recovery_actions: [{ id: 'ctl-restore', class: 'BLOCKED_TOOLING', actor: 'harness-builder', tool: 'harness_execution_controller', input: { action: 'status', execution_id: 'E' }, reserved_seconds: 5, success_check_id: 'check' }] } }))
+
+// Focused Phase 4 Code-Mode transport amendment: owner tools other than the
+// controller must keep their logical identity through the execute wrapper, and
+// real tool boundaries must be transport-independent.
+
+function wrappedHarness(tool, input, notation = 'dot') {
+  return {
+    sessionID: 'owner',
+    tool: 'execute',
+    input: { code: `return await ${notation === 'dot' ? `tools.${tool}` : `tools["${tool}"]`}(${JSON.stringify(input)})` },
+    id: `wrapped-${tool}`,
+  }
+}
+
+test('P4 transport: owner wrapped freeze admitted only after a settled BUILD/REPAIR handoff', async () => fixture(async ({ root, call, dispatch }) => {
+  const { createExecutionGuard } = await import('../../src/execution/runtime-guard.js')
+  const { assertToolFreezeAuthority } = await import('../../src/execution/controller-tool.js')
+  const guard = createExecutionGuard(root, { session: { get: async () => ({}) } })
+
+  // Before any BUILD/REPAIR settlement the same wrapper is rejected.
+  await assert.rejects(guard.beforeTool(wrappedHarness('harness_freeze_candidate', { wu_id: 'WU-P4' })), /funded|reservation|dispatch/)
+  await assert.rejects(assertToolFreezeAuthority(root, { wu_id: 'WU-P4' }, 'owner'), /settled|handoff/i)
+
+  await dispatch('build', 'BUILD')
+
+  // After one settled BUILD the owner wrapper is admitted by the guard...
+  await guard.beforeTool(wrappedHarness('harness_freeze_candidate', { wu_id: 'WU-P4' }))
+  await guard.beforeTool(wrappedHarness('harness_freeze_candidate', { wu_id: 'WU-P4' }, 'bracket'))
+  // ...and the real tool boundary admits the owner path.
+  await assertToolFreezeAuthority(root, { wu_id: 'WU-P4' }, 'owner')
+  // Unfunded generic execute stays rejected.
+  await assert.rejects(guard.beforeTool({ sessionID: 'owner', tool: 'execute', input: { code: 'return 42' }, id: 'generic' }), /funded|reservation|dispatch/)
+}))
+
+test('P4 transport: specialist cannot freeze via recognized wrapper or smuggled syntax', async () => fixture(async ({ root, call, dispatch, candidate }) => {
+  const { createExecutionGuard } = await import('../../src/execution/runtime-guard.js')
+  const { assertToolFreezeAuthority } = await import('../../src/execution/controller-tool.js')
+  const { extractHarnessToolInvocation } = await import('../../src/execution/controller-transport.js')
+  const a = await (async () => {
+    await dispatch('build', 'BUILD')
+    const cand = await candidate('A')
+    await call({ action: 'record_candidate', candidate_id: cand.candidate_id, dispatch_id: 'build' })
+    return cand
+  })()
+  // A live specialist (REVIEW) dispatch exists, so the session is bound.
+  await call({ action: 'reserve', dispatch_id: 'review-live', purpose: 'REVIEW', candidate_id: a.candidate_id, reserved_seconds: 10 })
+  await call({ action: 'prepare_launch', dispatch_id: 'review-live' })
+  await call({ action: 'record_launch', dispatch_id: 'review-live', launch_session_id: 'session-review-live' })
+  const guard = createExecutionGuard(root, { session: { get: async () => ({}) } })
+
+  // Recognized wrapper from a specialist dispatch is denied early.
+  const event = wrappedHarness('harness_freeze_candidate', { wu_id: 'WU-P4' })
+  event.sessionID = 'session-review-live'
+  event.agent = 'harness-reviewer'
+  await assert.rejects(guard.beforeTool(event), /delegate|authority|freeze/i)
+
+  // An unrecognized Code-Mode form reaches the real tool as generic execute;
+  // extraction stays null and the boundary itself fails closed.
+  const smuggled = "const f = tools['harness_freeze_candidate']; return await f({ wu_id: 'WU-P4' })"
+  assert.equal(extractHarnessToolInvocation({ tool: 'execute', input: { code: smuggled } }), null)
+  await assert.rejects(assertToolFreezeAuthority(root, { wu_id: 'WU-P4' }, 'session-review-live'), /mandate controller|owner/i)
+  await assert.rejects(assertToolFreezeAuthority(root, { wu_id: 'WU-P4' }, 'owner-but-not-bound'), /mandate controller|owner/i)
+}))
+
+test('P4 transport: reviewer wrapped verification admitted only with a live bound dispatch', async () => fixture(async ({ root, call, dispatch, candidate }) => {
+  const { createExecutionGuard } = await import('../../src/execution/runtime-guard.js')
+  const { assertToolVerificationAuthority } = await import('../../src/execution/controller-tool.js')
+  await dispatch('build', 'BUILD')
+  const a = await candidate('A')
+  await call({ action: 'record_candidate', candidate_id: a.candidate_id, dispatch_id: 'build' })
+  const guard = createExecutionGuard(root, { session: { get: async () => ({}) } })
+
+  // No valid REVIEW/RECOVERY dispatch for this session yet: both reject.
+  const code = (candidateId) => `return await tools.harness_run_verification({ candidate_id: ${JSON.stringify(candidateId)}, verification_check_id: 'check' })`
+  // Early call from a session bound only to a settled BUILD is rejected.
+  const early = { sessionID: 'session-build', agent: 'harness-builder', tool: 'execute', input: { code: code(a.candidate_id) }, id: 'v-early' }
+  await assert.rejects(guard.beforeTool(early), /settled|launched|reservation|reserved/i)
+  await assert.rejects(assertToolVerificationAuthority(root, { candidate_id: a.candidate_id }, 'session-review-live'), /live|bound/i)
+
+  await call({ action: 'reserve', dispatch_id: 'review-live', purpose: 'REVIEW', candidate_id: a.candidate_id, reserved_seconds: 10 })
+  await call({ action: 'prepare_launch', dispatch_id: 'review-live' })
+  await call({ action: 'record_launch', dispatch_id: 'review-live', launch_session_id: 'session-review-live' })
+
+  // Live REVIEW dispatch plus matching candidate: admitted through the wrapper.
+  await guard.beforeTool({ sessionID: 'session-review-live', agent: 'harness-reviewer', tool: 'execute', input: { code: code(a.candidate_id) }, id: 'v-live' })
+  await assertToolVerificationAuthority(root, { candidate_id: a.candidate_id }, 'session-review-live')
+
+  // Wrong candidate: rejected by both.
+  const wrong = 'cand-' + '0'.repeat(64)
+  await assert.rejects(guard.beforeTool({ sessionID: 'session-review-live', agent: 'harness-reviewer', tool: 'execute', input: { code: code(wrong) }, id: 'v-wrong' }), /candidate|bound/i)
+  await assert.rejects(assertToolVerificationAuthority(root, { candidate_id: wrong }, 'session-review-live'), /live|bound/i)
+
+  // An unreserved session cannot bind to the live dispatch at the boundary.
+  await assert.rejects(assertToolVerificationAuthority(root, { candidate_id: a.candidate_id }, 'intruder'), /live|bound/i)
+}))
+
+test('P4 transport: readiness/status wrapper diagnostics preserve current semantics', async () => fixture(async ({ root, call }) => {
+  const { createExecutionGuard } = await import('../../src/execution/runtime-guard.js')
+  const guard = createExecutionGuard(root, { session: { get: async () => ({}) } })
+  for (const [tool, input] of [['harness_project_status', {}], ['harness_check_agent_readiness', {}], ['harness_check_execution_readiness', { wu_id: 'WU-P4' }]]) {
+    // Wrapped diagnostics are admitted for the unreserved owner exactly like a
+    // direct call, with no dispatch and no blocker.
+    await guard.beforeTool(wrappedHarness(tool, input))
+    await guard.beforeTool({ sessionID: 'owner', tool, input })
+  }
+  // A wrapper for a tool outside the whitelist stays generic execute: rejected.
+  await assert.rejects(
+    guard.beforeTool({ sessionID: 'owner', tool: 'execute', input: { code: 'return await tools.harness_search_knowledge({ query: "abc" })' }, id: 'x' }),
+    /funded|reservation|dispatch/,
+  )
+}))

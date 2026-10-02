@@ -1,9 +1,15 @@
-// Controller transport adapter for Phase 4.
+// Harness tool transport adapter for Phase 4.
 //
 // OpenCode Code Mode wraps a single tool call in `execute({ code: ... })`.
 // The runtime guard sees ONLY the outer execute event, so this module
-// recognizes ONLY the observed dot/bracket wrappers for `harness_execution_controller`
-// and normalizes it to the logical tool/input.
+// recognizes ONLY the observed dot/bracket wrappers for a closed whitelist of
+// Harness tools and normalizes them to the logical tool/input.
+//
+// Normalization grants NO authority; it only lets the runtime guard apply its
+// existing rules to the logical identity. Unrecognized wrappers still reach
+// the real tool boundaries, where transport-independent backstops
+// (assertToolControllerAuthority / assertToolFreezeAuthority /
+// assertToolVerificationAuthority) fail closed.
 //
 // Fail closed on every deviation:
 // - no generic execute privilege
@@ -12,11 +18,22 @@
 // - no multiple statements
 // - no eval or JavaScript execution
 
-export function extractControllerInvocation(event) {
+const TRANSPORT_NORMALIZED_TOOLS = new Set([
+  'harness_execution_controller',
+  'harness_freeze_candidate',
+  'harness_run_verification',
+  'harness_check_agent_readiness',
+  'harness_check_execution_readiness',
+  'harness_project_status',
+])
+
+// Maps a Code Mode execute wrapper to the logical Harness tool/input, or null
+// when the code is not an exact recognized single-tool wrapper.
+export function extractHarnessToolInvocation(event) {
   if (!event || typeof event !== 'object') return null
 
-  if (event.tool === 'harness_execution_controller') {
-    return { tool: 'harness_execution_controller', input: event.input ?? {} }
+  if (TRANSPORT_NORMALIZED_TOOLS.has(event.tool)) {
+    return { tool: event.tool, input: event.input ?? {} }
   }
 
   if (event.tool !== 'execute') return null
@@ -27,11 +44,14 @@ export function extractControllerInvocation(event) {
   const code = raw.trim()
 
   // Exact observed Code Mode wrapper:
-  //   return await tools["harness_execution_controller"](<single literal object>)
-  //   return await tools.harness_execution_controller(<single literal object>)
+  //   return await tools["<whitelisted_tool>"](<single literal object>)
+  //   return await tools.<whitelisted_tool>(<single literal object>)
   // Harmless whitespace/newlines are allowed; everything else is rejected.
-  const prefixMatch = code.match(/^return[^\S\r\n\u2028\u2029]+await\s+tools\s*(?:\[\s*"harness_execution_controller"\s*\]|\.\s*harness_execution_controller)\s*\(/)
+  const prefixMatch = code.match(/^return[^\S\r\n\u2028\u2029]+await\s+tools\s*(?:\[\s*"([^"]+)"\s*\]|\.\s*([A-Za-z_$][A-Za-z0-9_$]*))\s*\(/)
   if (!prefixMatch) return null
+
+  const wrappedName = prefixMatch[1] ?? prefixMatch[2]
+  if (!TRANSPORT_NORMALIZED_TOOLS.has(wrappedName)) return null
 
   const openIdx = prefixMatch[0].length - 1
   const closeIdx = findMatchingParen(code, openIdx)
@@ -43,10 +63,16 @@ export function extractControllerInvocation(event) {
   try {
     const parsed = parseStaticObjectLiteral(inner)
     if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return null
-    return { tool: 'harness_execution_controller', input: parsed }
+    return { tool: wrappedName, input: parsed }
   } catch {
     return null
   }
+}
+
+// Backward-compatible controller-only projection of the generalized extractor.
+export function extractControllerInvocation(event) {
+  const normalized = extractHarnessToolInvocation(event)
+  return normalized?.tool === 'harness_execution_controller' ? normalized : null
 }
 
 function findMatchingParen(text, openIdx) {

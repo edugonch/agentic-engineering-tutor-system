@@ -1,0 +1,57 @@
+{
+  "source_wu_id": "WU-P4-TRANSPORT-AMENDMENT-001",
+  "source_wu_revision": "transport-amendment-v1",
+  "source_wu_hash": "transport-amendment-v1",
+  "commands": [
+    {
+      "id": "controller-transport",
+      "program": "/Users/poseidon/.nvm/versions/node/v20.19.5/bin/node",
+      "args": [
+        "--test",
+        "tests/execution/controller-transport.test.js"
+      ]
+    },
+    {
+      "id": "turn-guard",
+      "program": "/Users/poseidon/.nvm/versions/node/v20.19.5/bin/node",
+      "args": [
+        "--test",
+        "tests/turn-guard.test.js"
+      ]
+    },
+    {
+      "id": "phase4",
+      "program": "/Users/poseidon/.nvm/versions/node/v20.19.5/bin/node",
+      "args": [
+        "--test",
+        "tests/execution/phase4.test.js"
+      ]
+    },
+    {
+      "id": "regression",
+      "program": "/Users/poseidon/.nvm/versions/node/v20.19.5/bin/node",
+      "args": [
+        "--test"
+      ]
+    },
+    {
+      "id": "validate",
+      "program": "/Users/poseidon/.nvm/versions/node/v20.19.5/bin/node",
+      "args": [
+        "scripts/validate-package.mjs"
+      ]
+    },
+    {
+      "id": "entrypoint-syntax",
+      "program": "/Users/poseidon/.nvm/versions/node/v20.19.5/bin/node",
+      "args": [
+        "--check",
+        "index.js"
+      ]
+    }
+  ],
+  "capabilities": [],
+  "environment": {
+    "network_policy": "UNRESTRICTED"
+  }
+}

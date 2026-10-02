@@ -23,7 +23,7 @@ import {
   isJevReady,
   readJevSettings,
 } from "./src/decision/index.js"
-import { runContinuationProbe, createContinuationDriver, createCandidateRegistry, captureBaseSnapshot, freezeCandidate, runCandidateVerification, checkExecutionReadiness, pathDigest, validateVerificationContract, runExecutionController, assertToolControllerAuthority, createVerificationReceipt, writeVerificationReceipt } from "./src/execution/index.js"
+import { runContinuationProbe, createContinuationDriver, createCandidateRegistry, captureBaseSnapshot, freezeCandidate, runCandidateVerification, checkExecutionReadiness, pathDigest, validateVerificationContract, runExecutionController, assertToolControllerAuthority, assertToolFreezeAuthority, assertToolVerificationAuthority, createVerificationReceipt, writeVerificationReceipt } from "./src/execution/index.js"
 
 const json = (value) => ({ content: JSON.stringify(value, null, 2) })
 const objectInput = (properties, required = []) => ({
@@ -447,8 +447,13 @@ export default Plugin.define({
           deletions: { type: "array", items: { type: "string" }, maxItems: 2000 },
           verification_contract: { type: "object" },
         }, ["wu_id"]),
-        execute: async (input) => {
+        execute: async (input, context) => {
           const root = requireProjectRoot()
+          // Authoritative authority backstop at the real tool boundary: an
+          // unrecognized Code Mode wrapper/alias still reaches this point, and
+          // anything that is not the owner path below is denied before any
+          // snapshot or registry write.
+          await assertToolFreezeAuthority(root, input, context?.sessionID)
           const base = input.base_paths?.length ? await captureBaseSnapshot(root, input.base_paths) : null
           const contract = input.verification_contract ?? null
           if (contract && !contract.source_wu_id) contract.source_wu_id = input.wu_id
@@ -477,7 +482,11 @@ export default Plugin.define({
           candidate_id: { type: "string", minLength: 1, pattern: "^cand-[0-9a-f]{64}$" },
           verification_check_id: { type: "string", minLength: 1 },
         }, ["candidate_id", "verification_check_id"]),
-        execute: async (input) => {
+        execute: async (input, context) => {
+          // Authoritative, transport-independent backstop at the real tool
+          // boundary: verification requires a live REVIEW/RECOVERY dispatch
+          // bound to this session and candidate, however the call arrived.
+          await assertToolVerificationAuthority(requireProjectRoot(), input, context?.sessionID)
           const candidate = await candidateRegistry.load(input.candidate_id)
           if (!candidate) {
             return json({ status: "BLOCKED_UNKNOWN_CANDIDATE", candidate_id: input.candidate_id, reason: "no candidate with this id is in the registry." })

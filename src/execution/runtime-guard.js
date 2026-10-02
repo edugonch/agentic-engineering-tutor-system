@@ -4,7 +4,7 @@
 import { basename, join } from 'node:path'
 import { controllerStates } from './ownership.js'
 import { createExecutionController } from './execution.js'
-import { extractControllerInvocation } from './controller-transport.js'
+import { extractHarnessToolInvocation } from './controller-transport.js'
 import { CONTROLLER_READ_ACTIONS, controllerMutationDenied } from './controller-authority.js'
 import { TERMINAL_BLOCKER_CLASSES } from './constants.js'
 import { stableHash, stableSerialize } from './serialize.js'
@@ -105,7 +105,7 @@ export function createExecutionGuard(root, ctx, { now = () => Date.now() } = {})
 
   async function beforeTool(event) {
     await observations
-    const normalized = extractControllerInvocation(event)
+    const normalized = extractHarnessToolInvocation(event)
     const tool = normalized?.tool ?? event.tool
     const input = normalized?.input ?? (event.input ?? {})
     const records = await bindings(event.sessionID, input)
@@ -212,7 +212,7 @@ export function createExecutionGuard(root, ctx, { now = () => Date.now() } = {})
   }
 
   const afterTool = async (event) => {
-    const normalized = extractControllerInvocation(event)
+    const normalized = extractHarnessToolInvocation(event)
     const tool = normalized?.tool ?? event.tool
     const input = normalized?.input ?? (event.input ?? {})
     if (event.status === 'completed' || event.status === 'error') {
