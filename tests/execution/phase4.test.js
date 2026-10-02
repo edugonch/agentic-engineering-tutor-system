@@ -4,7 +4,7 @@ import { mkdtemp, rm, writeFile, readFile, mkdir } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { execFileSync } from "node:child_process"
-import { runExecutionController } from "../../src/execution/controller-tool.js"
+import { runExecutionController, assertToolControllerAuthority } from "../../src/execution/controller-tool.js"
 import { createExecutionController } from "../../src/execution/execution.js"
 import { recordKnowledgeArtifact } from "../../src/project-knowledge.js"
 import { freezeCandidate, captureBaseSnapshot } from "../../src/execution/candidate.js"
@@ -532,6 +532,57 @@ test('P4 transport: exact live specialist wrapped mutation is denied before the 
   assert.equal(afterBound.state.revision, beforeBound.state.revision)
   assert.equal(afterBound.lease?.holder_session_id, beforeBound.lease?.holder_session_id)
   assert.equal(afterBound.lease?.fencing_token, beforeBound.lease?.fencing_token)
+}))
+
+test('P4 transport: Q1 — an unrecognized Code Mode controller call is denied at the real tool boundary', async () => fixture(async ({ root }) => {
+  const { extractControllerInvocation } = await import('../../src/execution/controller-transport.js')
+  // Valid Code Mode programs that really call the controller but are deliberately
+  // NOT recognized by structural extraction, so the outer guard sees generic execute.
+  const unrecognized = [
+    "const f = tools['harness_execution_controller']; return await f({ action: 'checkpoint', execution_id: 'E' })",
+    "return await tools['harness_execution_controller']({ action: 'checkpoint', execution_id: 'E' })",
+  ]
+  for (const code of unrecognized) {
+    assert.equal(extractControllerInvocation({ tool: 'execute', input: { code } }), null, code)
+  }
+
+  const core = await createExecutionController({ dir: join(root, '.harness/execution/controller/E') })
+  const before = await core.snapshot()
+  for (const action of ['checkpoint', 'reserve', 'block', 'release']) {
+    await assert.rejects(
+      assertToolControllerAuthority(root, { action, execution_id: 'E', session_id: 'specialist-session', checkpoint_id: 'q1', dispatch_id: 'q1', class: 'BLOCKED_TOOLING' }),
+      /Specialist cannot mutate execution authority/,
+      action,
+    )
+  }
+  const after = await core.snapshot()
+  assert.equal(after.state.revision, before.state.revision)
+  assert.equal(after.lease?.holder_session_id, before.lease?.holder_session_id)
+  assert.equal(after.lease?.fencing_token, before.lease?.fencing_token)
+
+  // Read-only controller actions retain their semantics for any session.
+  await assertToolControllerAuthority(root, { action: 'status', execution_id: 'E', session_id: 'specialist-session' })
+  await assertToolControllerAuthority(root, { action: 'recover', execution_id: 'E', session_id: 'specialist-session' })
+  await assertToolControllerAuthority(root, { action: 'verify', execution_id: 'E', session_id: 'specialist-session' })
+  // The mandate controller may still mutate.
+  await assertToolControllerAuthority(root, { action: 'checkpoint', execution_id: 'E', session_id: 'owner', checkpoint_id: 'owner-ok' })
+}))
+
+test('P4 transport: Q1 — specialist is denied before acquire even when the controller lease has expired', async () => fixture(async ({ root }) => {
+  let now = 1000
+  const core = await createExecutionController({ dir: join(root, '.harness/execution/controller/E'), now: () => now })
+  const lease = await core.acquire('owner')
+  const before = await core.snapshot()
+  now += 3_600_000 // far beyond the lease TTL: a specialist could otherwise transfer it
+  await assert.rejects(
+    assertToolControllerAuthority(root, { action: 'checkpoint', execution_id: 'E', session_id: 'specialist-session', checkpoint_id: 'expired-q1' }),
+    /Specialist cannot mutate execution authority/,
+  )
+  const after = await core.snapshot()
+  assert.equal(after.state.revision, before.state.revision)
+  assert.equal(after.lease?.holder_session_id, 'owner')
+  assert.equal(after.lease?.fencing_token, lease.fencing_token)
+  assert.ok(after.lease?.expires_at <= now, 'the pre-existing lease really was expired')
 }))
 
 test('P4 transport: unfunded wrapped controller mutation remains rejected under budget exhaustion', async () => fixture(async ({ root, call, rejectedA, authorize }) => {

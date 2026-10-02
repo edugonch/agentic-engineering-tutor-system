@@ -5,10 +5,11 @@ import { basename, join } from 'node:path'
 import { controllerStates } from './ownership.js'
 import { createExecutionController } from './execution.js'
 import { extractControllerInvocation } from './controller-transport.js'
+import { CONTROLLER_READ_ACTIONS, controllerMutationDenied } from './controller-authority.js'
 import { TERMINAL_BLOCKER_CLASSES } from './constants.js'
 import { stableHash, stableSerialize } from './serialize.js'
 
-const READ_ACTIONS = new Set(['status', 'recover', 'verify'])
+const READ_ACTIONS = CONTROLLER_READ_ACTIONS
 const SETTLEMENT = new Set([...READ_ACTIONS, 'record_finish', 'reconcile', 'release', 'mark_ambiguous', 'checkpoint', 'block'])
 const CONTROLLER_DIAGNOSTICS = new Set(['read', 'glob', 'grep', 'harness_check_agent_readiness', 'harness_check_execution_readiness', 'harness_project_status'])
 
@@ -128,7 +129,7 @@ export function createExecutionGuard(root, ctx, { now = () => Date.now() } = {})
         // Deny it before tool dispatch and lease acquisition, without depending
         // on the specialist's dispatch binding already being visible (the
         // binding and the mutation can arrive in the same assistant turn).
-        if ((!owner || dispatch) && !READ_ACTIONS.has(input.action)) throw new Error('Specialist cannot mutate execution authority.')
+        if (controllerMutationDenied(s, event.sessionID, input.action) || (dispatch && !READ_ACTIONS.has(input.action))) throw new Error('Specialist cannot mutate execution authority.')
         if (input.session_id && input.session_id !== event.sessionID && !READ_ACTIONS.has(input.action)) throw new Error('Controller session identity cannot be supplied by another session.')
         // Controller read tools can be exact approved recovery actions; the general
         // recovery path is skipped for controller tools, so record the claim here.

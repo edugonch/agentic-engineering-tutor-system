@@ -83,3 +83,43 @@ fencing token were unchanged. `CONTROLLER_TRANSPORT_RUNTIME = PASS`.
 The reviewer states explicitly that this is an independent challenge, not owner
 approval or Phase 4 runtime acceptance. Risk remains HIGH because this code governs
 execution authority.
+
+## Q1 authority-boundary correction (revision 2 of the combined amendment)
+
+The first independent review recorded Q1 as an out-of-scope limitation: a Code
+Mode wrapper not structurally recognized by `extractControllerInvocation` was
+treated as generic `execute`, so only lease ownership stopped it. Because the
+execution lease can expire while a specialist dispatch is still authorized, that
+was a real authority bypass. Owner gate review returned
+`PACKET_V3_GATE = CHANGES_REQUIRED`.
+
+Correction: the specialist-mutation predicate is factored into one shared helper
+(`src/execution/controller-authority.js`) used by both the runtime guard (early
+admission) and the actual `harness_execution_controller` tool boundary
+(`assertToolControllerAuthority` in `src/execution/controller-tool.js`, called from
+`index.js` before `runExecutionController`). Any wrapper, alias or Code Mode
+variation that reaches the real tool is denied before `runExecutionController` and
+before any lease acquisition, independent of outer syntax. Read-only actions
+(`status`, `recover`, `verify`) retain their semantics, and owner bookkeeping is
+unaffected. No dispatch semantics, repair-policy behavior, generic-`execute`
+privilege or emergency-cap behavior changed.
+
+- Candidate: `cand-9f7dc2229ebb261b695c3093a09a55dce6a4e8fad104db5122fb0da1437c514c`
+- Manifest hash: `3282879d2a0f7f796e473f87289290eeb1d95089d2aeea5d68bf4f6365b15c3f`
+- Composed-tree hash: `13fe0e2f94eb94008c850ed7971b30398367daa3c6b7cec303afe7ad4c9bf79c`
+- Normative verification-contract hash: `0f743437473532e6cd124107fb808e3bc06c805a065ed8353eb457ad14b8b59f`
+- Declared checks all PASS. Orchestrator receipts: `controller-transport`
+  `verify-cc8efd7071e25c6f256f2ddd140ad1f6158966ecfccc334beaf2cd6f38f2f915`,
+  `turn-guard` `verify-df6db2042390461bd79d6acd47d96c93ae901e5feb5ac60b45da9a7e8ac7cc46`,
+  `phase4` `verify-de3066d05970f1e21869f367ed4b780988d7a96ed1d48402c21ee75211e036ac`,
+  `regression` `verify-fccba58b695b469504b896f7cee1f8fd5e2d7a189931b3ad3d01652543610614`,
+  `validate` `verify-12ca2a28687b43fda38b9c7fcf55b54b124e4211ecec905e37fd8ee20da39781`,
+  `entrypoint-syntax` `verify-618f619cf06c73b61a569d5895767ee27909e8cebd0dfd7bb081bbf1d9d6425e`.
+- Fresh independent `harness-reviewer` session `ses_f0237a798ffeaay3rcL5NOmcb0`:
+  **PASS**, all six checks re-run. It confirmed the backstop is at the real tool
+  boundary, the predicate is a single shared model, denial precedes acquire even
+  with an expired lease, and the Q1 tests assert revision, lease holder and
+  fencing token unchanged. No blocking finding; only LOW scope/operational notes
+  (repair-policy-scoped binding, pinned-session restart lockout, boundary call
+  covered by inspection rather than a behavioral test, and a theoretical TOCTOU).
+

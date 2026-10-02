@@ -21,6 +21,7 @@ import { sha256 } from './serialize.js'
 import { readLog, validateLog } from "./event-log.js"
 import { project, deriveBudget } from "./state.js"
 import { createExecutionController } from "./execution.js"
+import { assertControllerMutationAuthority } from "./controller-authority.js"
 import { createCandidateRegistry } from "./candidate-registry.js"
 import { readVerificationReceipt } from "./verification-results.js"
 import { findApprovedEpic } from "../project-knowledge.js"
@@ -357,6 +358,20 @@ export async function runExecutionController(projectRoot, input, candidateRegist
   }
 
   throw new Error(`Unknown action: ${action}.`)
+}
+
+// Authoritative, transport-independent backstop at the real
+// `harness_execution_controller` tool boundary. Runs before runExecutionController
+// and before any lease acquisition. A non-owner of the Phase-4 mandate may never
+// execute a mutating controller action, regardless of how the call was written
+// (direct call, recognized wrapper, alias or any unrecognized Code Mode form).
+export async function assertToolControllerAuthority(projectRoot, input) {
+  const executionId = sanitizeId(input.execution_id, "execution_id")
+  const dir = join(projectRoot, ".harness", "execution", "controller", executionId)
+  const controller = await createExecutionController({ dir })
+  const snap = await controller.snapshot()
+  const holder = String(input.session_id ?? `controller:${executionId}`)
+  assertControllerMutationAuthority(snap.state, holder, String(input.action ?? "status"))
 }
 
 function requireDispatchId(input) {

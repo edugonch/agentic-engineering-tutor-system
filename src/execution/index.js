@@ -15,5 +15,6 @@ export { deriveRequirements, evaluateReadiness, budgetStatus, checkExecutionRead
 export { createExecutionController } from "./execution.js"
 export { runContinuationProbe } from "./probe.js"
 export { runExecutionController } from "./controller-tool.js"
+export { assertToolControllerAuthority } from "./controller-tool.js"
 export { createContinuationDriver, shouldContinue, readContinuationSettings } from "./continuation-driver.js"
 export { createExecutionGuard } from './runtime-guard.js'

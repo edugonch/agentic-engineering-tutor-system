@@ -23,7 +23,7 @@ import {
   isJevReady,
   readJevSettings,
 } from "./src/decision/index.js"
-import { runContinuationProbe, createContinuationDriver, createCandidateRegistry, captureBaseSnapshot, freezeCandidate, runCandidateVerification, checkExecutionReadiness, pathDigest, validateVerificationContract, runExecutionController, createVerificationReceipt, writeVerificationReceipt } from "./src/execution/index.js"
+import { runContinuationProbe, createContinuationDriver, createCandidateRegistry, captureBaseSnapshot, freezeCandidate, runCandidateVerification, checkExecutionReadiness, pathDigest, validateVerificationContract, runExecutionController, assertToolControllerAuthority, createVerificationReceipt, writeVerificationReceipt } from "./src/execution/index.js"
 
 const json = (value) => ({ content: JSON.stringify(value, null, 2) })
 const objectInput = (properties, required = []) => ({
@@ -427,7 +427,13 @@ export default Plugin.define({
         }, ["action", "execution_id"]),
         execute: async (input, context) => {
           if (input.session_id && input.session_id !== context.sessionID) throw new Error('Controller session_id must match the calling OpenCode session.')
-          return json(await runExecutionController(requireProjectRoot(), { ...input, session_id: context.sessionID }, candidateRegistry))
+          const root = requireProjectRoot()
+          // Authoritative authority backstop at the real tool boundary: an
+          // unrecognized Code Mode wrapper/alias still reaches this point, and a
+          // non-owner specialist is denied before runExecutionController and any
+          // lease acquisition.
+          await assertToolControllerAuthority(root, { ...input, session_id: context.sessionID })
+          return json(await runExecutionController(root, { ...input, session_id: context.sessionID }, candidateRegistry))
         },
       })
 
