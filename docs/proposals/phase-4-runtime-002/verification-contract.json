@@ -1,0 +1,32 @@
+{
+  "source_wu_id": "WU-P4-RESOLVEBINARY-ABSOLUTE-002",
+  "source_wu_revision": "proposal-v3",
+  "source_wu_hash": "73227603b3ff0726f4099096abd3d4e08c9992fc4519e7ea1bbbf207f665153e",
+  "commands": [
+    {
+      "id": "resolver-acceptance",
+      "program": "node",
+      "args": [
+        "--input-type=module",
+        "-e",
+        "import test from 'node:test'; import assert from 'node:assert/strict'; import {mkdtemp, mkdir, writeFile, chmod, rm} from 'node:fs/promises'; import {tmpdir} from 'node:os'; import {join} from 'node:path'; import {resolveBinary} from './src/resolve-binary.js'; const root=await mkdtemp(join(tmpdir(),'p4-absolute-contract-')); try { const executable=join(root,'executable'); const plain=join(root,'plain'); const directory=join(root,'directory'); const unrelated=join(root,'unrelated'); await writeFile(executable,'#!/bin/sh\\nexit 0\\n'); await chmod(executable,0o755); await writeFile(plain,'not executable'); await chmod(plain,0o644); await mkdir(directory,{mode:0o755}); await mkdir(unrelated); await test('absolute executable resolves independent of PATH',()=>{assert.equal(resolveBinary(executable,{PATH:''}),executable); assert.equal(resolveBinary(executable,{PATH:unrelated}),executable)}); await test('nonexistent absolute path is rejected',()=>assert.equal(resolveBinary(join(root,'missing'),{PATH:''}),null)); await test('directory absolute path is rejected',()=>assert.equal(resolveBinary(directory,{PATH:''}),null)); await test('non-executable absolute file is rejected',()=>assert.equal(resolveBinary(plain,{PATH:''}),null)); await test('simple-name PATH search still resolves regular executables',()=>assert.equal(resolveBinary('executable',{PATH:unrelated+':'+root}),executable)); await test('PATH lookup preserves executable-bit and regular-file checks',()=>{assert.equal(resolveBinary('plain',{PATH:root}),null); assert.equal(resolveBinary('directory',{PATH:root}),null); assert.equal(resolveBinary('missing',{PATH:root}),null)}); } finally {await rm(root,{recursive:true,force:true})}"
+      ]
+    },
+    {
+      "id": "resolver-regression",
+      "program": "node",
+      "args": ["--test", "tests/resolvebinary-executable.test.js"]
+    },
+    {
+      "id": "tooling-ready",
+      "program": "node",
+      "args": [
+        "--input-type=module",
+        "-e",
+        "import assert from 'node:assert/strict'; import {readFileSync,lstatSync} from 'node:fs'; const p='/Users/poseidon/Documents/agentic-engineering-tutor-system/agentic-engineering-tutor-system/.harness/execution/runtime-fixtures/phase4-resolvebinary-absolute-v1/ready.txt'; assert.equal(lstatSync(p).isFile(),true); assert.equal(readFileSync(p,'utf8'),'READY\\n');"
+      ]
+    }
+  ],
+  "capabilities": [],
+  "environment": { "network_policy": "UNRESTRICTED" }
+}
