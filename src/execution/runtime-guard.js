@@ -4,7 +4,7 @@
 import { basename, join } from 'node:path'
 import { controllerStates } from './ownership.js'
 import { createExecutionController } from './execution.js'
-import { extractHarnessToolInvocation } from './controller-transport.js'
+import { extractHarnessToolInvocation, extractStaticToolInvocation } from './controller-transport.js'
 import { CONTROLLER_READ_ACTIONS, controllerMutationDenied } from './controller-authority.js'
 import { TERMINAL_BLOCKER_CLASSES } from './constants.js'
 import { stableHash, stableSerialize } from './serialize.js'
@@ -12,6 +12,30 @@ import { stableHash, stableSerialize } from './serialize.js'
 const READ_ACTIONS = CONTROLLER_READ_ACTIONS
 const SETTLEMENT = new Set([...READ_ACTIONS, 'record_finish', 'reconcile', 'release', 'mark_ambiguous', 'checkpoint', 'block'])
 const CONTROLLER_DIAGNOSTICS = new Set(['read', 'glob', 'grep', 'harness_check_agent_readiness', 'harness_check_execution_readiness', 'harness_project_status'])
+
+// Layer-1 structural Code Mode identity, used ONLY to recognize an ACTIVE
+// APPROVED RECOVERY ACTION transported through Code Mode. The closed six-tool
+// Layer-2 whitelist in extractHarnessToolInvocation() is NOT widened: zero
+// authority is granted unless the structurally parsed tool AND its stable-
+// serialized input are exactly equal to the bound recovery action. This helper
+// only fires for `execute` events; direct logical calls are handled by the
+// caller's existing exact comparison.
+function isExactStaticRecovery(event, recovery) {
+  if (!recovery?.action) return false
+  const structural = extractStaticToolInvocation(event)
+  if (!structural) return false
+  return structural.tool === recovery.action.tool
+    && stableSerialize(structural.input) === stableSerialize(recovery.action.input)
+}
+
+// A recovery action is identified by exact tool + exact input identity, whether
+// the call arrived directly, through a recognized Harness wrapper, or as an
+// approved recovery action structurally wrapped through Code Mode.
+function isExactRecoveryAction(event, recovery, tool, input) {
+  if (!recovery?.action) return false
+  if (tool === recovery.action.tool && stableSerialize(input) === stableSerialize(recovery.action.input)) return true
+  return isExactStaticRecovery(event, recovery)
+}
 
 export function createExecutionGuard(root, ctx, { now = () => Date.now() } = {}) {
   const directory = join(root, '.harness/execution/controller')
@@ -136,7 +160,7 @@ export function createExecutionGuard(root, ctx, { now = () => Date.now() } = {})
         if (s.blocker && READ_ACTIONS.has(input.action) && dispatch && dispatch.status === 'launched') {
           const recovery = s.recoveries[s.blocker.blocker_id]
           const dispatchId = Object.entries(s.dispatches).find(([, d]) => d === dispatch)?.[0]
-          if (recovery && recovery.dispatch_id === dispatchId && tool === recovery.action.tool && stableSerialize(input) === stableSerialize(recovery.action.input)) {
+          if (recovery && recovery.dispatch_id === dispatchId && isExactRecoveryAction(event, recovery, tool, input)) {
             if (recovery.action_claim) throw new Error('Recovery action attempt already claimed/consumed; reconcile the same attempt, never repeat it.')
             if (!event.id) throw new Error('Recovery action claim requires a tool call identity.')
             const claim = { operation_id: `recovery-claim:${recovery.authorization_id}`, operation_type: 'CHECKPOINT', body: { recovery_action_claim: { session_id: event.sessionID, action_hash: stableHash(recovery.action), tool_call_id: event.id } } }
@@ -175,7 +199,7 @@ export function createExecutionGuard(root, ctx, { now = () => Date.now() } = {})
         const recovery = s.recoveries[s.blocker.blocker_id]
         if (!dispatch || dispatch.status !== 'launched' || recovery?.dispatch_id !== Object.entries(s.dispatches).find(([, d]) => d === dispatch)?.[0]) throw new Error('Unresolved blocker permits only its bound recovery dispatch.')
         const check = tool === 'harness_run_verification' && input.verification_check_id === recovery.action.success_check_id
-        const exact = tool === recovery.action.tool && stableSerialize(input) === stableSerialize(recovery.action.input)
+        const exact = isExactRecoveryAction(event, recovery, tool, input)
         if (!check && !exact) throw new Error('Only the exact approved recovery tool/action is authorized; no permission widening.')
         if (check && recovery.action_evidence?.status !== 'PASS') throw new Error('Recovery action is unconfirmed/ambiguous; successful action evidence is required before verification.')
         if (exact) {
@@ -226,7 +250,7 @@ export function createExecutionGuard(root, ctx, { now = () => Date.now() } = {})
         const rec = s.recoveries[s.blocker?.blocker_id]
         if (!rec || rec.action_evidence) continue
         const d = s.dispatches[rec.dispatch_id]
-        if (d?.status !== 'launched' || d.session_id !== event.sessionID || tool !== rec.action.tool || stableSerialize(input) !== stableSerialize(rec.action.input)) continue
+        if (d?.status !== 'launched' || d.session_id !== event.sessionID || !isExactRecoveryAction(event, rec, tool, input)) continue
         await commitObservation(record, { operation_id: `recovery-action:${event.id}`, operation_type: 'CHECKPOINT', body: { recovery_action_evidence: { session_id: event.sessionID, action_hash: stableHash(rec.action), result_hash: stableHash(event.result ?? event.error ?? null), tool_call_id: event.id, status: event.status === 'completed' ? 'PASS' : 'FAIL' } } })
       }
       return

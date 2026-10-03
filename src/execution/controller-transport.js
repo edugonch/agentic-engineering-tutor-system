@@ -1,15 +1,28 @@
 // Harness tool transport adapter for Phase 4.
 //
 // OpenCode Code Mode wraps a single tool call in `execute({ code: ... })`.
-// The runtime guard sees ONLY the outer execute event, so this module
-// recognizes ONLY the observed dot/bracket wrappers for a closed whitelist of
-// Harness tools and normalizes them to the logical tool/input.
+// The runtime guard sees ONLY the outer execute event, so this module recognizes
+// exact single-tool wrappers and normalizes them to a logical tool/input.
 //
-// Normalization grants NO authority; it only lets the runtime guard apply its
-// existing rules to the logical identity. Unrecognized wrappers still reach
-// the real tool boundaries, where transport-independent backstops
-// (assertToolControllerAuthority / assertToolFreezeAuthority /
-// assertToolVerificationAuthority) fail closed.
+// The parser is split into two deliberately separate layers:
+//
+//   Layer 1 - `extractStaticToolInvocation()`: STRUCTURAL recognition only. It
+//     recognizes exactly `return await tools.<STATIC_TOOL_NAME>(<literal>)` or
+//     `return await tools["<STATIC_TOOL_NAME>"](<literal>)` for any static name.
+//     It grants ZERO authority and is never sufficient on its own; a caller must
+//     apply an explicit authority rule to its result.
+//
+//   Layer 2 - `extractHarnessToolInvocation()`: AUTHORITY interpretation for the
+//     closed Harness-tool whitelist only. It stays restricted to
+//     TRANSPORT_NORMALIZED_TOOLS; `shell` and every other tool is NOT added here.
+//
+// The runtime guard may additionally compare the Layer-1 result against an
+// ACTIVE APPROVED RECOVERY ACTION exactly (tool + stable-serialized input). That
+// is a scoped identity check, not a general execute privilege: it applies only
+// while a bound recovery dispatch is live and only for the exact approved bytes.
+// Unrecognized wrappers still reach the real tool boundaries, where
+// transport-independent backstops (assertToolControllerAuthority /
+// assertToolFreezeAuthority / assertToolVerificationAuthority) fail closed.
 //
 // Fail closed on every deviation:
 // - no generic execute privilege
@@ -27,15 +40,10 @@ const TRANSPORT_NORMALIZED_TOOLS = new Set([
   'harness_project_status',
 ])
 
-// Maps a Code Mode execute wrapper to the logical Harness tool/input, or null
-// when the code is not an exact recognized single-tool wrapper.
-export function extractHarnessToolInvocation(event) {
+// Layer 1 - structural recognition of an exact single-tool Code Mode wrapper.
+// It grants ZERO authority: the caller decides whether the named tool is allowed.
+export function extractStaticToolInvocation(event) {
   if (!event || typeof event !== 'object') return null
-
-  if (TRANSPORT_NORMALIZED_TOOLS.has(event.tool)) {
-    return { tool: event.tool, input: event.input ?? {} }
-  }
-
   if (event.tool !== 'execute') return null
 
   const raw = event.input?.code
@@ -44,14 +52,13 @@ export function extractHarnessToolInvocation(event) {
   const code = raw.trim()
 
   // Exact observed Code Mode wrapper:
-  //   return await tools["<whitelisted_tool>"](<single literal object>)
-  //   return await tools.<whitelisted_tool>(<single literal object>)
+  //   return await tools["<static_tool_name>"](<single literal object>)
+  //   return await tools.<static_tool_name>(<single literal object>)
   // Harmless whitespace/newlines are allowed; everything else is rejected.
   const prefixMatch = code.match(/^return[^\S\r\n\u2028\u2029]+await\s+tools\s*(?:\[\s*"([^"]+)"\s*\]|\.\s*([A-Za-z_$][A-Za-z0-9_$]*))\s*\(/)
   if (!prefixMatch) return null
 
   const wrappedName = prefixMatch[1] ?? prefixMatch[2]
-  if (!TRANSPORT_NORMALIZED_TOOLS.has(wrappedName)) return null
 
   const openIdx = prefixMatch[0].length - 1
   const closeIdx = findMatchingParen(code, openIdx)
@@ -67,6 +74,22 @@ export function extractHarnessToolInvocation(event) {
   } catch {
     return null
   }
+}
+
+// Layer 2 - authority interpretation restricted to the closed Harness whitelist.
+// Maps a Code Mode execute wrapper to the logical Harness tool/input, or null
+// when the code is not an exact recognized single-tool wrapper for a whitelisted
+// tool.
+export function extractHarnessToolInvocation(event) {
+  if (!event || typeof event !== 'object') return null
+
+  if (TRANSPORT_NORMALIZED_TOOLS.has(event.tool)) {
+    return { tool: event.tool, input: event.input ?? {} }
+  }
+
+  const structural = extractStaticToolInvocation(event)
+  if (!structural || !TRANSPORT_NORMALIZED_TOOLS.has(structural.tool)) return null
+  return structural
 }
 
 // Backward-compatible controller-only projection of the generalized extractor.
