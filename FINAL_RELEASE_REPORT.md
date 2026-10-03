@@ -61,9 +61,17 @@ Raw tail: `# tests 241 / # pass 241 / # fail 0`; validation output
   opencode plugin add 'github:edugonch/agentic-engineering-tutor-system#dbe8beb0134e5a34d2e1f3ae92b9def6c3c07848'
   ```
 
-- A configured plugin revision is not loading proof. Confirmed loading happens
-  after the owner reloads; the current process still reports the Phase-4 revision
-  `bec2876b` (see §6).
+- A configured plugin revision is not loading proof. Loading was confirmed in
+  `~/.local/share/opencode/log/opencode.log`:
+
+  ```text
+  2026-10-03T16:35:05.870Z level=INFO run=be7dc203 msg="loading plugin"
+    id=git+...#dbe8beb0134e5a34d2e1f3ae92b9def6c3c07848
+    entrypoint=file:///.../git-agentic-engineering-tutor-system-2470c32b78d5/.../index.js
+  ```
+
+  Earlier entries loaded the Phase-4 revision `bec2876b`; the latest load is the
+  frozen baseline.
 
 ## 5. Runtime readiness
 
@@ -86,10 +94,9 @@ after:  git+https://github.com/edugonch/agentic-engineering-tutor-system.git#dbe
 
 The global plugin entry has been re-pointed to the frozen baseline, with a
 backup of the prior config at
-`~/.config/opencode/opencode.json.pre-phase5-v1-baseline-backup`. After the
-re-point the live tool surface changed to the baseline operation set and
-readiness re-checked ready, consistent with the baseline loading (the server
-hot-reloaded the config). `opencode plugin list` run from the finalization branch
+`~/.config/opencode/opencode.json.pre-phase5-v1-baseline-backup`. After the re-point the live tool surface changed to the baseline operation set and
+readiness re-checked ready, and the OpenCode log records a load of
+`#dbe8beb0…` (see §4). `opencode plugin list` run from the finalization branch
 returned `No plugins found`; this should be re-checked after a clean restart.
 
 **Owner action:** restart/reload OpenCode cleanly, start a session in the smoke
@@ -207,7 +214,7 @@ capture secrets (e.g. `.env.local`) into the knowledge archive.
 |---|---|
 | Exact supported baseline identified | DONE — `dbe8beb0…` |
 | Tests/validation for the baseline pass | DONE — 241/241, 68 paths |
-| Plugin installs/loads from the documented Git revision | Install verified on `origin` and re-pointed globally; baseline surface observed live; **clean restart recommended** |
+| Plugin installs/loads from the documented Git revision | DONE — remote resolves the SHA; OpenCode log records `#dbe8beb0…` load; baseline surface observed live |
 | Fresh builder/reviewer readiness passes | DONE — `ready: true` for builder/reviewer, re-confirmed after re-point |
 | One real v1 happy-path smoke succeeds | **PENDING** (packet prepared, sandbox ready) |
 | Operator documentation exists | DONE |
