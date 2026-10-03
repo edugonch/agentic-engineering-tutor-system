@@ -9,7 +9,10 @@ function positiveInteger(value, fallback) {
 
 export function readGuardSettings(env = {}) {
   return {
-    maxToolCalls: positiveInteger(env.HARNESS_MAX_TOOL_CALLS, 40),
+    // Total tool calls are unlimited unless the owner explicitly opts in to a
+    // ceiling. An absent or empty HARNESS_MAX_TOOL_CALLS yields null, which
+    // disables the total-call circuit breaker.
+    maxToolCalls: positiveInteger(env.HARNESS_MAX_TOOL_CALLS, null),
     maxDelegations: positiveInteger(env.HARNESS_MAX_DELEGATIONS, 3),
     maxIdenticalMutations: positiveInteger(env.HARNESS_MAX_IDENTICAL_MUTATIONS, 4),
     // A provider-agnostic default can break model adapters that reject the
@@ -50,7 +53,7 @@ export function createTurnGuard(settings = readGuardSettings()) {
     before(input, output) {
       const [key, state] = stateFor(input.sessionID)
       state.calls += 1
-      if (state.calls > settings.maxToolCalls) {
+      if (settings.maxToolCalls && state.calls > settings.maxToolCalls) {
         throw new Error(`Harness circuit breaker: this session run exceeded ${settings.maxToolCalls} tool calls. Stop and report the blocker; do not delegate, retry, or create follow-up work. Session: ${key}`)
       }
 

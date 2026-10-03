@@ -2,13 +2,18 @@ import test from "node:test"
 import assert from "node:assert/strict"
 import { applyOutputTokenCap, createTurnGuard, readGuardSettings } from "../src/turn-guard.js"
 
-test("applies defaults and ignores invalid limit overrides", () => {
+test("defaults to no total tool-call ceiling and ignores invalid limit overrides", () => {
+  assert.equal(readGuardSettings({}).maxToolCalls, null)
   assert.deepEqual(readGuardSettings({ HARNESS_MAX_TOOL_CALLS: "0" }), {
-    maxToolCalls: 40,
+    maxToolCalls: null,
     maxDelegations: 3,
     maxIdenticalMutations: 4,
     maxOutputTokens: null,
   })
+})
+
+test("enables the total tool-call ceiling only when explicitly configured", () => {
+  assert.equal(readGuardSettings({ HARNESS_MAX_TOOL_CALLS: "7" }).maxToolCalls, 7)
 })
 
 test("leaves provider request options untouched unless the output-token cap is explicitly enabled", () => {
@@ -33,7 +38,17 @@ test("applies an explicitly configured output-token cap without raising a lower 
   assert.equal(lower.maxTokens, 512)
 })
 
-test("stops tool actions after the configured per-turn ceiling", () => {
+test("allows substantially more than 40 harmless reads when no total ceiling is configured", () => {
+  const guard = createTurnGuard(readGuardSettings({}))
+  assert.doesNotThrow(() => {
+    for (let i = 0; i < 200; i += 1) {
+      guard.before({ tool: "read", sessionID: "s1" }, { args: { filePath: `f${i}` } })
+    }
+  })
+  assert.equal(guard.snapshot("s1").calls, 200)
+})
+
+test("stops tool actions after an explicitly configured per-turn ceiling", () => {
   const guard = createTurnGuard({ maxToolCalls: 2, maxDelegations: 4, maxIdenticalMutations: 4 })
   guard.before({ tool: "read", sessionID: "s1" }, { args: { filePath: "a" } })
   guard.before({ tool: "read", sessionID: "s1" }, { args: { filePath: "b" } })
