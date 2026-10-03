@@ -39,3 +39,12 @@ PHASE_0/1/2 PASS sobre el control-plane durable; una WU real gobernada end-to-en
 ## Decision history
 
 Record date, decision, rationale, evidence, and superseded decision when applicable. Do not silently rewrite approved decisions.
+
+### 2026-10-03 — Phase 4 closed as FAIL; Harness v1 scope frozen (owner, final)
+
+- Decision: `PHASE_4 = FAIL` with reason `RECOVERY_LIVENESS_GAP`. Phase-4 autonomous bounded repair/recovery is EXPERIMENTAL / NOT RELEASED / KNOWN LIVENESS DEFECT. Harness v1 WILL NOT depend on it.
+- Rationale: the real `P4-RESOLVEBINARY-ABSOLUTE-004` execution proved Build A → Candidate A → `BLOCKED_TOOLING` → one authorized recovery with durable `action_claim` before effect and durable `action_evidence` PASS, but settled the recovery dispatch before its required `tooling-ready` verification receipt. Afterwards verification was correctly rejected without a live dispatch, the recovery could not be repeated, and durable ownership correctly prevented a fresh authority reset — permanently stranding a legitimate WU. A real liveness defect in the recovery path, not a reason to weaken anti-replay ownership.
+- Supported v1 autonomy ceiling: owner-approved Epic → derived/authorized WU → real builder → frozen candidate → deterministic verification → fresh independent reviewer → successful completion. `CHANGES_REQUIRED` or a blocker returns control to the owner; v1 does not autonomously repair or recover.
+- Baseline: `dbe8beb0134e5a34d2e1f3ae92b9def6c3c07848` (accepted Phase 3 SHA).
+- Evidence: `docs/phase-4-final-status.md`, `docs/phase-5-v1-capability-matrix.md`, `FINAL_RELEASE_REPORT.md`.
+- Superseded: none. Phase-4 packets under `docs/proposals/phase-4-runtime*` remain immutable proposals and are retained as history.

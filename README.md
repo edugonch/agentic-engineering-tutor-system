@@ -4,6 +4,27 @@ An OpenCode-only starter for guiding software projects from discovery through bo
 
 The Harness treats the whole project as a continuing story, Epics as finite chapters, and Work Units (WUs) as indivisible outcomes that fit together in a chapter. A WU may depend on or follow another WU, but it cannot recursively create child WUs.
 
+## Release status (Harness v1)
+
+The supported Harness v1 baseline is the accepted Phase 3 revision
+`dbe8beb0134e5a34d2e1f3ae92b9def6c3c07848`. See
+[`FINAL_RELEASE_REPORT.md`](FINAL_RELEASE_REPORT.md) for the release status,
+baseline evidence, capability matrix, installation command and explicit
+limitations, and [`docs/phase-5-v1-operator-guide.md`](docs/phase-5-v1-operator-guide.md)
+for operator instructions.
+
+The supported v1 autonomy ceiling is:
+
+```text
+owner-approved Epic → derived/authorized WU → real builder → frozen candidate
+  → deterministic verification → fresh independent reviewer → complete_wu
+```
+
+On `CHANGES_REQUIRED` or a blocker, control returns to the owner. Phase-4
+autonomous bounded repair/recovery is EXPERIMENTAL / NOT RELEASED and has a known
+liveness defect; it is not part of v1. See
+[`docs/phase-4-final-status.md`](docs/phase-4-final-status.md).
+
 ## Current scope
 
 This is an early implementation, not a production automation system. Version 0.1 provides:
@@ -105,7 +126,7 @@ The orchestrator can delegate only to its named Harness specialists, each of whi
 
 ## Cost and loop controls
 
-OpenCode provides a `steps` limit per agent. The orchestrator's permissions allow only the named Harness subagents; each specialist is denied subagent use. The plugin adds a maximum number of tool calls per session run, a delegation ceiling, a repeated mutation/delegation-call detector, an optional pre-request output-token cap, and a retry ceiling.
+OpenCode provides a `steps` limit per agent. The orchestrator's permissions allow only the named Harness subagents; each specialist is denied subagent use. The plugin adds an optional maximum number of tool calls per session run, a delegation ceiling, a repeated mutation/delegation-call detector, an optional pre-request output-token cap, and a retry ceiling.
 
 These controls reduce runaway work; they do **not** guarantee a maximum token or dollar cost. V2's request hook can cap agent-loop output tokens, but this plugin cannot reliably account for provider-specific input usage and total USD across agents and auxiliary requests. Set provider-side spending limits as a second control. See [`docs/architecture.md`](docs/architecture.md).
 
@@ -113,12 +134,12 @@ Environment overrides:
 
 | Variable | Default | Effect |
 |---|---:|---|
-| `HARNESS_MAX_TOOL_CALLS` | `40` | Tool executions allowed in one OpenCode session run |
+| `HARNESS_MAX_TOOL_CALLS` | Disabled (unlimited) | Optional tool executions allowed in one OpenCode session run; when unset or empty, no total tool-call ceiling is enforced |
 | `HARNESS_MAX_DELEGATIONS` | `3` | Calls to OpenCode's `subagent` tool allowed in one session run |
 | `HARNESS_MAX_IDENTICAL_MUTATIONS` | `4` | Consecutive identical `subagent`, `bash`, `write`, `edit`, `patch`, or `apply_patch` calls before the circuit breaker trips |
 | `HARNESS_MAX_OUTPUT_TOKENS` | Disabled | Optional upper bound for each agent-loop response; when set, OpenCode receives this output-token limit |
 
-Each OpenCode session, including each subagent session, has its own counters; a new prompt resets that session's action budget. The per-session call ceiling and orchestrator delegation ceiling give a finite action bound, while agent `steps` limits usually stop earlier. This is not a precise dollar ceiling: input-token use and provider-side retries/cost reporting can vary. Configure provider spending limits as a second control.
+Each OpenCode session, including each subagent session, has its own counters; a new prompt resets that session's action budget. Total tool calls are unlimited by default; when `HARNESS_MAX_TOOL_CALLS` is explicitly set, that per-session call ceiling and the orchestrator delegation ceiling give a finite action bound, while agent `steps` limits usually stop earlier. This is not a precise dollar ceiling: input-token use and provider-side retries/cost reporting can vary. Configure provider spending limits as a second control.
 
 ## Development
 
