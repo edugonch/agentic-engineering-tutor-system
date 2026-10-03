@@ -67,10 +67,13 @@ Raw tail: `# tests 241 / # pass 241 / # fail 0`; validation output
 
 ## 5. Runtime readiness
 
-`harness_check_agent_readiness` (and `harness_project_status`) currently report
-`ready: true` for `harness-builder` and `harness-reviewer` (subagents), with the
-four managed profiles unchanged. This was observed on the older loaded revision;
-it must be re-confirmed after the owner reloads the frozen baseline.
+`harness_check_agent_readiness` and `harness_project_status` report `ready: true`
+for `harness-builder` and `harness-reviewer` (subagents), with the four managed
+profiles unchanged. Re-confirmed after the plugin was re-pointed to the frozen
+baseline: the live Code Mode tool surface then showed the baseline operation set
+(no `authorize_repair` / `authorize_recovery` / `resolve_blocker`), and readiness
+remained ready. A clean owner restart is still the specified gate before the
+smoke run.
 
 ## 6. Loaded-runtime gap (owner action required)
 
@@ -81,10 +84,17 @@ before: git+https://github.com/edugonch/agentic-engineering-tutor-system.git#bec
 after:  git+https://github.com/edugonch/agentic-engineering-tutor-system.git#dbe8beb0134e5a34d2e1f3ae92b9def6c3c07848
 ```
 
-The global plugin entry has been re-pointed to the frozen baseline (with a
-backup of the prior config). The running server keeps the old revision until it
-is restarted. **Owner action:** restart/reload OpenCode, then confirm
-`opencode plugin list` shows the frozen SHA and readiness is ready.
+The global plugin entry has been re-pointed to the frozen baseline, with a
+backup of the prior config at
+`~/.config/opencode/opencode.json.pre-phase5-v1-baseline-backup`. After the
+re-point the live tool surface changed to the baseline operation set and
+readiness re-checked ready, consistent with the baseline loading (the server
+hot-reloaded the config). `opencode plugin list` run from the finalization branch
+returned `No plugins found`; this should be re-checked after a clean restart.
+
+**Owner action:** restart/reload OpenCode cleanly, start a session in the smoke
+sandbox, then confirm `opencode plugin list` shows the frozen SHA and readiness
+is ready before running the smoke.
 
 ## 7. Supported capability matrix (summary)
 
@@ -197,8 +207,8 @@ capture secrets (e.g. `.env.local`) into the knowledge archive.
 |---|---|
 | Exact supported baseline identified | DONE — `dbe8beb0…` |
 | Tests/validation for the baseline pass | DONE — 241/241, 68 paths |
-| Plugin installs/loads from the documented Git revision | Install verified on `origin`; **load pending owner reload** |
-| Fresh builder/reviewer readiness passes | Ready observed on prior revision; **re-confirm after reload** |
+| Plugin installs/loads from the documented Git revision | Install verified on `origin` and re-pointed globally; baseline surface observed live; **clean restart recommended** |
+| Fresh builder/reviewer readiness passes | DONE — `ready: true` for builder/reviewer, re-confirmed after re-point |
 | One real v1 happy-path smoke succeeds | **PENDING** (packet prepared, sandbox ready) |
 | Operator documentation exists | DONE |
 | Phase-4 recovery limitation documented | DONE |
