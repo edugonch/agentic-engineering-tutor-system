@@ -4,6 +4,27 @@ An OpenCode-only starter for guiding software projects from discovery through bo
 
 The Harness treats the whole project as a continuing story, Epics as finite chapters, and Work Units (WUs) as indivisible outcomes that fit together in a chapter. A WU may depend on or follow another WU, but it cannot recursively create child WUs.
 
+## Release status (Harness v1)
+
+The supported Harness v1 baseline is the accepted Phase 3 revision
+`dbe8beb0134e5a34d2e1f3ae92b9def6c3c07848`. See
+[`FINAL_RELEASE_REPORT.md`](FINAL_RELEASE_REPORT.md) for the release status,
+baseline evidence, capability matrix, installation command and explicit
+limitations, and [`docs/phase-5-v1-operator-guide.md`](docs/phase-5-v1-operator-guide.md)
+for operator instructions.
+
+The supported v1 autonomy ceiling is:
+
+```text
+owner-approved Epic → derived/authorized WU → real builder → frozen candidate
+  → deterministic verification → fresh independent reviewer → complete_wu
+```
+
+On `CHANGES_REQUIRED` or a blocker, control returns to the owner. Phase-4
+autonomous bounded repair/recovery is EXPERIMENTAL / NOT RELEASED and has a known
+liveness defect; it is not part of v1. See
+[`docs/phase-4-final-status.md`](docs/phase-4-final-status.md).
+
 ## Current scope
 
 This is an early implementation, not a production automation system. Version 0.1 provides:

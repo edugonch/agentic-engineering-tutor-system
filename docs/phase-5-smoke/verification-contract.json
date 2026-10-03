@@ -1,0 +1,28 @@
+{
+  "source_wu_id": "WU-P5-SMOKE-V1",
+  "source_wu_revision": "smoke-v1",
+  "source_wu_hash": null,
+  "commands": [
+    {
+      "id": "smoke-behavior",
+      "program": "node",
+      "args": [
+        "--input-type=module",
+        "-e",
+        "import test from 'node:test'; import assert from 'node:assert/strict'; import {mkdtemp, writeFile, chmod, rm} from 'node:fs/promises'; import {tmpdir} from 'node:os'; import {join} from 'node:path'; import {resolveBinary} from './src/resolve-binary.js'; const root=await mkdtemp(join(tmpdir(),'harness-v1-smoke-')); try { const exe=join(root,'exe'); const plain=join(root,'plain'); await writeFile(exe,'#!/bin/sh\\nexit 0\\n'); await chmod(exe,0o755); await writeFile(plain,'not executable'); await chmod(plain,0o644); await test('executable resolves on PATH',()=>assert.equal(resolveBinary('exe',{PATH:root}),exe)); await test('non-executable is not resolved',()=>assert.equal(resolveBinary('plain',{PATH:root}),null)); await test('missing is not resolved',()=>assert.equal(resolveBinary('missing',{PATH:root}),null)); } finally { await rm(root,{recursive:true,force:true}); }"
+      ]
+    },
+    {
+      "id": "smoke-test",
+      "program": "node",
+      "args": [
+        "--test",
+        "tests/harness-v1-smoke.test.js"
+      ]
+    }
+  ],
+  "capabilities": [],
+  "environment": {
+    "network_policy": "UNRESTRICTED"
+  }
+}

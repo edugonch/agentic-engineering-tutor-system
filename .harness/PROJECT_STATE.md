@@ -11,4 +11,7 @@ Update only after checking the current repository and current approved governanc
 - Blocking decision: NONE
 - Source-of-truth conflict: NONE
 - Remaining chapter budget: 0
-- Next safe action: Phase 3 acceptance/merge; then define Phase 4.
+- Phase 4 status: FAIL — `RECOVERY_LIVENESS_GAP` (final owner decision). Phase-4 autonomous bounded repair/recovery is EXPERIMENTAL / NOT RELEASED / KNOWN LIVENESS DEFECT. See `docs/phase-4-final-status.md`. Do not repair Phase 4 in Harness v1.
+- Harness v1 production baseline: `dbe8beb0134e5a34d2e1f3ae92b9def6c3c07848` (accepted Phase 3 SHA). See `FINAL_RELEASE_REPORT.md`.
+- Harness v1 autonomy ceiling: owner-approved Epic → derived/authorized WU → real builder → frozen candidate → deterministic verification → fresh independent reviewer → `complete_wu`. On `CHANGES_REQUIRED` or a blocker, stop and return control to the owner.
+- Next safe action: Phase 5 finalization only — finalize operator docs, verify the frozen baseline, and run the single supported happy-path smoke after the owner reloads the plugin at the frozen baseline. Do not attempt Phase-4 execution, repair or recovery.
