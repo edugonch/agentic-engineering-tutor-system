@@ -172,3 +172,94 @@ test("MANDATE_APPROVE OWNER_APPROVED_EPIC without a complete source binding is r
     /source_artifact_id/,
   )
 })
+
+
+test("MANDATE_APPROVE derives Epic last_jit_refresh from the durable event timestamp", () => {
+  const timestamp = "2026-10-04T04:40:00.000Z"
+  const state = project([
+    ev(
+      "MANDATE_APPROVE",
+      {
+        execution_id: "exec",
+        mandate_id: "M1",
+        max_wus: 2,
+        total_seconds: 60,
+        wu_queue: [
+          { wu_id: "WU-1", wu_contract_path: "wu-1.md", dependencies: [] },
+          { wu_id: "WU-2", wu_contract_path: "wu-2.md", dependencies: ["WU-1"] },
+        ],
+      },
+      0,
+      1,
+      { timestamp },
+    ),
+  ])
+
+  assert.equal(state.epic.last_jit_refresh, timestamp)
+})
+
+test("EPIC_CONTINUE derives JIT refresh from its durable event and replay is stable", () => {
+  const initialTimestamp = "2026-10-04T04:40:00.000Z"
+  const continueTimestamp = "2026-10-04T04:41:00.000Z"
+  const events = [
+    ev(
+      "MANDATE_APPROVE",
+      {
+        execution_id: "exec",
+        mandate_id: "M1",
+        max_wus: 2,
+        total_seconds: 60,
+        wu_queue: [
+          { wu_id: "WU-1", wu_contract_path: "wu-1.md", dependencies: [] },
+          { wu_id: "WU-2", wu_contract_path: "wu-2.md", dependencies: ["WU-1"] },
+        ],
+      },
+      0,
+      1,
+      { timestamp: initialTimestamp },
+    ),
+    ev("WU_ACTIVATE", { wu_id: "WU-1", mandate_id: "M1" }, 1, 2),
+    ev("FREEZE_CANDIDATE", { candidate_id: "c1", wu_id: "WU-1", manifest_hash: "mh", tree_hash: "th" }, 2, 3),
+    ev(
+      "RECORD_REVIEW",
+      {
+        candidate_id: "c1",
+        verdict: "PASS",
+        candidate_hashes: { manifest_hash: "mh", tree_hash: "th" },
+        verification_evidence_ids: ["v1"],
+        verified_check_ids: [],
+        verification_contract_hash: null,
+      },
+      3,
+      4,
+    ),
+    ev("WU_COMPLETE", { candidate_id: "c1" }, 4, 5),
+    ev("EPIC_CONTINUE", {}, 5, 6, { timestamp: continueTimestamp }),
+  ]
+
+  const first = project(events)
+  const second = project(structuredClone(events))
+  assert.equal(first.epic.last_jit_refresh, continueTimestamp)
+  assert.deepEqual(second, first)
+  assert.equal(first.wu.wu_id, "WU-2")
+})
+
+test("legacy Epic events without timestamps replay deterministically with a null JIT timestamp", () => {
+  const state = project([
+    ev(
+      "MANDATE_APPROVE",
+      {
+        execution_id: "exec",
+        mandate_id: "M1",
+        max_wus: 1,
+        total_seconds: 60,
+        wu_queue: [{ wu_id: "WU-1", wu_contract_path: "wu-1.md", dependencies: [] }],
+      },
+      0,
+      1,
+      { timestamp: undefined },
+    ),
+  ])
+
+  assert.equal(state.epic.last_jit_refresh, null)
+})
