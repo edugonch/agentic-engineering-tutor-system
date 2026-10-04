@@ -120,7 +120,7 @@ export function applyEvent(previous, event) {
           dependencies: Object.fromEntries(body.wu_queue.map((w) => [w.wu_id, w.dependencies ?? []])),
           next_wu_index: 0,
           authority_snapshot: { source_artifact_id: state.mandate.source_artifact_id, source_record_key: state.mandate.source_record_key, source_hash: state.mandate.source_hash },
-          last_jit_refresh: new Date().toISOString(),
+          last_jit_refresh: event.timestamp ?? null,
           continuation_state: "ACTIVE",
           terminal_condition: body.terminal_condition ?? null,
         }
@@ -170,7 +170,7 @@ export function applyEvent(previous, event) {
         return (w.dependencies ?? []).every((dep) => state.epic.completed_wu_ids.includes(dep))
       })
       if (!next) throw new Error("EPIC_CONTINUE: no next authorized WU.")
-      state.epic.last_jit_refresh = new Date().toISOString()
+      state.epic.last_jit_refresh = event.timestamp ?? null
       state.wu = {
         wu_id: next.wu_id,
         mandate_id: state.mandate.mandate_id,
