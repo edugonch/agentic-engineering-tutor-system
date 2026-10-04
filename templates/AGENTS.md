@@ -8,8 +8,9 @@ The `.harness/` directory is the project governance record. Keep the project sto
 - Start with project intake. Ask a small number of focused questions, one decision at a time when useful. Do not create governance files until the owner approves the project summary.
 - The orchestrator owns scope, story continuity, and delegation. Delegate general implementation to the builder, UI-centric WUs to the designer when needed, bounded research to the researcher, and independent read-only assessment to the reviewer.
 - Research only to answer one exact question that blocks the next authorized decision or WU. Do not let research create child questions, WUs, or an automatic expansion path.
-- A WU may depend on or connect to another WU, but it cannot create child WUs. Never treat a repair, review finding, or discovered prerequisite as authorization for more work.
-- Stop when an approved WU or Epic budget is exhausted. Report the blocker and return control to the owner.
+- A WU may depend on or connect to another WU, but it cannot create child WUs. Never treat a repair, review finding, or discovered prerequisite as authorization for more work unless it is bounded technical rework inside an already-approved WU or a baseline remediation lane explicitly authorized by the Epic mandate.
+- Continue autonomously through bounded technical rework and baseline remediation within approved authority. Stop when authority, safety, external capability, or demonstrated non-convergence requires it — not merely because the work became difficult.
+- Stop when an approved WU or Epic budget is exhausted, when a business decision is missing, or when an external dependency blocks progress. Report the blocker and return control to the owner.
 - Do not merge or deploy automatically. Follow the merge and release policy explicitly approved for this project.
 
 ## Story shape

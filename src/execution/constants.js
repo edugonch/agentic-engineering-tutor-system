@@ -26,6 +26,10 @@ export const OPERATION_TYPES = Object.freeze([
   "CHECKPOINT", // persist a resumable checkpoint
   "BLOCK", // record a governed stop (typed blocker class)
   "COMPLETE", // record EPIC_EXECUTION_VERIFIED (technical completion, not owner acceptance)
+  "CI_CLASSIFY", // classify CI failure per file as candidate-caused, baseline, environment, or external
+  "BASELINE_REMEDIATE", // authorize a tightly bounded baseline-remediation lane within the Epic
+  "EPIC_CONTINUE", // activate the next authorized WU after the current one is accepted
+  "OWNER_DECISION_REQUEST", // record a blocker that requires human owner authority
 ])
 
 export const PHASE_STATES = Object.freeze({
@@ -85,13 +89,16 @@ export const BLOCKER_CLASSES = Object.freeze([
   "BLOCKED_SCOPE",
   "NO_PROGRESS",
   "BUDGET_EXHAUSTED",
+  "BASELINE_REMEDIATION_REQUIRED",
+  "OWNER_DECISION_REQUIRED",
+  "EXTERNAL_BLOCKED",
 ])
 
 // Blockers that forbid forward execution (new WUs, new billable phases, or new
-// dispatches). The recoverable classes (TOOLING / EXTERNAL_FACT / ARCHITECTURE)
-// are intentionally excluded here; their bounded-recovery policy is a later
-// phase. This set makes "no alternative execution after a hard stop"
-// structural, not a prompt instruction.
+// dispatches). The recoverable classes (TOOLING / EXTERNAL_FACT / ARCHITECTURE /
+// BASELINE_REMEDIATION_REQUIRED) are intentionally excluded here; their bounded-
+// recovery policy is implemented in repair-policy. This set makes "no
+// alternative execution after a hard stop" structural, not a prompt instruction.
 export const TERMINAL_BLOCKER_CLASSES = new Set([
   "BLOCKED_PERMISSION",
   "BLOCKED_AUTHORITY",
@@ -99,6 +106,8 @@ export const TERMINAL_BLOCKER_CLASSES = new Set([
   "BLOCKED_SCOPE",
   "NO_PROGRESS",
   "BUDGET_EXHAUSTED",
+  "OWNER_DECISION_REQUIRED",
+  "EXTERNAL_BLOCKED",
 ])
 
 // Execution authorization is distinct from artifact approval. A JIT WU may be

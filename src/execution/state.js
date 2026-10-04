@@ -34,12 +34,15 @@ export function initialState() {
     revision: 0,
     execution_id: null,
     mandate: null, // { mandate_id, mandate_revision, max_wus, total_seconds }
+    epic: null, // { wu_queue, completed_wu_ids, blocked_wu_ids, dependencies, next_wu_index, authority_snapshot, last_jit_refresh, continuation_state, terminal_condition }
     wu: null, // { wu_id, mandate_id, mandate_revision, origin, execution_authorization, completed }
     activated_wu_ids: [], // history of every WU id ever activated (enforces max_wus + single-active-WU)
     budget: { total_seconds: 0, used_seconds: 0, reserved_seconds: 0, active_phase: null, active_started_at: null },
     dispatches: {}, // dispatch_id -> { status, session_id, operation_id, result, reconciled }
     candidates: {}, // candidate_id -> { manifest_hash, tree_hash, manifest }
     reviews: {}, // candidate_id -> { verdict, candidate_hashes, reviewer }
+    ci_classifications: {}, // candidate_id -> { check_id, status, failing_files }
+    baseline_remediations: {}, // remediation_wu_id -> { blocker_id, allowed_paths, verification_contract_hash, status }
     blocker: null, // { class, reason, at_revision }
     checkpoint: null, // { operation_id, revision, note, wu_id, used_seconds }
     completed: false,
@@ -109,6 +112,19 @@ export function applyEvent(previous, event) {
         }
       }
       state.budget.total_seconds = body.total_seconds
+      if (body.wu_queue && Array.isArray(body.wu_queue)) {
+        state.epic = {
+          wu_queue: body.wu_queue.map((w) => ({ wu_id: w.wu_id, wu_contract_path: w.wu_contract_path, dependencies: w.dependencies ?? [] })),
+          completed_wu_ids: [],
+          blocked_wu_ids: [],
+          dependencies: Object.fromEntries(body.wu_queue.map((w) => [w.wu_id, w.dependencies ?? []])),
+          next_wu_index: 0,
+          authority_snapshot: { source_artifact_id: state.mandate.source_artifact_id, source_record_key: state.mandate.source_record_key, source_hash: state.mandate.source_hash },
+          last_jit_refresh: new Date().toISOString(),
+          continuation_state: "ACTIVE",
+          terminal_condition: body.terminal_condition ?? null,
+        }
+      }
       break
     }
 
@@ -136,6 +152,36 @@ export function applyEvent(previous, event) {
         completed: false,
       }
       state.activated_wu_ids.push(body.wu_id)
+      if (state.epic) {
+        const idx = state.epic.wu_queue.findIndex((w) => w.wu_id === body.wu_id)
+        if (idx >= 0) state.epic.next_wu_index = idx + 1
+      }
+      break
+    }
+
+    case "EPIC_CONTINUE": {
+      if (!state.mandate) throw new Error("EPIC_CONTINUE requires an approved mandate.")
+      if (!state.epic) throw new Error("EPIC_CONTINUE requires an Epic queue.")
+      if (state.wu && !state.wu.completed) throw new Error(`EPIC_CONTINUE blocked: active WU ${state.wu.wu_id} is not complete.`)
+      if (state.blocker && TERMINAL_BLOCKER_CLASSES.has(state.blocker.class)) throw new Error(`EPIC_CONTINUE blocked by ${state.blocker.class}.`)
+      const next = state.epic.wu_queue.find((w) => {
+        if (state.epic.completed_wu_ids.includes(w.wu_id) || state.epic.blocked_wu_ids.includes(w.wu_id)) return false
+        if (state.wu && state.wu.wu_id === w.wu_id) return false
+        return (w.dependencies ?? []).every((dep) => state.epic.completed_wu_ids.includes(dep))
+      })
+      if (!next) throw new Error("EPIC_CONTINUE: no next authorized WU.")
+      state.epic.last_jit_refresh = new Date().toISOString()
+      state.wu = {
+        wu_id: next.wu_id,
+        mandate_id: state.mandate.mandate_id,
+        mandate_revision: state.mandate.mandate_revision,
+        origin: WU_ORIGIN.DERIVED,
+        execution_authorization: EXECUTION_AUTHORIZATION.AUTHORIZED_BY_MANDATE,
+        completed: false,
+      }
+      state.activated_wu_ids.push(next.wu_id)
+      const idx = state.epic.wu_queue.findIndex((w) => w.wu_id === next.wu_id)
+      if (idx >= 0) state.epic.next_wu_index = idx + 1
       break
     }
 
@@ -341,6 +387,59 @@ export function applyEvent(previous, event) {
       }
       state.wu.completed = true
       state.wu.completion = { candidate_id: candidateId, at_revision: state.revision }
+      if (state.epic && !state.epic.completed_wu_ids.includes(state.wu.wu_id)) {
+        state.epic.completed_wu_ids.push(state.wu.wu_id)
+      }
+      break
+    }
+
+    case "CI_CLASSIFY": {
+      if (!body.candidate_id) throw new Error("CI_CLASSIFY requires candidate_id.")
+      if (!body.check_id) throw new Error("CI_CLASSIFY requires check_id.")
+      if (!Array.isArray(body.failing_files)) throw new Error("CI_CLASSIFY requires failing_files array.")
+      const valid = new Set(["CANDIDATE_CHANGED", "BASELINE_UNCHANGED", "ENVIRONMENT", "EXTERNAL"])
+      for (const f of body.failing_files) {
+        if (!f || typeof f !== "object" || !valid.has(f.classification)) {
+          throw new Error(`CI_CLASSIFY invalid failing_files entry: ${JSON.stringify(f)}`)
+        }
+      }
+      state.ci_classifications[body.candidate_id] = {
+        check_id: body.check_id,
+        status: body.status,
+        failing_files: body.failing_files,
+      }
+      break
+    }
+
+    case "BASELINE_REMEDIATE": {
+      if (!state.blocker || state.blocker.class !== "BASELINE_REMEDIATION_REQUIRED") {
+        throw new Error("BASELINE_REMEDIATE requires an active BASELINE_REMEDIATION_REQUIRED blocker.")
+      }
+      if (!body.remediation_wu_id) throw new Error("BASELINE_REMEDIATE requires remediation_wu_id.")
+      if (state.baseline_remediations[body.remediation_wu_id]) throw new Error("Duplicate baseline remediation WU.")
+      state.baseline_remediations[body.remediation_wu_id] = {
+        blocker_id: state.blocker.blocker_id,
+        allowed_paths: body.allowed_paths ?? [],
+        verification_contract_hash: body.verification_contract_hash ?? null,
+        status: "AUTHORIZED",
+      }
+      break
+    }
+
+    case "OWNER_DECISION_REQUEST": {
+      if (!body.blocker_id) throw new Error("OWNER_DECISION_REQUEST requires blocker_id.")
+      state.blocker = {
+        blocker_id: body.blocker_id,
+        class: "OWNER_DECISION_REQUIRED",
+        reason: body.reason ?? null,
+        at_revision: state.revision,
+        failure_signature: body.failure_signature ?? stableHash({ blocker_id: body.blocker_id, reason: body.reason }),
+        evidence: body.evidence ?? null,
+      }
+      state.blocker_history.push(structuredClone(state.blocker))
+      if (state.epic && body.remediation_wu_id && !state.epic.blocked_wu_ids.includes(body.remediation_wu_id)) {
+        state.epic.blocked_wu_ids.push(body.remediation_wu_id)
+      }
       break
     }
 
@@ -348,8 +447,18 @@ export function applyEvent(previous, event) {
       if (state.wu && !state.wu.completed) {
         throw new Error(`COMPLETE blocked: active WU ${state.wu.wu_id} is not complete.`)
       }
+      if (state.epic) {
+        const remaining = state.epic.wu_queue.filter((w) => !state.epic.completed_wu_ids.includes(w.wu_id))
+        if (remaining.length > 0) {
+          throw new Error(`COMPLETE blocked: ${remaining.length} Epic WU(s) not completed: ${remaining.map((w) => w.wu_id).join(", ")}.`)
+        }
+      }
       state.completed = true
       state.completion = { result: body.result ?? null, at_revision: state.revision }
+      if (state.epic) {
+        state.epic.continuation_state = "EPIC_COMPLETE"
+        state.epic.terminal_condition = body.result ?? "EPIC_COMPLETE"
+      }
       break
     }
 

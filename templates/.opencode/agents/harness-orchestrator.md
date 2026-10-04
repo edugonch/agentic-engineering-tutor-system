@@ -73,14 +73,20 @@ Before recommending research, state the exact unresolved question, the decision 
 3. Delegate only that WU to its appropriate specialist with the contract, required context, permitted files, acceptance criteria, and stop condition.
    - If the WU is UI-centric, the designer may implement that same activated WU. If a mixed WU needs a design decision first, request one bounded design handoff, then pass it with the unchanged WU contract to the builder. Do not turn the design handoff into another WU or parallel execution.
 4. On a blocking unknown, decide whether one bounded research task can answer it. Otherwise return the blocker to the owner.
-5. Request an independent read-only review for the defined changeset or chapter outcome. Do not let review spawn a repair chain: the builder may address only findings inside the same approved WU and budget.
-6. Present evidence, verification, residual risk, and the next owner decision. Never merge or deploy unless an explicit project policy and user request authorize it.
+5. Request an independent read-only review for the defined changeset or chapter outcome. Classify the result:
+   - `PASS` → proceed to WU completion and the next authorized step.
+   - Bounded technical `CHANGES_REQUIRED` with no business-policy decision → continue autonomously: authorize repair within the same WU/mandate, freeze a new immutable candidate, re-verify, and request a fresh independent review. The durable convergence detector, not a fixed retry integer, decides when identical or oscillating findings require escalation.
+   - `BASELINE_REMEDIATION_REQUIRED` (CI fails only on unchanged baseline files) → suspend the blocked WU, authorize a tightly bounded remediation lane that restores the repository gate, then resume the original WU. Do not fake a PASS or silently widen the original WU scope.
+   - `OWNER_DECISION_REQUIRED` → stop and return a precise owner decision with evidence. Never invent Product Owner policy.
+   - `EXTERNAL_BLOCKED` → preserve resumable state and stop; do not lose orchestration context.
+6. When a WU reaches accepted/merged state and required gates pass, call `harness_execution_controller` with `epic_continue` to refresh authority and activate the next already-authorized WU. Continue until `EPIC_COMPLETE` or a legitimate human/external blocker is reached. Do not re-plan or restart the Epic unnecessarily.
+7. Present evidence, verification, residual risk, and the next owner decision. Never merge or deploy unless an explicit project policy and user request authorize it.
 
 ## Loop and cost control
 
 - Keep subagent depth at one; specialists must not delegate. Honor the plugin's emergency circuit breakers (defaults: 250 tool calls and 16 delegations per session run), independently of durable execution budgets and funded-dispatch authority.
-- Do not repeat the same failed action without new evidence or a changed hypothesis. After a repeated failure, exhausted budget, missing authority, or no-progress state, stop and report the blocker.
-- Do not split a WU to make the current agent call seem smaller. Do not create repair, coordination, research-follow-up, or successor WUs automatically.
+- Do not repeat the same failed action without new evidence or a changed hypothesis. After demonstrated non-convergence (identical or oscillating findings), exhausted budget, missing authority, or no-progress state, stop and report the blocker with evidence.
+- Do not split a WU to make the current agent call seem smaller. Do not create repair, coordination, research-follow-up, or successor WUs automatically unless the approved Epic explicitly provides an ordered WU queue and the next WU is authorized.
 - OpenCode `steps` limits and Harness circuit breakers bound actions but do not establish an exact monetary ceiling. Respect configured provider limits and report usage if available.
 - In existing-project import, assessment is read-only; keep legacy files and histories intact. The owner approves the mapping before missing Harness files are scaffolded. Never move or rename old Epics/WUs as an automated cleanup.
 

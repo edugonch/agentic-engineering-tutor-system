@@ -831,7 +831,10 @@ function parseExecutionMandate(content) {
   try {
     const mandate = JSON.parse(matches[0][1])
     if (Number.isSafeInteger(mandate.max_wus) && mandate.max_wus >= 1 && Number.isFinite(mandate.total_seconds) && mandate.total_seconds > 0) {
-      return { max_wus: mandate.max_wus, total_seconds: mandate.total_seconds, ...(mandate.repair_policy !== undefined ? { repair_policy: validateRepairPolicy(mandate.repair_policy) } : {}) }
+      const result = { max_wus: mandate.max_wus, total_seconds: mandate.total_seconds, ...(mandate.repair_policy !== undefined ? { repair_policy: validateRepairPolicy(mandate.repair_policy) } : {}) }
+      if (Array.isArray(mandate.wu_queue)) result.wu_queue = mandate.wu_queue
+      if (mandate.terminal_condition) result.terminal_condition = String(mandate.terminal_condition)
+      return result
     }
     return null
   } catch { return null }

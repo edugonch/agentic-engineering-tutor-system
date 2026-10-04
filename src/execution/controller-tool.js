@@ -17,7 +17,7 @@
 
 import { join, resolve, relative } from "node:path"
 import { readFile, lstat } from 'node:fs/promises'
-import { sha256 } from './serialize.js'
+import { sha256, stableHash } from './serialize.js'
 import { readLog, validateLog } from "./event-log.js"
 import { project, deriveBudget } from "./state.js"
 import { createExecutionController } from "./execution.js"
@@ -63,10 +63,14 @@ async function summary(controller) {
     blocker: snap.effective_blocker,
     permission_stops: snap.permission_stops,
     completed: state.completed,
+    completion: state.completion ?? null,
     mandate: state.mandate,
+    epic: state.epic ?? null,
     wu: state.wu,
     candidates: state.candidates,
     reviews: state.reviews,
+    ci_classifications: state.ci_classifications ?? {},
+    baseline_remediations: state.baseline_remediations ?? {},
     checkpoint: state.checkpoint,
     repair: state.repair ?? null,
     repair_history: state.repair_history ?? [],
@@ -172,6 +176,8 @@ export async function runExecutionController(projectRoot, input, candidateRegist
       source_record_key: epic.record_key,
       source_hash: epic.sha256,
       ...(epic.mandate.repair_policy ? { repair_policy: epic.mandate.repair_policy, controller_session_id: holder } : {}),
+      ...(epic.mandate.wu_queue ? { wu_queue: epic.mandate.wu_queue } : {}),
+      ...(epic.mandate.terminal_condition ? { terminal_condition: epic.mandate.terminal_condition } : {}),
     })
     return { action, commit_status: res.status, source_artifact_id: epic.source_id, source_hash: epic.sha256, ...(await summary(controller)) }
   }
@@ -298,6 +304,44 @@ export async function runExecutionController(projectRoot, input, candidateRegist
     const cls = String(input.class ?? "")
     if (!cls) throw new Error("block requires class (a BLOCKER_CLASSES value).")
     const res = await commitAction(controller, holder, `${executionId}:block${input.blocker_id ? `:${input.blocker_id}` : ''}`, "BLOCK", { class: cls, reason: input.reason ?? null, ...(input.blocker_id ? { blocker_id: input.blocker_id, failure_signature: input.failure_signature, evidence: input.evidence ?? null, origin_session_id: input.origin_session_id ?? null } : {}) })
+    return { action, commit_status: res.status, ...(await summary(controller)) }
+  }
+
+  if (action === "ci_classify") {
+    const candidateId = String(input.candidate_id ?? "")
+    if (!candidateId) throw new Error("ci_classify requires candidate_id.")
+    const checkId = String(input.check_id ?? "")
+    if (!checkId) throw new Error("ci_classify requires check_id.")
+    const failingFiles = Array.isArray(input.failing_files) ? input.failing_files : []
+    if (failingFiles.length === 0) throw new Error("ci_classify requires at least one failing_files entry.")
+    const valid = new Set(["CANDIDATE_CHANGED", "BASELINE_UNCHANGED", "ENVIRONMENT", "EXTERNAL"])
+    for (const f of failingFiles) {
+      if (!valid.has(f?.classification)) throw new Error(`ci_classify invalid classification: ${f?.classification}`)
+    }
+    const res = await commitAction(controller, holder, `${executionId}:ci-classify:${candidateId}:${checkId}`, "CI_CLASSIFY", { candidate_id: candidateId, check_id: checkId, status: input.status ?? "FAIL", failing_files: failingFiles })
+    return { action, commit_status: res.status, ...(await summary(controller)) }
+  }
+
+  if (action === "baseline_remediate") {
+    const remediationWuId = String(input.remediation_wu_id ?? "")
+    if (!remediationWuId) throw new Error("baseline_remediate requires remediation_wu_id.")
+    const allowedPaths = Array.isArray(input.allowed_paths) ? input.allowed_paths : []
+    if (allowedPaths.length === 0) throw new Error("baseline_remediate requires allowed_paths.")
+    const res = await commitAction(controller, holder, `${executionId}:baseline-remediate:${remediationWuId}`, "BASELINE_REMEDIATE", { remediation_wu_id: remediationWuId, allowed_paths: allowedPaths, verification_contract_hash: input.verification_contract_hash ?? null })
+    return { action, commit_status: res.status, ...(await summary(controller)) }
+  }
+
+  if (action === "request_owner_decision") {
+    const blockerId = String(input.blocker_id ?? "")
+    if (!blockerId) throw new Error("request_owner_decision requires blocker_id.")
+    const reason = String(input.reason ?? "")
+    if (!reason) throw new Error("request_owner_decision requires reason.")
+    const res = await commitAction(controller, holder, `${executionId}:owner-decision:${blockerId}`, "OWNER_DECISION_REQUEST", { blocker_id: blockerId, reason, evidence: input.evidence ?? null, failure_signature: input.failure_signature ?? stableHash({ blockerId, reason }) })
+    return { action, commit_status: res.status, ...(await summary(controller)) }
+  }
+
+  if (action === "epic_continue") {
+    const res = await commitAction(controller, holder, `${executionId}:epic-continue`, "EPIC_CONTINUE", {})
     return { action, commit_status: res.status, ...(await summary(controller)) }
   }
 

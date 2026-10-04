@@ -366,9 +366,84 @@ PASS requires all mandatory runtime and fault gates, suite/validate green, real
 A → B repair and independent review, preserved budget, restart reconstruction,
 typed recovery and fail-closed hard blockers. Unit tests alone cannot grant PASS.
 
-Current debt: implementation and every Phase 4 runtime/fault proof are pending;
-the proposed Epic/WU has no approval; runtime reload must be verified after
-bootstrap; full reviewer identity attestation and existing process/network
-containment limitations remain explicit. Recommend the accepted Phase 3 SHA as
-the only baseline until a verified Phase 4 SHA meets this gate. No Phase 5
-baseline promotion is justified yet.
+## 14. Phase 5 liveness extension (post-WU-055)
+
+The ALFRAN WU-055 regression exposed that a fixed `max_repair_cycles = 1` stop,
+combined with prompt instructions that forbid "repair chains," produces
+autonomous Work Unit execution with safety circuit breakers rather than
+autonomous Epic orchestration with bounded recovery. The following extensions are
+now part of the durable execution core:
+
+### 14.1 Convergence-based repair
+
+- `repair_policy.max_repair_cycles` remains the guaranteed minimum repair
+  entitlement, but values up to `8` are accepted.
+- `repair_policy.repair_convergence_budget` (>= `max_repair_cycles`, <= `8`)
+  allows additional repair cycles when findings demonstrate strict progress:
+  reduced total count, reduced high-severity count, or new distinct findings.
+- Beyond `max_repair_cycles`, authorization is rejected unless the new review
+  strictly improves on every prior cycle. Identical signatures,
+  `REPEATED_IDENTICAL_FAILURE`, and `OSCILLATING_FINDINGS` stop with
+  `NO_PROGRESS` and durable evidence.
+- Legacy policies with `repair_convergence_budget == max_repair_cycles` keep the
+  original `REPAIR_LIMIT_REACHED` behavior.
+
+### 14.2 CI failure classification
+
+`harness_execution_controller` action `ci_classify` records per-file
+classifications:
+
+- `CANDIDATE_CHANGED` → in-band normal repair.
+- `BASELINE_UNCHANGED` (and no candidate-caused failure) →
+  `BASELINE_REMEDIATION_REQUIRED` recoverable blocker. The orchestrator may
+  authorize a tightly bounded remediation lane via `baseline_remediate`.
+- `ENVIRONMENT` → `BLOCKED_TOOLING`.
+- `EXTERNAL` → `EXTERNAL_BLOCKED` terminal blocker.
+
+The candidate is never silently marked PASS.
+
+### 14.3 Epic continuation
+
+An approved Epic may declare `execution_mandate.wu_queue`: an ordered array of
+`{ wu_id, wu_contract_path, dependencies }`. The controller tracks
+`epic.{wu_queue, completed_wu_ids, blocked_wu_ids, next_wu_index,
+authority_snapshot, last_jit_refresh, continuation_state}`.
+
+After `complete_wu`, the orchestrator calls `epic_continue` to activate the next
+WU whose dependencies are satisfied. `complete` (Epic-level) is allowed only when
+all queued WUs are in `completed_wu_ids`.
+
+### 14.4 Owner decision gate
+
+`request_owner_decision` creates a terminal `OWNER_DECISION_REQUIRED` blocker.
+Use it when a review exposes missing business policy, contradictory authority,
+irreversible operation, or any matter outside the approved Epic mandate.
+
+### 14.5 State machine
+
+```text
+EPIC_ACTIVE
+  -> MANDATE_APPROVED
+  -> WU_ACTIVE
+    -> BUILDING
+    -> VERIFYING
+    -> REVIEWING
+      -> PASS -> WU_COMPLETE -> EPIC_CONTINUE -> WU_ACTIVE (next authorized)
+      -> CHANGES_REQUIRED (bounded technical) -> REPAIR_AUTHORIZED -> BUILDING (repair) -> VERIFYING -> REVIEWING
+      -> BASELINE_REMEDIATION_REQUIRED -> baseline_remediate -> BASELINE_WU -> ... -> resume WU_ACTIVE
+      -> OWNER_DECISION_REQUIRED -> STOP (human)
+      -> EXTERNAL_BLOCKED -> STOP (external)
+      -> NO_PROGRESS (non-converging) -> STOP (human/orchestration)
+    -> BUDGET_EXHAUSTED -> STOP
+  -> EPIC_COMPLETE
+```
+
+### 14.6 Compatibility
+
+Existing event logs replay unchanged. Legacy mandates without `wu_queue` or
+`repair_convergence_budget` retain their original one-WU, one-repair behavior.
+
+Current debt: full runtime/fault proof for Phase 5 scenarios is pending; the
+WU-055 regression tests now pass at the durable-core level. Recommend verifying
+plugin reload and end-to-end Epic continuation before promoting this SHA as a
+new baseline.

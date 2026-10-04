@@ -4,7 +4,7 @@ import { stableHash, stableSerialize } from './serialize.js'
 import { assertCandidatePath, composeCandidateEntries } from './candidate.js'
 import { TERMINAL_BLOCKER_CLASSES } from './constants.js'
 
-const RECOVERABLE = new Set(['BLOCKED_TOOLING', 'BLOCKED_EXTERNAL_FACT', 'BLOCKED_ARCHITECTURE'])
+const RECOVERABLE = new Set(['BLOCKED_TOOLING', 'BLOCKED_EXTERNAL_FACT', 'BLOCKED_ARCHITECTURE', 'BASELINE_REMEDIATION_REQUIRED'])
 const AUDIT = new Set(['CHECKPOINT', 'DISPATCH_FINISH', 'DISPATCH_RECONCILE', 'DISPATCH_RELEASE', 'DISPATCH_MARK_AMBIGUOUS'])
 const settled = (d) => ['result_reconciled', 'released'].includes(d.status)
 const complete = (d) => d?.status === 'result_reconciled'
@@ -13,10 +13,18 @@ const requireThat = (condition, message) => { if (!condition) throw new Error(me
 const text = (v) => typeof v === 'string' && v.trim().length > 0
 const hash = (v) => typeof v === 'string' && /^[a-f0-9]{64}$/.test(v)
 
+const CONVERGENCE_BUDGET_MAX = 8
+
 export function validateRepairPolicy(p) {
   requireThat(p && p.version === 1, 'Unsupported repair policy version.')
-  requireThat([0, 1].includes(p.max_repair_cycles), 'max_repair_cycles must be 0 or 1.')
+  requireThat(Number.isSafeInteger(p.max_repair_cycles) && p.max_repair_cycles >= 0 && p.max_repair_cycles <= CONVERGENCE_BUDGET_MAX, `max_repair_cycles must be an integer between 0 and ${CONVERGENCE_BUDGET_MAX}.`)
+  const convergenceBudget = p.repair_convergence_budget ?? p.max_repair_cycles
+  requireThat(Number.isSafeInteger(convergenceBudget) && convergenceBudget >= p.max_repair_cycles && convergenceBudget <= CONVERGENCE_BUDGET_MAX, 'repair_convergence_budget must be >= max_repair_cycles and <= ' + CONVERGENCE_BUDGET_MAX + '.')
   requireThat(text(p.wu_id) && hash(p.wu_contract_hash) && hash(p.verification_contract_hash), 'Repair policy requires exact WU and contract hashes.')
+  if (p.wu_ids !== undefined) {
+    requireThat(Array.isArray(p.wu_ids) && p.wu_ids.length > 0 && p.wu_ids.every(text), 'wu_ids must be a non-empty array of WU identifiers.')
+    requireThat(new Set(p.wu_ids).size === p.wu_ids.length, 'wu_ids contains duplicates.')
+  }
   assertCandidatePath(p.wu_contract_path)
   requireThat(Array.isArray(p.allowed_paths) && p.allowed_paths.length > 0, 'Repair policy requires allowed_paths.')
   p.allowed_paths.forEach(assertCandidatePath)
@@ -45,11 +53,11 @@ export function validateRepairPolicy(p) {
     if (a.class === 'BLOCKED_EXTERNAL_FACT') requireThat(a.actor === 'harness-researcher' && text(a.question), 'Research requires one exact question and harness-researcher.')
     if (a.class === 'BLOCKED_ARCHITECTURE') requireThat(text(a.decision_ref), 'Architecture recovery requires an already approved decision reference.')
   }
-  return structuredClone(p)
+  return { ...structuredClone(p), repair_convergence_budget: convergenceBudget }
 }
 
-function stop(s, cls, reason, event) {
-  const b = { blocker_id: `stop:${event.operation_id}`, class: cls, reason, at_revision: event.next_revision, failure_signature: stableHash({ cls, reason }) }
+function stop(s, cls, reason, event, { evidence = null, failure_signature = null } = {}) {
+  const b = { blocker_id: `stop:${event.operation_id}`, class: cls, reason, at_revision: event.next_revision, failure_signature: failure_signature ?? stableHash({ cls, reason }), evidence }
   s.blocker = b
   s.blocker_history.push(structuredClone(b))
 }
@@ -77,6 +85,44 @@ function findingsSignature(findings) {
   return stableHash(findings.map(f => ({ id: f.id, location: f.location })).sort((a, b) => a.id.localeCompare(b.id)))
 }
 
+function findingsFingerprint(findings) {
+  // Human-inspectible convergence evidence: counts by severity plus stable signatures.
+  const counts = {}
+  for (const f of findings) {
+    counts[f.severity] = (counts[f.severity] ?? 0) + 1
+  }
+  return { signature: findingsSignature(findings), count: findings.length, counts, ids: findings.map(f => f.id).sort() }
+}
+
+function demonstratesProgress(current, history) {
+  if (history.length === 0) return { progress: true }
+  const prior = history[history.length - 1]
+  const prior2 = history.length >= 2 ? history[history.length - 2] : null
+
+  // Strict reduction in total findings.
+  if (current.count < prior.count) return { progress: true, reason: 'finding-count-reduced' }
+
+  // Strict reduction in high-severity findings.
+  const high = (s) => ['high', 'major', 'critical', 'security'].includes(String(s).toLowerCase())
+  const currentHigh = Object.entries(current.counts).filter(([sev]) => high(sev)).reduce((sum, [, c]) => sum + c, 0)
+  const priorHigh = Object.entries(prior.counts).filter(([sev]) => high(sev)).reduce((sum, [, c]) => sum + c, 0)
+  if (currentHigh < priorHigh) return { progress: true, reason: 'high-severity-reduced' }
+
+  // Repeated identical signature compared to immediate prior cycle is not progress.
+  if (current.signature === prior.signature) {
+    return { progress: false, reason: 'REPEATED_IDENTICAL_FAILURE', evidence: { current, prior } }
+  }
+
+  // Oscillation between cycles (same signature as two cycles ago) is not progress.
+  if (prior2 && current.signature === prior2.signature) {
+    return { progress: false, reason: 'OSCILLATING_FINDINGS', evidence: { current, prior, prior2 } }
+  }
+
+  // Beyond the hard max_repair_cycles, require strict reduction; semantic
+  // churn without reduction is non-convergence.
+  return { progress: false, reason: 'NON_CONVERGING_REWORK', evidence: { current, prior } }
+}
+
 function changedPaths(oldManifest, newManifest) {
   const entries = (m) => composeCandidateEntries(m?.base?.files ?? [], m?.deletions ?? [], m?.overlay ?? [])
   const a = new Map(entries(oldManifest).map(e => [e.path, stableSerialize(e)]))
@@ -92,7 +138,7 @@ export function beforeRepairEvent(s, e) {
   const p = s.mandate?.repair_policy
   if (type === 'MANDATE_APPROVE' && b.repair_policy) {
     requireThat(!s.mandate, 'An execution mandate cannot be replaced.')
-    requireThat(b.authority_kind === 'OWNER_APPROVED_EPIC' && b.max_wus === 1, 'Phase 4 requires one WU under an approved Epic.')
+    requireThat(b.authority_kind === 'OWNER_APPROVED_EPIC' && Number.isSafeInteger(b.max_wus) && b.max_wus >= 1, 'Phase 4 requires a positive WU count under an approved Epic.')
     validateRepairPolicy(b.repair_policy)
   }
   if (!p) {
@@ -103,9 +149,10 @@ export function beforeRepairEvent(s, e) {
   if (s.blocker && TERMINAL_BLOCKER_CLASSES.has(s.blocker.class) && !AUDIT.has(type)) {
     throw new Error(`Forward execution blocked by terminal ${s.blocker.class}.`)
   }
-  if (s.completed || s.wu?.completed) requireThat(AUDIT.has(type), 'Execution/WU is already complete.')
+  if (s.completed || s.wu?.completed) requireThat(AUDIT.has(type) || type === 'EPIC_CONTINUE' || type === 'COMPLETE', 'Execution/WU is already complete.')
   if (type === 'WU_ACTIVATE') {
-    requireThat(b.wu_id === p.wu_id, 'WU outside the approved repair policy scope.')
+    const allowedWuIds = p.wu_ids ?? [p.wu_id]
+    requireThat(allowedWuIds.includes(b.wu_id), 'WU outside the approved repair policy scope.')
     return false
   }
   if (type === 'CHECKPOINT') {
@@ -134,6 +181,15 @@ export function beforeRepairEvent(s, e) {
   }
   if (type === 'DISPATCH_RELEASE') requireThat(!s.dispatches[b.dispatch_id]?.launch_call_id, 'Claimed launch is ambiguous; its reservation cannot be released.')
   if (type === 'BLOCK' && s.blocker) requireThat(TERMINAL_BLOCKER_CLASSES.has(b.class), 'Cannot replace an unresolved blocker with another recoverable blocker.')
+  if (type === 'EPIC_CONTINUE') {
+    requireThat(s.epic, 'EPIC_CONTINUE requires an Epic queue.')
+    requireThat(!s.wu || s.wu.completed, 'EPIC_CONTINUE requires no active incomplete WU.')
+    return false
+  }
+  if (type === 'COMPLETE') {
+    requireThat(s.wu?.completed || !s.wu, 'COMPLETE requires the active WU to be complete or absent.')
+    return false
+  }
   if (type === 'BLOCK' || AUDIT.has(type)) return false
   active(s)
   if (s.blocker && !['BLOCKER_RECOVERY_AUTHORIZE', 'BLOCKER_RESOLVE'].includes(type)) {
@@ -145,11 +201,32 @@ export function beforeRepairEvent(s, e) {
     const r = s.reviews[id]
     requireThat(b.candidate_id === id && r?.verdict === 'CHANGES_REQUIRED', 'Repair requires the current candidate CHANGES_REQUIRED review.')
     requireThat(!s.repair || s.repair.candidate_b, 'Repair already authorized; resume the same dispatch.')
-    if (s.wu.repair_cycle_count >= p.max_repair_cycles) { stop(s, 'NO_PROGRESS', 'REPAIR_LIMIT_REACHED', e); return true }
+    const budget = p.repair_convergence_budget ?? p.max_repair_cycles
+    if (s.wu.repair_cycle_count >= budget) {
+      // Within convergence budget we already require strict progress; exceeding
+      // the budget is a terminal non-convergence stop. Preserve the legacy
+      // REPAIR_LIMIT_REACHED reason when no extra convergence budget was granted.
+      const reason = budget === p.max_repair_cycles ? 'REPAIR_LIMIT_REACHED' : 'NON_CONVERGING_REWORK'
+      stop(s, 'NO_PROGRESS', reason, e, { evidence: { reason: 'convergence budget exhausted', repair_cycle_count: s.wu.repair_cycle_count, budget } })
+      return true
+    }
     requireThat(Object.values(s.dispatches).every(settled), 'Previous work must be settled before repair.')
     requireThat(text(b.dispatch_id) && !s.dispatches[b.dispatch_id], 'Repair dispatch must be unique.')
     requireThat(text(b.hypothesis) && Array.isArray(b.progress_evidence_ids) && b.progress_evidence_ids.length > 0 && b.progress_evidence_ids.every(id => r.findings.some(f => f.id === id)), 'Repair hypothesis must cite recorded findings.')
     if (available(s) < p.repair_seconds + p.review_seconds) { stop(s, 'BUDGET_EXHAUSTED', 'Repair and fresh review cannot be funded.', e); return true }
+
+    // Convergence detection: beyond the legacy max_repair_cycles, repairs must
+    // demonstrate strict progress or they stop with evidence.
+    if (s.wu.repair_cycle_count >= p.max_repair_cycles) {
+      const history = (s.repair_history ?? []).map(h => findingsFingerprint(h.findings ?? []))
+      const current = findingsFingerprint(r.findings ?? [])
+      const assessment = demonstratesProgress(current, history)
+      if (!assessment.progress) {
+        stop(s, 'NO_PROGRESS', assessment.reason, e, { evidence: assessment.evidence, failure_signature: stableHash({ reason: assessment.reason, current, history }) })
+        return true
+      }
+    }
+
     s.wu.repair_cycle_count++
     s.repair = { authorization_id: e.operation_id, review_id: r.review_id, findings: structuredClone(r.findings), findings_hash: r.findings_hash, candidate_a: id, candidate_b: null, dispatch_id: b.dispatch_id, hypothesis: b.hypothesis, progress_evidence_ids: b.progress_evidence_ids, wu_id: s.wu.wu_id, mandate_id: s.mandate.mandate_id, contract_hash: p.wu_contract_hash }
     s.repair_history.push(structuredClone(s.repair))
@@ -215,7 +292,8 @@ export function beforeRepairEvent(s, e) {
     requireThat(!Object.values(s.dispatches).some(other => other.session_id === b.session_id), 'A fresh independent session is required; session already dispatched.')
   }
   if (type === 'FREEZE_CANDIDATE') {
-    requireThat(b.wu_id === s.wu.wu_id && b.manifest?.verification_contract?.source_wu_id === p.wu_id && b.manifest.verification_contract.source_wu_hash === p.wu_contract_hash, 'Candidate WU contract provenance mismatch.')
+    const allowedWuIds = p.wu_ids ?? [p.wu_id]
+    requireThat(b.wu_id === s.wu.wu_id && allowedWuIds.includes(b.manifest?.verification_contract?.source_wu_id) && b.manifest?.verification_contract?.source_wu_hash === p.wu_contract_hash, 'Candidate WU contract provenance mismatch.')
     requireThat(b.verification_contract_hash === p.verification_contract_hash, 'Candidate verification contract changed.')
     requireThat(b.required_check_ids?.length > 0, 'Candidate needs declared checks.')
     const d = s.dispatches[b.dispatch_id]
@@ -245,6 +323,44 @@ export function beforeRepairEvent(s, e) {
   if (type === 'WU_COMPLETE') {
     requireThat(b.candidate_id === s.wu.current_candidate_id && !s.candidates[b.candidate_id]?.superseded_by, 'Only current unsuperseded candidate can complete WU.')
     requireThat(!s.repair || s.repair.candidate_b === b.candidate_id, 'Repair is incomplete.')
+  }
+  if (type === 'CI_CLASSIFY') {
+    requireThat(b.candidate_id && s.candidates[b.candidate_id], 'CI_CLASSIFY requires a recorded candidate.')
+    requireThat(Array.isArray(b.failing_files), 'CI_CLASSIFY requires failing_files.')
+    const hasCandidateCaused = b.failing_files.some(f => f.classification === 'CANDIDATE_CHANGED')
+    const hasBaseline = b.failing_files.some(f => f.classification === 'BASELINE_UNCHANGED')
+    const hasEnvironment = b.failing_files.some(f => f.classification === 'ENVIRONMENT')
+    const hasExternal = b.failing_files.some(f => f.classification === 'EXTERNAL')
+    // Baseline-only failures create a recoverable blocker; candidate-caused
+    // failures remain in-band for normal repair. Environment/external are
+    // handled as their own blocker classes if no candidate-caused issue exists.
+    if (!hasCandidateCaused && hasBaseline) {
+      stop(s, 'BASELINE_REMEDIATION_REQUIRED', 'CI failure is confined to unchanged baseline files.', e, {
+        evidence: { candidate_id: b.candidate_id, check_id: b.check_id, failing_files: b.failing_files },
+        failure_signature: stableHash({ candidate_id: b.candidate_id, check_id: b.check_id, baseline_files: b.failing_files.filter(f => f.classification === 'BASELINE_UNCHANGED').map(f => f.path).sort() }),
+      })
+      return true
+    }
+    if (!hasCandidateCaused && hasExternal) {
+      stop(s, 'EXTERNAL_BLOCKED', 'CI failure is attributed to an external dependency.', e, { evidence: { candidate_id: b.candidate_id, check_id: b.check_id, failing_files: b.failing_files } })
+      return true
+    }
+    if (!hasCandidateCaused && hasEnvironment) {
+      stop(s, 'BLOCKED_TOOLING', 'CI failure is attributed to environment/infrastructure.', e, { evidence: { candidate_id: b.candidate_id, check_id: b.check_id, failing_files: b.failing_files } })
+      return true
+    }
+    return false
+  }
+  if (type === 'BASELINE_REMEDIATE') {
+    requireThat(s.blocker?.class === 'BASELINE_REMEDIATION_REQUIRED', 'BASELINE_REMEDIATE requires an active baseline remediation blocker.')
+    requireThat(text(b.remediation_wu_id), 'Baseline remediation requires a remediation WU id.')
+    requireThat(Array.isArray(b.allowed_paths) && b.allowed_paths.length > 0, 'Baseline remediation requires allowed_paths.')
+    return false
+  }
+  if (type === 'OWNER_DECISION_REQUEST') {
+    requireThat(text(b.blocker_id), 'OWNER_DECISION_REQUEST requires a stable blocker_id.')
+    requireThat(text(b.reason), 'OWNER_DECISION_REQUEST requires a reason.')
+    return false
   }
   if (type === 'PHASE_START') throw new Error('Phase 4 bills through reserved dispatches only.')
   return false
