@@ -1,19 +1,39 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { applyOutputTokenCap, createTurnGuard, readGuardSettings } from "../src/turn-guard.js"
+import { applyOutputTokenCap, createTurnGuard, readGuardSettings, GUARD_ERROR_CODES } from "../src/turn-guard.js"
 
-test("defaults to no total tool-call ceiling and ignores invalid limit overrides", () => {
-  assert.equal(readGuardSettings({}).maxToolCalls, null)
-  assert.deepEqual(readGuardSettings({ HARNESS_MAX_TOOL_CALLS: "0" }), {
+function expectGuardThrow(fn, code, messagePattern) {
+  let caught = null
+  try {
+    fn()
+  } catch (err) {
+    caught = err
+  }
+  assert.ok(caught, `expected a guard error (${code}) to be thrown`)
+  assert.equal(caught.name, "HarnessGuardError")
+  assert.equal(caught.code, code)
+  assert.match(caught.message, messagePattern)
+  return caught
+}
+
+test("defaults to no total tool-call or delegation ceiling and ignores invalid overrides", () => {
+  assert.deepEqual(readGuardSettings({}), {
     maxToolCalls: null,
-    maxDelegations: 3,
+    maxDelegations: null,
+    maxIdenticalMutations: 4,
+    maxOutputTokens: null,
+  })
+  assert.deepEqual(readGuardSettings({ HARNESS_MAX_TOOL_CALLS: "0", HARNESS_MAX_DELEGATIONS: "0" }), {
+    maxToolCalls: null,
+    maxDelegations: null,
     maxIdenticalMutations: 4,
     maxOutputTokens: null,
   })
 })
 
-test("enables the total tool-call ceiling only when explicitly configured", () => {
+test("enables each ceiling only when explicitly configured", () => {
   assert.equal(readGuardSettings({ HARNESS_MAX_TOOL_CALLS: "7" }).maxToolCalls, 7)
+  assert.equal(readGuardSettings({ HARNESS_MAX_DELEGATIONS: "5" }).maxDelegations, 5)
 })
 
 test("leaves provider request options untouched unless the output-token cap is explicitly enabled", () => {
@@ -48,26 +68,59 @@ test("allows substantially more than 40 harmless reads when no total ceiling is 
   assert.equal(guard.snapshot("s1").calls, 200)
 })
 
-test("stops tool actions after an explicitly configured per-turn ceiling", () => {
-  const guard = createTurnGuard({ maxToolCalls: 2, maxDelegations: 4, maxIdenticalMutations: 4 })
+test("delegation ceiling is off by default and does not stop a normal governed flow", () => {
+  const guard = createTurnGuard()
+  // build → review → repair → review needs 4 delegations; far more must still
+  // be allowed because the delegation guard is not a WU budget.
+  for (let i = 0; i < 40; i++) {
+    assert.doesNotThrow(() => guard.before({ tool: "subagent", sessionID: "governed" }, { args: { description: `work-${i}` } }))
+  }
+})
+
+test("tool-call ceiling trips with a machine-readable code when configured", () => {
+  const guard = createTurnGuard({ maxToolCalls: 2, maxDelegations: null, maxIdenticalMutations: 4 })
   guard.before({ tool: "read", sessionID: "s1" }, { args: { filePath: "a" } })
   guard.before({ tool: "read", sessionID: "s1" }, { args: { filePath: "b" } })
-  assert.throws(() => guard.before({ tool: "read", sessionID: "s1" }, { args: {} }), /exceeded 2 tool calls/)
+  expectGuardThrow(
+    () => guard.before({ tool: "read", sessionID: "s1" }, { args: {} }),
+    GUARD_ERROR_CODES.TOOL_CALL_LIMIT_EXCEEDED,
+    /exceeded 2 tool calls/,
+  )
+})
+
+test("explicit delegation ceiling blocks the next delegation with a machine-readable code", () => {
+  const guard = createTurnGuard(readGuardSettings({ HARNESS_MAX_DELEGATIONS: "3" }))
+  guard.before({ tool: "subagent", sessionID: "s1" }, { args: { description: "build" } })
+  guard.before({ tool: "subagent", sessionID: "s1" }, { args: { description: "review" } })
+  guard.before({ tool: "subagent", sessionID: "s1" }, { args: { description: "repair" } })
+  expectGuardThrow(
+    () => guard.before({ tool: "subagent", sessionID: "s1" }, { args: { description: "final review" } }),
+    GUARD_ERROR_CODES.DELEGATION_LIMIT_EXCEEDED,
+    /exceeded the configured 3 subagent delegation ceiling/,
+  )
 })
 
 test("bounds V2 subagent fan-out independently of total tool calls", () => {
   const guard = createTurnGuard({ maxToolCalls: 20, maxDelegations: 1, maxIdenticalMutations: 4 })
   guard.before({ tool: "subagent", sessionID: "s1" }, { args: { description: "build" } })
-  assert.throws(() => guard.before({ tool: "subagent", sessionID: "s1" }, { args: { description: "review" } }), /exceeded 1 subagent delegations/)
+  expectGuardThrow(
+    () => guard.before({ tool: "subagent", sessionID: "s1" }, { args: { description: "review" } }),
+    GUARD_ERROR_CODES.DELEGATION_LIMIT_EXCEEDED,
+    /exceeded the configured 1 subagent delegation ceiling/,
+  )
 })
 
-test("trips on repeated identical mutation/delegation actions, not repeated reads", () => {
+test("trips on repeated identical mutation/delegation actions, not repeated reads, with a machine-readable code", () => {
   const guard = createTurnGuard({ maxToolCalls: 20, maxDelegations: 20, maxIdenticalMutations: 2 })
   guard.before({ tool: "read", sessionID: "s1" }, { args: { filePath: "a" } })
   guard.before({ tool: "read", sessionID: "s1" }, { args: { filePath: "a" } })
   guard.before({ tool: "bash", sessionID: "s1" }, { args: { command: "npm test" } })
   guard.before({ tool: "bash", sessionID: "s1" }, { args: { command: "npm test" } })
-  assert.throws(() => guard.before({ tool: "bash", sessionID: "s1" }, { args: { command: "npm test" } }), /same bash action/)
+  expectGuardThrow(
+    () => guard.before({ tool: "bash", sessionID: "s1" }, { args: { command: "npm test" } }),
+    GUARD_ERROR_CODES.REPEATED_MUTATION,
+    /same bash action/,
+  )
 })
 
 test("resets only the selected session", () => {
@@ -76,5 +129,9 @@ test("resets only the selected session", () => {
   guard.before({ tool: "read", sessionID: "s2" }, { args: {} })
   guard.reset("s1")
   assert.doesNotThrow(() => guard.before({ tool: "read", sessionID: "s1" }, { args: {} }))
-  assert.throws(() => guard.before({ tool: "read", sessionID: "s2" }, { args: {} }), /exceeded 1 tool calls/)
+  expectGuardThrow(
+    () => guard.before({ tool: "read", sessionID: "s2" }, { args: {} }),
+    GUARD_ERROR_CODES.TOOL_CALL_LIMIT_EXCEEDED,
+    /exceeded 1 tool calls/,
+  )
 })

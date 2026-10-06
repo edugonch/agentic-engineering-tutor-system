@@ -135,11 +135,11 @@ Environment overrides:
 | Variable | Default | Effect |
 |---|---:|---|
 | `HARNESS_MAX_TOOL_CALLS` | Disabled (unlimited) | Optional tool executions allowed in one OpenCode session run; when unset or empty, no total tool-call ceiling is enforced |
-| `HARNESS_MAX_DELEGATIONS` | `3` | Calls to OpenCode's `subagent` tool allowed in one session run |
+| `HARNESS_MAX_DELEGATIONS` | Disabled (unlimited) | Optional calls to OpenCode's `subagent` tool allowed in one session run; when unset or empty, no delegation ceiling is enforced |
 | `HARNESS_MAX_IDENTICAL_MUTATIONS` | `4` | Consecutive identical `subagent`, `bash`, `write`, `edit`, `patch`, or `apply_patch` calls before the circuit breaker trips |
 | `HARNESS_MAX_OUTPUT_TOKENS` | Disabled | Optional upper bound for each agent-loop response; when set, OpenCode receives this output-token limit |
 
-Each OpenCode session, including each subagent session, has its own counters; a new prompt resets that session's action budget. Total tool calls are unlimited by default; when `HARNESS_MAX_TOOL_CALLS` is explicitly set, that per-session call ceiling and the orchestrator delegation ceiling give a finite action bound, while agent `steps` limits usually stop earlier. This is not a precise dollar ceiling: input-token use and provider-side retries/cost reporting can vary. Configure provider spending limits as a second control.
+Each OpenCode session, including each subagent session, has its own counters; a new prompt resets that session's action budget. Total tool calls and subagent delegations are unlimited by default; when `HARNESS_MAX_TOOL_CALLS` or `HARNESS_MAX_DELEGATIONS` is explicitly set, that per-session ceiling gives a finite action bound, while agent `steps` limits usually stop earlier. This is not a precise dollar ceiling: input-token use and provider-side retries/cost reporting can vary. Configure provider spending limits as a second control.
 
 ## Development
 
