@@ -23,7 +23,7 @@ import {
   isJevReady,
   readJevSettings,
 } from "./src/decision/index.js"
-import { runContinuationProbe, createContinuationDriver, createCandidateRegistry, captureBaseSnapshot, freezeCandidate, runCandidateVerification, checkExecutionReadiness, pathDigest, validateVerificationContract, runExecutionController, assertToolControllerAuthority, assertToolFreezeAuthority, assertToolVerificationAuthority, createVerificationReceipt, writeVerificationReceipt, BLOCKER_CLASSES } from "./src/execution/index.js"
+import { runContinuationProbe, createContinuationDriver, createCandidateRegistry, captureBaseSnapshot, freezeCandidate, runCandidateVerification, checkExecutionReadiness, pathDigest, validateVerificationContract, runExecutionController, assertToolControllerAuthority, assertToolFreezeAuthority, assertToolVerificationAuthority, createVerificationReceipt, writeVerificationReceipt, BLOCKER_CLASSES, CI_CONCLUSIONS } from "./src/execution/index.js"
 
 const json = (value) => ({ content: JSON.stringify(value, null, 2) })
 const objectInput = (properties, required = []) => ({
@@ -395,7 +395,7 @@ export default Plugin.define({
         name: "harness_execution_controller",
         description: "Phase 2+ durable execution control surface. Drives the recoverable execution machine under .harness/execution/controller/<execution_id>/. Dispatch actions: init (approve a mandate), reserve, prepare_launch, record_launch, mark_ambiguous, record_finish, reconcile, release, recover (read-only classification), status, verify (read-only invariant check). WU lifecycle actions (Phase 3): activate_wu, record_candidate (loads the candidate from the registry; the caller cannot supply hashes), record_review, complete_wu (WU close), checkpoint, block. Epic liveness actions (Phase 5): ci_classify (classify CI failure per changed/unchanged file), baseline_remediate (authorize a bounded baseline remediation lane), request_owner_decision (record OWNER_DECISION_REQUIRED), epic_continue (activate the next authorized WU). complete remains Epic-level (EPIC_EXECUTION_VERIFIED). It is instrumentation, not new authority: every mutation routes through the controller commit path with operation_id + expected_revision + lease fencing. It never writes state.json or the event log directly, never edits OpenCode config/permissions/agents, and never simulates the model. Use verify after any restart to prove the durable core is intact.",
         input: objectInput({
-          action: { type: "string", enum: ["init", "approve_mandate", "transfer_controller", "status", "reserve", "prepare_launch", "record_launch", "mark_ambiguous", "record_finish", "recover", "reconcile", "release", "verify", "activate_wu", "record_candidate", "record_review", "complete_wu", "checkpoint", "block", "complete", "authorize_repair", "authorize_recovery", "resolve_blocker", "ci_classify", "baseline_remediate", "request_owner_decision", "epic_continue"], default: "status" },
+          action: { type: "string", enum: ["init", "approve_mandate", "transfer_controller", "status", "reserve", "prepare_launch", "record_launch", "mark_ambiguous", "record_finish", "recover", "reconcile", "release", "verify", "activate_wu", "record_candidate", "record_review", "complete_wu", "checkpoint", "block", "bind_pr", "record_ci", "complete", "authorize_repair", "authorize_recovery", "resolve_blocker", "ci_classify", "baseline_remediate", "request_owner_decision", "epic_continue"], default: "status" },
           execution_id: { type: "string", minLength: 1, description: "Stable isolation key; durable state lives under .harness/execution/controller/<execution_id>/." },
           session_id: { type: "string", minLength: 1, description: "OpenCode session ID holding the execution lease (required for mutations)." },
           mandate_id: { type: "string", minLength: 1 },
@@ -433,6 +433,12 @@ export default Plugin.define({
           remediation_wu_id: { type: 'string', minLength: 1, description: 'Bounded baseline-remediation WU id for baseline_remediate.' },
           allowed_paths: { type: 'array', items: { type: 'string' }, description: 'Project-relative paths the baseline remediation WU may touch.' },
           terminal_condition: { type: 'string', description: 'Human-readable Epic terminal acceptance condition recorded on approve_mandate.' },
+          repository: { type: "string", minLength: 1, description: "GitHub repository (owner/name) bound by bind_pr." },
+          pr_number: { type: "integer", minimum: 1, description: "GitHub PR number bound by bind_pr." },
+          head_sha: { type: "string", minLength: 1, description: "Exact reviewed head SHA (bind_pr, record_ci)." },
+          base_branch: { type: "string", minLength: 1, description: "Target base branch (bind_pr)." },
+          check_identity: { type: "string", minLength: 1, description: "CI run/check identity recorded by record_ci." },
+          conclusion: { type: "string", enum: [...CI_CONCLUSIONS], description: "CI conclusion recorded by record_ci; one of SUCCESS/FAILURE/PENDING/ERROR." },
         }, ["action", "execution_id"]),
         execute: async (input, context) => {
           if (input.session_id && input.session_id !== context.sessionID) throw new Error('Controller session_id must match the calling OpenCode session.')

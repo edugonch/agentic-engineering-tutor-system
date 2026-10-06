@@ -31,6 +31,8 @@ export const OPERATION_TYPES = Object.freeze([
   "EPIC_CONTINUE", // activate the next authorized WU after the current one is accepted
   "OWNER_DECISION_REQUEST", // record a blocker that requires human owner authority
   "CONTROLLER_TRANSFER", // explicit, owner-authorized, durable controller session transfer
+  "BIND_PR", // bind a GitHub PR to the active WU's frozen candidate (repository, pr_number, head/base)
+  "RECORD_CI", // record exact-head CI evidence bound to the candidate (check identity, conclusion)
 ])
 
 export const PHASE_STATES = Object.freeze({
@@ -134,3 +136,8 @@ export const MANDATE_AUTHORITY = Object.freeze({
   PROBE: "PROBE",
   OWNER_APPROVED_EPIC: "OWNER_APPROVED_EPIC",
 })
+
+// Conclusion vocabulary for exact-head CI evidence recorded via RECORD_CI.
+// Only SUCCESS can satisfy a governed merge gate; the others are recorded for
+// audit but never gate a merge.
+export const CI_CONCLUSIONS = Object.freeze(["SUCCESS", "FAILURE", "PENDING", "ERROR"])

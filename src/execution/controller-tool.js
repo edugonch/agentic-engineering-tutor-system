@@ -71,6 +71,8 @@ async function summary(controller) {
     reviews: state.reviews,
     ci_classifications: state.ci_classifications ?? {},
     baseline_remediations: state.baseline_remediations ?? {},
+    pr_binding: state.pr_binding ?? null,
+    ci_evidence: state.ci_evidence ?? null,
     checkpoint: state.checkpoint,
     repair: state.repair ?? null,
     repair_history: state.repair_history ?? [],
@@ -336,6 +338,27 @@ export async function runExecutionController(projectRoot, input, candidateRegist
     const reason = String(input.reason ?? "")
     if (!reason) throw new Error("block requires reason (a human-readable explanation of the stop).")
     const res = await commitAction(controller, holder, `${executionId}:block${input.blocker_id ? `:${input.blocker_id}` : ''}`, "BLOCK", { class: cls, reason, ...(input.blocker_id ? { blocker_id: input.blocker_id, failure_signature: input.failure_signature, evidence: input.evidence ?? null, origin_session_id: input.origin_session_id ?? null } : {}) })
+    return { action, commit_status: res.status, ...(await summary(controller)) }
+  }
+
+  if (action === "bind_pr") {
+    const res = await commitAction(controller, holder, `${executionId}:bind-pr:${input.pr_number}`, "BIND_PR", {
+      repository: String(input.repository ?? ""),
+      pr_number: Number(input.pr_number),
+      candidate_id: String(input.candidate_id ?? ""),
+      head_sha: String(input.head_sha ?? ""),
+      base_branch: String(input.base_branch ?? ""),
+    })
+    return { action, commit_status: res.status, ...(await summary(controller)) }
+  }
+
+  if (action === "record_ci") {
+    const res = await commitAction(controller, holder, `${executionId}:record-ci:${input.check_identity}`, "RECORD_CI", {
+      candidate_id: String(input.candidate_id ?? ""),
+      head_sha: String(input.head_sha ?? ""),
+      check_identity: String(input.check_identity ?? ""),
+      conclusion: String(input.conclusion ?? ""),
+    })
     return { action, commit_status: res.status, ...(await summary(controller)) }
   }
 

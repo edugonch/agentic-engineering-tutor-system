@@ -251,6 +251,76 @@ test("block contract rejects a missing class, missing reason, and an unknown cla
   })
 })
 
+test("bind_pr binds a PR to the active WU's frozen candidate", async () => {
+  await withRoot(async (root) => {
+    const sid = "ses-1"
+    const candidate = await seedCandidate(root)
+    await governed(root, sid)
+    await runExecutionController(root, { action: "activate_wu", execution_id: "E1", session_id: sid, wu_id: "WU-01", mandate_id: "E1-MANDATE-001" })
+    await runExecutionController(root, { action: "record_candidate", execution_id: "E1", session_id: sid, candidate_id: candidate.candidate_id })
+
+    const res = await runExecutionController(root, { action: "bind_pr", execution_id: "E1", session_id: sid, repository: "owner/repo", pr_number: 158, candidate_id: candidate.candidate_id, head_sha: "2ece3ee", base_branch: "main" })
+    assert.equal(res.commit_status, "committed")
+    assert.equal(res.pr_binding.repository, "owner/repo")
+    assert.equal(res.pr_binding.pr_number, 158)
+    assert.equal(res.pr_binding.candidate_id, candidate.candidate_id)
+    assert.equal(res.pr_binding.head_sha, "2ece3ee")
+    assert.equal(res.pr_binding.base_branch, "main")
+  })
+})
+
+test("bind_pr rejects an unknown candidate", async () => {
+  await withRoot(async (root) => {
+    const sid = "ses-1"
+    await governed(root, sid)
+    await runExecutionController(root, { action: "activate_wu", execution_id: "E1", session_id: sid, wu_id: "WU-01", mandate_id: "E1-MANDATE-001" })
+    await assert.rejects(
+      runExecutionController(root, { action: "bind_pr", execution_id: "E1", session_id: sid, repository: "owner/repo", pr_number: 158, candidate_id: "cand-unknown", head_sha: "sha", base_branch: "main" }),
+      /unknown candidate/,
+    )
+  })
+})
+
+test("record_ci records exact-head SUCCESS evidence bound to the PR", async () => {
+  await withRoot(async (root) => {
+    const sid = "ses-1"
+    const candidate = await seedCandidate(root)
+    await governed(root, sid)
+    await runExecutionController(root, { action: "activate_wu", execution_id: "E1", session_id: sid, wu_id: "WU-01", mandate_id: "E1-MANDATE-001" })
+    await runExecutionController(root, { action: "record_candidate", execution_id: "E1", session_id: sid, candidate_id: candidate.candidate_id })
+    await runExecutionController(root, { action: "bind_pr", execution_id: "E1", session_id: sid, repository: "owner/repo", pr_number: 158, candidate_id: candidate.candidate_id, head_sha: "2ece3ee", base_branch: "main" })
+
+    const res = await runExecutionController(root, { action: "record_ci", execution_id: "E1", session_id: sid, candidate_id: candidate.candidate_id, head_sha: "2ece3ee", check_identity: "ci-run-1", conclusion: "SUCCESS" })
+    assert.equal(res.commit_status, "committed")
+    assert.equal(res.ci_evidence.conclusion, "SUCCESS")
+    assert.equal(res.ci_evidence.head_sha, "2ece3ee")
+  })
+})
+
+test("record_ci rejects a stale head SHA and a mismatched candidate", async () => {
+  await withRoot(async (root) => {
+    const sid = "ses-1"
+    const candidate = await seedCandidate(root)
+    await governed(root, sid)
+    await runExecutionController(root, { action: "activate_wu", execution_id: "E1", session_id: sid, wu_id: "WU-01", mandate_id: "E1-MANDATE-001" })
+    await runExecutionController(root, { action: "record_candidate", execution_id: "E1", session_id: sid, candidate_id: candidate.candidate_id })
+    await runExecutionController(root, { action: "bind_pr", execution_id: "E1", session_id: sid, repository: "owner/repo", pr_number: 158, candidate_id: candidate.candidate_id, head_sha: "2ece3ee", base_branch: "main" })
+
+    await assert.rejects(
+      runExecutionController(root, { action: "record_ci", execution_id: "E1", session_id: sid, candidate_id: candidate.candidate_id, head_sha: "stale-sha", check_identity: "ci-run-1", conclusion: "SUCCESS" }),
+      /does not match the bound PR head/,
+    )
+    await assert.rejects(
+      runExecutionController(root, { action: "record_ci", execution_id: "E1", session_id: sid, candidate_id: "cand-other", head_sha: "2ece3ee", check_identity: "ci-run-1", conclusion: "SUCCESS" }),
+      /unknown candidate/,
+    )
+    await assert.rejects(
+      runExecutionController(root, { action: "record_ci", execution_id: "E1", session_id: sid, candidate_id: candidate.candidate_id, head_sha: "2ece3ee", check_identity: "ci-run-1", conclusion: "GARBAGE" }),
+      /invalid conclusion/,
+    )
+  })
+})
+
 test("activate_wu rejects a second WU while the first is incomplete", async () => {
   await withRoot(async (root) => {
     const sid = "ses-1"

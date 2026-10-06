@@ -5,6 +5,7 @@
 import {
   BILLABLE_PHASES,
   BLOCKER_CLASSES,
+  CI_CONCLUSIONS,
   DISPATCH_STATUS,
   EXECUTION_AUTHORIZATION,
   OPERATION_TYPES,
@@ -396,6 +397,51 @@ export function applyEvent(previous, event) {
     case "BLOCK": {
       if (!BLOCKER_CLASSES.includes(body.class)) throw new Error(`Unknown blocker class: ${body.class}.`)
       state.blocker = { class: body.class, reason: body.reason ?? null, at_revision: state.revision }
+      break
+    }
+
+    case "BIND_PR": {
+      const candidate = state.candidates[body.candidate_id]
+      if (!candidate) throw new Error(`BIND_PR: unknown candidate ${body.candidate_id}.`)
+      if (state.wu && candidate.wu_id !== state.wu.wu_id) {
+        throw new Error(`BIND_PR: candidate ${body.candidate_id} belongs to ${candidate.wu_id}, not the active WU ${state.wu.wu_id}.`)
+      }
+      if (!body.repository) throw new Error("BIND_PR requires repository.")
+      if (!Number.isSafeInteger(body.pr_number) || body.pr_number < 1) throw new Error("BIND_PR requires a positive integer pr_number.")
+      if (!body.head_sha) throw new Error("BIND_PR requires head_sha (the exact reviewed head).")
+      if (!body.base_branch) throw new Error("BIND_PR requires base_branch.")
+      state.pr_binding = {
+        repository: body.repository,
+        pr_number: body.pr_number,
+        candidate_id: body.candidate_id,
+        head_sha: body.head_sha,
+        base_branch: body.base_branch,
+        at_revision: state.revision,
+      }
+      break
+    }
+
+    case "RECORD_CI": {
+      const candidate = state.candidates[body.candidate_id]
+      if (!candidate) throw new Error(`RECORD_CI: unknown candidate ${body.candidate_id}.`)
+      if (!body.head_sha) throw new Error("RECORD_CI requires head_sha.")
+      if (!body.check_identity) throw new Error("RECORD_CI requires check_identity.")
+      if (!CI_CONCLUSIONS.includes(body.conclusion)) throw new Error(`RECORD_CI invalid conclusion: ${body.conclusion}.`)
+      // Exact-head binding: CI from another SHA than the bound PR head is
+      // rejected, and CI from a previous (superseded) candidate is rejected.
+      if (state.pr_binding && body.head_sha !== state.pr_binding.head_sha) {
+        throw new Error(`RECORD_CI head_sha ${body.head_sha} does not match the bound PR head ${state.pr_binding.head_sha}.`)
+      }
+      if (state.pr_binding && body.candidate_id !== state.pr_binding.candidate_id) {
+        throw new Error(`RECORD_CI candidate ${body.candidate_id} does not match the bound candidate ${state.pr_binding.candidate_id}.`)
+      }
+      state.ci_evidence = {
+        candidate_id: body.candidate_id,
+        head_sha: body.head_sha,
+        check_identity: body.check_identity,
+        conclusion: body.conclusion,
+        at_revision: state.revision,
+      }
       break
     }
 
