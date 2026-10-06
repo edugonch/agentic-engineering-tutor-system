@@ -196,6 +196,29 @@ test("release is forbidden once launched (not a never-launched state)", () => {
   assert.throws(() => applyEvent(s, nextEvent(s, "DISPATCH_RELEASE", { dispatch_id: "d1" })), /never-launched/)
 })
 
+test("a claimed launch (launch_call_id set) cannot be released; mark_ambiguous is the path", () => {
+  const ev = makeBuilder()
+  const events = [
+    ev("MANDATE_APPROVE", MANDATE),
+    ev("DISPATCH_RESERVE", { dispatch_id: "d1", reserved_seconds: 5 }),
+    ev("DISPATCH_PREPARE", { dispatch_id: "d1" }),
+  ]
+  const s = project(events)
+  // A committed launch_claim sets launch_call_id: the side effect may have
+  // occurred even though no session identity was recorded. Release must fail
+  // closed rather than treat the outcome as deterministically never-launched.
+  s.dispatches.d1.launch_call_id = "call-1"
+  assert.throws(
+    () => applyEvent(s, nextEvent(s, "DISPATCH_RELEASE", { dispatch_id: "d1" })),
+    /launch was claimed|ambiguous/,
+  )
+  // mark_ambiguous preserves the reservation and is the correct non-releasing path.
+  const s2 = applyEvent(s, nextEvent(s, "DISPATCH_MARK_AMBIGUOUS", { dispatch_id: "d1" }))
+  assert.equal(s2.dispatches.d1.status, DISPATCH_STATUS.AMBIGUOUS)
+  assert.equal(s2.dispatches.d1.reservation_status, RESERVATION_STATUS.RESERVED)
+  assert.equal(s2.budget.reserved_seconds, 5) // still held
+})
+
 test("mark_ambiguous is forbidden from a launched state", () => {
   const ev = makeBuilder()
   const events = [ev("MANDATE_APPROVE", MANDATE), ev("DISPATCH_RESERVE", { dispatch_id: "d1", reserved_seconds: 5 }), ev("DISPATCH_PREPARE", { dispatch_id: "d1" }), ev("DISPATCH_LAUNCH", { dispatch_id: "d1", session_id: "ses-1" })]

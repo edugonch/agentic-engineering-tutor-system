@@ -305,6 +305,14 @@ export function applyEvent(previous, event) {
       if (d.status !== DISPATCH_STATUS.RESERVED && d.status !== DISPATCH_STATUS.PENDING_LAUNCH) {
         throw new Error(`Cannot release dispatch ${body.dispatch_id}: not in a never-launched state (status ${d.status}).`)
       }
+      // A claimed launch (launch_call_id set) means the external side effect may
+      // have occurred even though no session identity was recorded. Releasing it
+      // would treat an uncertain outcome as deterministically never-launched.
+      // mark_ambiguous is the correct path. This invariant is structural at the
+      // state machine, not dependent on a repair policy or a prompt instruction.
+      if (d.launch_call_id) {
+        throw new Error(`Cannot release dispatch ${body.dispatch_id}: launch was claimed (launch_call_id set); mark it ambiguous instead of releasing.`)
+      }
       if (d.reservation_status !== RESERVATION_STATUS.RESERVED) throw new Error(`Cannot release dispatch ${body.dispatch_id}: reservation already ${d.reservation_status}.`)
       const reserved = d.reserved_seconds
       d.status = DISPATCH_STATUS.RELEASED
