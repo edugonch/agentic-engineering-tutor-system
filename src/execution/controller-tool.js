@@ -62,6 +62,8 @@ async function summary(controller) {
     wu: state.wu,
     candidates: state.candidates,
     reviews: state.reviews,
+    pr_binding: state.pr_binding ?? null,
+    ci_evidence: state.ci_evidence ?? {},
     checkpoint: state.checkpoint,
   }
 }
@@ -319,6 +321,29 @@ export async function runExecutionController(projectRoot, input, candidateRegist
     const reason = String(input.reason ?? "")
     if (!reason) throw new Error("block requires reason (a human-readable explanation of the stop).")
     const res = await commitAction(controller, holder, `${executionId}:block`, "BLOCK", { class: cls, reason })
+    return { action, commit_status: res.status, ...(await summary(controller)) }
+  }
+
+  if (action === "bind_pr") {
+    const res = await commitAction(controller, holder, `${executionId}:bind-pr:${input.pr_number}`, "BIND_PR", {
+      repository: String(input.repository ?? ""),
+      pr_number: Number(input.pr_number),
+      candidate_id: String(input.candidate_id ?? ""),
+      head_sha: String(input.head_sha ?? ""),
+      base_branch: String(input.base_branch ?? ""),
+      base_sha: String(input.base_sha ?? ""),
+    })
+    return { action, commit_status: res.status, ...(await summary(controller)) }
+  }
+
+  if (action === "record_ci") {
+    const res = await commitAction(controller, holder, `${executionId}:record-ci:${input.check_identity}`, "RECORD_CI", {
+      candidate_id: String(input.candidate_id ?? ""),
+      head_sha: String(input.head_sha ?? ""),
+      check_identity: String(input.check_identity ?? ""),
+      conclusion: String(input.conclusion ?? ""),
+      evidence_ref: input.evidence_ref ?? null,
+    })
     return { action, commit_status: res.status, ...(await summary(controller)) }
   }
 

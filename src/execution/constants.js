@@ -24,6 +24,8 @@ export const OPERATION_TYPES = Object.freeze([
   "CHECKPOINT", // persist a resumable checkpoint
   "BLOCK", // record a governed stop (typed blocker class)
   "COMPLETE", // record EPIC_EXECUTION_VERIFIED (technical completion, not owner acceptance)
+  "BIND_PR", // immutably bind a GitHub PR to the active WU's frozen candidate (repository, pr_number, head/base SHA)
+  "RECORD_CI", // record exact-head CI evidence for one check, bound to a candidate (multiple checks per candidate)
 ])
 
 export const PHASE_STATES = Object.freeze({
@@ -122,3 +124,8 @@ export const MANDATE_AUTHORITY = Object.freeze({
   PROBE: "PROBE",
   OWNER_APPROVED_EPIC: "OWNER_APPROVED_EPIC",
 })
+
+// Conclusion vocabulary for exact-head CI evidence recorded via RECORD_CI.
+// Only SUCCESS can satisfy a governed merge gate (enforced by the merge policy,
+// not by RECORD_CI itself); the others are recorded for audit but never gate.
+export const CI_CONCLUSIONS = Object.freeze(["SUCCESS", "FAILURE", "PENDING", "ERROR"])
