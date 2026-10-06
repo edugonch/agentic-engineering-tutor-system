@@ -283,7 +283,9 @@ export async function runExecutionController(projectRoot, input, candidateRegist
   if (action === "block") {
     const cls = String(input.class ?? "")
     if (!cls) throw new Error("block requires class (a BLOCKER_CLASSES value).")
-    const res = await commitAction(controller, holder, `${executionId}:block`, "BLOCK", { class: cls, reason: input.reason ?? null })
+    const reason = String(input.reason ?? "")
+    if (!reason) throw new Error("block requires reason (a human-readable explanation of the stop).")
+    const res = await commitAction(controller, holder, `${executionId}:block`, "BLOCK", { class: cls, reason })
     return { action, commit_status: res.status, ...(await summary(controller)) }
   }
 
