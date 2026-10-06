@@ -5,6 +5,7 @@
 import {
   BILLABLE_PHASES,
   BLOCKER_CLASSES,
+  CI_CONCLUSIONS,
   DISPATCH_STATUS,
   EXECUTION_AUTHORIZATION,
   OPERATION_TYPES,
@@ -39,6 +40,8 @@ export function initialState() {
     dispatches: {}, // dispatch_id -> { status, session_id, operation_id, result, reconciled }
     candidates: {}, // candidate_id -> { manifest_hash, tree_hash, manifest }
     reviews: {}, // candidate_id -> { verdict, candidate_hashes, reviewer }
+    pr_binding: null, // { repository, pr_number, candidate_id, head_sha, base_branch, base_sha, at_revision }
+    ci_evidence: {}, // candidate_id -> check_identity -> { head_sha, conclusion, evidence_ref, observed_at }
     blocker: null, // { class, reason, at_revision }
     checkpoint: null, // { operation_id, revision, note, wu_id, used_seconds }
     completed: false,
@@ -343,6 +346,64 @@ export function applyEvent(previous, event) {
     case "BLOCK": {
       if (!BLOCKER_CLASSES.includes(body.class)) throw new Error(`Unknown blocker class: ${body.class}.`)
       state.blocker = { class: body.class, reason: body.reason ?? null, at_revision: state.revision }
+      break
+    }
+
+    case "BIND_PR": {
+      const candidate = state.candidates[body.candidate_id]
+      if (!candidate) throw new Error(`BIND_PR: unknown candidate ${body.candidate_id}.`)
+      if (state.wu && candidate.wu_id !== state.wu.wu_id) {
+        throw new Error(`BIND_PR: candidate ${body.candidate_id} belongs to ${candidate.wu_id}, not the active WU ${state.wu.wu_id}.`)
+      }
+      if (!body.repository) throw new Error("BIND_PR requires repository.")
+      if (!Number.isSafeInteger(body.pr_number) || body.pr_number < 1) throw new Error("BIND_PR requires a positive integer pr_number.")
+      if (!body.head_sha) throw new Error("BIND_PR requires head_sha.")
+      if (!body.base_branch) throw new Error("BIND_PR requires base_branch.")
+      if (!body.base_sha) throw new Error("BIND_PR requires base_sha.")
+      const binding = {
+        repository: body.repository,
+        pr_number: body.pr_number,
+        candidate_id: body.candidate_id,
+        head_sha: body.head_sha,
+        base_branch: body.base_branch,
+        base_sha: body.base_sha,
+        at_revision: state.revision,
+      }
+      // Immutable binding: a different PR/head/base must not silently overwrite
+      // the existing one (a head change requires a new candidate + fresh review).
+      // The exact same binding may be re-applied (idempotent).
+      if (state.pr_binding) {
+        const existing = state.pr_binding
+        const same =
+          existing.repository === binding.repository &&
+          existing.pr_number === binding.pr_number &&
+          existing.candidate_id === binding.candidate_id &&
+          existing.head_sha === binding.head_sha &&
+          existing.base_branch === binding.base_branch &&
+          existing.base_sha === binding.base_sha
+        if (!same) {
+          throw new Error(`BIND_PR: already bound to repository ${existing.repository} PR #${existing.pr_number} head ${existing.head_sha}; rebinding a different PR/head requires a new candidate and review.`)
+        }
+      }
+      state.pr_binding = binding
+      break
+    }
+
+    case "RECORD_CI": {
+      const candidate = state.candidates[body.candidate_id]
+      if (!candidate) throw new Error(`RECORD_CI: unknown candidate ${body.candidate_id}.`)
+      if (!body.head_sha) throw new Error("RECORD_CI requires head_sha.")
+      if (!body.check_identity) throw new Error("RECORD_CI requires check_identity.")
+      if (!CI_CONCLUSIONS.includes(body.conclusion)) throw new Error(`RECORD_CI invalid conclusion: ${body.conclusion}.`)
+      // Multiple checks per candidate: keyed by check_identity so a later check
+      // never overwrites an earlier one.
+      if (!state.ci_evidence[body.candidate_id]) state.ci_evidence[body.candidate_id] = {}
+      state.ci_evidence[body.candidate_id][body.check_identity] = {
+        head_sha: body.head_sha,
+        conclusion: body.conclusion,
+        evidence_ref: body.evidence_ref ?? null,
+        observed_at: event.timestamp,
+      }
       break
     }
 
