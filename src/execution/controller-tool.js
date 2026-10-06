@@ -333,7 +333,9 @@ export async function runExecutionController(projectRoot, input, candidateRegist
   if (action === "block") {
     const cls = String(input.class ?? "")
     if (!cls) throw new Error("block requires class (a BLOCKER_CLASSES value).")
-    const res = await commitAction(controller, holder, `${executionId}:block${input.blocker_id ? `:${input.blocker_id}` : ''}`, "BLOCK", { class: cls, reason: input.reason ?? null, ...(input.blocker_id ? { blocker_id: input.blocker_id, failure_signature: input.failure_signature, evidence: input.evidence ?? null, origin_session_id: input.origin_session_id ?? null } : {}) })
+    const reason = String(input.reason ?? "")
+    if (!reason) throw new Error("block requires reason (a human-readable explanation of the stop).")
+    const res = await commitAction(controller, holder, `${executionId}:block${input.blocker_id ? `:${input.blocker_id}` : ''}`, "BLOCK", { class: cls, reason, ...(input.blocker_id ? { blocker_id: input.blocker_id, failure_signature: input.failure_signature, evidence: input.evidence ?? null, origin_session_id: input.origin_session_id ?? null } : {}) })
     return { action, commit_status: res.status, ...(await summary(controller)) }
   }
 

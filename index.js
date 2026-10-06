@@ -23,7 +23,7 @@ import {
   isJevReady,
   readJevSettings,
 } from "./src/decision/index.js"
-import { runContinuationProbe, createContinuationDriver, createCandidateRegistry, captureBaseSnapshot, freezeCandidate, runCandidateVerification, checkExecutionReadiness, pathDigest, validateVerificationContract, runExecutionController, assertToolControllerAuthority, assertToolFreezeAuthority, assertToolVerificationAuthority, createVerificationReceipt, writeVerificationReceipt } from "./src/execution/index.js"
+import { runContinuationProbe, createContinuationDriver, createCandidateRegistry, captureBaseSnapshot, freezeCandidate, runCandidateVerification, checkExecutionReadiness, pathDigest, validateVerificationContract, runExecutionController, assertToolControllerAuthority, assertToolFreezeAuthority, assertToolVerificationAuthority, createVerificationReceipt, writeVerificationReceipt, BLOCKER_CLASSES } from "./src/execution/index.js"
 
 const json = (value) => ({ content: JSON.stringify(value, null, 2) })
 const objectInput = (properties, required = []) => ({
@@ -405,7 +405,6 @@ export default Plugin.define({
           expected_old_controller_session_id: { type: "string", minLength: 1, description: "Durable old controller identity the transfer expects (transfer_controller)." },
           expected_revision: { type: "integer", minimum: 1, description: "Current execution revision the transfer expects (transfer_controller)." },
           transfer_id: { type: "string", minLength: 1, description: "Stable idempotency key for the transfer operation (transfer_controller)." },
-          reason: { type: "string", minLength: 1, description: "Human-readable reason for the controller transfer (transfer_controller)." },
           max_wus: { type: "integer", minimum: 1 },
           total_seconds: { type: "number", exclusiveMinimum: 0 },
           dispatch_id: { type: "string", minLength: 1 },
@@ -418,11 +417,11 @@ export default Plugin.define({
           verification_evidence_ids: { type: "array", items: { type: "string" }, description: "Durable evidence receipts (verify-<hash>) from harness_run_verification, bound to the candidate and PASS." },
           reviewer: { type: "string" },
           checkpoint_id: { type: "string", minLength: 1, description: "Explicit checkpoint key so repeated checkpoints do not collide on the operation id." },
-          note: { type: "string" },
-          class: { type: "string" },
+          note: { type: "string", description: "Checkpoint note (checkpoint action only)." },
+          class: { type: "string", enum: [...BLOCKER_CLASSES], description: "Typed blocker class (block action); must be a BLOCKER_CLASSES value." },
           purpose: { type: 'string', enum: ['BUILD', 'REPAIR', 'REVIEW', 'RECOVERY'] },
           blocker_id: { type: 'string', minLength: 1 },
-          reason: { type: 'string' },
+          reason: { type: 'string', minLength: 1, description: "Human-readable reason (block, transfer_controller)." },
           failure_signature: { type: 'string', minLength: 1 },
           evidence: { type: 'object' },
           recovery_action_id: { type: 'string', minLength: 1 },

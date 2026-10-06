@@ -37,7 +37,7 @@ async function fixture(fn, { seconds = 100, overrides = {} } = {}) {
       title: 'Test-only Phase 4 authority', source_refs: ['wu.md'],
       content: `execution_mandate: ${JSON.stringify({ max_wus: 1, total_seconds: seconds, repair_policy: { ...policy, ...overrides } })}`,
     })
-    const call = (input) => runExecutionController(root, { execution_id: 'E', session_id: 'owner', ...input })
+    const call = (input) => runExecutionController(root, { execution_id: 'E', session_id: 'owner', ...(input.action === 'block' ? { reason: 'test stop' } : {}), ...input })
     await call({ action: 'approve_mandate', epic_artifact_id: 'epic-p4' })
     await call({ action: 'activate_wu', wu_id: 'WU-P4', mandate_id: 'E-MANDATE-001' })
     const registry = createCandidateRegistry({ dir: join(root, '.harness/execution') })

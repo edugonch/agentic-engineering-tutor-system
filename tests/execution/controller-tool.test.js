@@ -218,6 +218,39 @@ test("activate_wu with a non-matching mandate_id is rejected (authority is manda
   })
 })
 
+test("block contract persists a typed class and its reason", async () => {
+  await withRoot(async (root) => {
+    const sid = "ses-1"
+    await governed(root, sid)
+    const res = await runExecutionController(root, { action: "block", execution_id: "E1", session_id: sid, class: "BLOCKED_TOOLING", reason: "transient tooling outage" })
+    assert.equal(res.commit_status, "committed")
+    assert.equal(res.blocker.class, "BLOCKED_TOOLING")
+    assert.equal(res.blocker.reason, "transient tooling outage")
+  })
+})
+
+test("block contract rejects a missing class, missing reason, and an unknown class", async () => {
+  await withRoot(async (root) => {
+    const sid = "ses-1"
+    await governed(root, sid)
+
+    await assert.rejects(
+      runExecutionController(root, { action: "block", execution_id: "E1", session_id: sid, reason: "no class" }),
+      /requires class/,
+    )
+    await assert.rejects(
+      runExecutionController(root, { action: "block", execution_id: "E1", session_id: sid, class: "BLOCKED_TOOLING" }),
+      /requires reason/,
+    )
+    // A reviewer-outcome name is not a BLOCKER_CLASSES value; it is rejected,
+    // not silently persisted.
+    await assert.rejects(
+      runExecutionController(root, { action: "block", execution_id: "E1", session_id: sid, class: "REVIEW_ENVIRONMENT_BLOCKED", reason: "not a blocker class" }),
+      /Unknown blocker class/,
+    )
+  })
+})
+
 test("activate_wu rejects a second WU while the first is incomplete", async () => {
   await withRoot(async (root) => {
     const sid = "ses-1"
