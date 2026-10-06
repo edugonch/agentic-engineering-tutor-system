@@ -24,7 +24,7 @@ import { createExecutionController } from "./execution.js"
 import { assertControllerMutationAuthority } from "./controller-authority.js"
 import { createCandidateRegistry } from "./candidate-registry.js"
 import { readVerificationReceipt } from "./verification-results.js"
-import { findApprovedEpic } from "../project-knowledge.js"
+import { findApprovedEpic, findApprovedDecision } from "../project-knowledge.js"
 import { controllerStates } from "./ownership.js"
 import { DISPATCH_STATUS, RESERVATION_STATUS, MANDATE_AUTHORITY } from "./constants.js"
 
@@ -180,6 +180,36 @@ export async function runExecutionController(projectRoot, input, candidateRegist
       ...(epic.mandate.terminal_condition ? { terminal_condition: epic.mandate.terminal_condition } : {}),
     })
     return { action, commit_status: res.status, source_artifact_id: epic.source_id, source_hash: epic.sha256, ...(await summary(controller)) }
+  }
+
+  if (action === "transfer_controller") {
+    const ownerAuthorizationRef = String(input.owner_authorization_ref ?? "")
+    if (!ownerAuthorizationRef) throw new Error("transfer_controller requires owner_authorization_ref (an APPROVED decision artifact id/record_key).")
+    const expectedOldController = String(input.expected_old_controller_session_id ?? "")
+    if (!expectedOldController) throw new Error("transfer_controller requires expected_old_controller_session_id.")
+    const expectedRevision = Number(input.expected_revision)
+    if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 1) throw new Error("transfer_controller requires a positive integer expected_revision.")
+    const transferId = String(input.transfer_id ?? "")
+    if (!transferId) throw new Error("transfer_controller requires transfer_id.")
+    const reason = String(input.reason ?? "")
+    if (!reason) throw new Error("transfer_controller requires reason.")
+
+    // Owner authorization must resolve to an APPROVED decision artifact in the
+    // project knowledge index. The artifact itself is the durable authorization
+    // record; the transfer event only cites it.
+    await findApprovedDecision(projectRoot, ownerAuthorizationRef)
+
+    // commitAction acquires a fresh lease for the calling session. If the old
+    // controller's lease is still live, acquire() fails with a fencing conflict.
+    const res = await commitAction(controller, holder, `${executionId}:transfer-controller:${transferId}`, "CONTROLLER_TRANSFER", {
+      new_controller_session_id: holder,
+      expected_old_controller_session_id: expectedOldController,
+      owner_authorization_ref: ownerAuthorizationRef,
+      transfer_id: transferId,
+      reason,
+      expected_revision: expectedRevision,
+    })
+    return { action, commit_status: res.status, ...(await summary(controller)) }
   }
 
   if (action === "activate_wu") {

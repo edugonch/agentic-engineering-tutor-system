@@ -30,6 +30,7 @@ export const OPERATION_TYPES = Object.freeze([
   "BASELINE_REMEDIATE", // authorize a tightly bounded baseline-remediation lane within the Epic
   "EPIC_CONTINUE", // activate the next authorized WU after the current one is accepted
   "OWNER_DECISION_REQUEST", // record a blocker that requires human owner authority
+  "CONTROLLER_TRANSFER", // explicit, owner-authorized, durable controller session transfer
 ])
 
 export const PHASE_STATES = Object.freeze({

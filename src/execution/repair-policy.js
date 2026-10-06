@@ -135,6 +135,10 @@ function changedPaths(oldManifest, newManifest) {
 export function beforeRepairEvent(s, e) {
   const b = e.body ?? {}
   const type = e.operation_type
+  // Controller transfer is a meta-authority operation: it is validated fully
+  // inside applyEvent and must not be blocked by terminal blockers or WU
+  // completion (the execution itself may still be incomplete).
+  if (type === 'CONTROLLER_TRANSFER') return false
   const p = s.mandate?.repair_policy
   if (type === 'MANDATE_APPROVE' && b.repair_policy) {
     requireThat(!s.mandate, 'An execution mandate cannot be replaced.')

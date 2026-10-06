@@ -822,6 +822,50 @@ export async function findApprovedEpic(projectRoot, epicArtifactId) {
   }
 }
 
+// Locate exactly one APPROVED decision artifact in the knowledge index. This is
+// the repository-native representation of durable owner authorization for
+// controller transfer and other owner-bound recovery actions. The archive must
+// hash to the approved record before the authorization is trusted.
+export async function findApprovedDecision(projectRoot, decisionArtifactId) {
+  const root = assertRoot(projectRoot)
+  const index = await readIndex(root)
+  const matches = index.records.filter((record) =>
+    record.classification === "APPROVED_DECISION" &&
+    record.declared_authority === "APPROVED" &&
+    record.import_status === "OWNER_APPROVED_ARTIFACT" &&
+    (record.source_id === decisionArtifactId || record.record_key === decisionArtifactId)
+  )
+  if (matches.length === 0) {
+    throw new Error(`No APPROVED decision artifact matches "${decisionArtifactId}" in the project knowledge index.`)
+  }
+  if (matches.length > 1) {
+    throw new Error(`"${decisionArtifactId}" matches multiple APPROVED decision records; pass the exact record_key.`)
+  }
+  const record = matches[0]
+  const archivePath = resolve(root, record.archive_path)
+  if (!inside(root, archivePath)) {
+    throw new Error(`APPROVED_DECISION_INTEGRITY_MISMATCH: archive path escapes the project root: ${record.archive_path}.`)
+  }
+  const info = await lstat(archivePath)
+  if (!info.isFile() || info.isSymbolicLink()) {
+    throw new Error(`APPROVED_DECISION_INTEGRITY_MISMATCH: ${record.archive_path} is not a regular file.`)
+  }
+  const bytes = await readFile(archivePath)
+  const actualHash = sha256(bytes)
+  if (actualHash !== record.sha256) {
+    throw new Error(`APPROVED_DECISION_INTEGRITY_MISMATCH: ${record.source_id} content hash ${actualHash} does not match the approved ${record.sha256}.`)
+  }
+  if (record.source_system === "harness-artifact" && actualHash !== record.source_revision) {
+    throw new Error(`APPROVED_DECISION_INTEGRITY_MISMATCH: ${record.source_id} content hash does not match the approved revision ${record.source_revision}.`)
+  }
+  return {
+    source_id: record.source_id,
+    record_key: record.record_key,
+    source_revision: record.source_revision,
+    sha256: record.sha256,
+  }
+}
+
 // Extract a machine-readable `execution_mandate: {max_wus, total_seconds}` from
 // an Epic artifact body. Returns null when absent/malformed so the caller fails
 // closed rather than inventing an envelope.
