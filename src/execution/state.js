@@ -191,6 +191,10 @@ export function applyEvent(previous, event) {
       const d = state.dispatches[body.dispatch_id]
       if (!d) throw new Error(`Cannot claim unknown dispatch ${body.dispatch_id}.`)
       if (d.status !== DISPATCH_STATUS.PENDING_LAUNCH) throw new Error(`Cannot claim dispatch ${body.dispatch_id}: not pending launch (status ${d.status}).`)
+      // The launch-claim boundary is opt-in: only dispatches prepared under the
+      // Wave B contract may be claimed. A legacy V1 dispatch (no claim_required)
+      // can never be turned into a claimed dispatch accidentally.
+      if (d.claim_required !== true) throw new Error(`Cannot claim dispatch ${body.dispatch_id}: not prepared with claim_required.`)
       if (d.launch_call_id) throw new Error(`Cannot claim dispatch ${body.dispatch_id}: launch already claimed with call ${d.launch_call_id}.`)
       if (!body.call_id) throw new Error("DISPATCH_LAUNCH_CLAIM requires call_id.")
       d.launch_call_id = body.call_id

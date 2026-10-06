@@ -126,6 +126,16 @@ test("backward-compatible V1 dispatch (no claim_required) launches without a cla
   assert.equal(s2.dispatches.d1.status, DISPATCH_STATUS.LAUNCHED)
 })
 
+test("legacy dispatch (no claim_required) can never be claimed", () => {
+  const ev = makeBuilder()
+  const events = [ev("MANDATE_APPROVE", MANDATE), ...reservePrepare(ev, { claim: false })]
+  const s = project(events)
+  assert.throws(
+    () => applyEvent(s, nextEvent(s, "DISPATCH_LAUNCH_CLAIM", { dispatch_id: "d1", call_id: "call-1" })),
+    /not prepared with claim_required/,
+  )
+})
+
 // --- controller-level tests (mirror runExecutionController directory convention) ---
 function controllerDir(root, executionId = "E1") {
   return join(root, ".harness", "execution", "controller", executionId)

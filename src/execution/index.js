@@ -15,4 +15,5 @@ export { deriveRequirements, evaluateReadiness, budgetStatus, checkExecutionRead
 export { createExecutionController } from "./execution.js"
 export { runContinuationProbe } from "./probe.js"
 export { runExecutionController, claimDispatchLaunch } from "./controller-tool.js"
+export { createLaunchBindingRegistry } from "./launch-binding.js"
 export { createContinuationDriver, shouldContinue, readContinuationSettings } from "./continuation-driver.js"
