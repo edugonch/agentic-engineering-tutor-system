@@ -785,14 +785,17 @@ export async function findApprovedEpic(projectRoot, epicArtifactId) {
 
 // Extract a machine-readable `execution_mandate: {max_wus, total_seconds}` from
 // an Epic artifact body. Returns null when absent/malformed so the caller fails
-// closed rather than inventing an envelope.
+// closed rather than inventing an envelope. An optional `merge_policy` is parsed
+// and validated; it defaults to "none" for V1 backward compatibility.
 function parseExecutionMandate(content) {
   const match = String(content).match(/execution_mandate:\s*(\{[^{}]*\})/)
   if (!match) return null
   try {
     const mandate = JSON.parse(match[1])
     if (Number.isSafeInteger(mandate.max_wus) && mandate.max_wus >= 1 && Number.isFinite(mandate.total_seconds) && mandate.total_seconds > 0) {
-      return { max_wus: mandate.max_wus, total_seconds: mandate.total_seconds }
+      const mergePolicy = mandate.merge_policy ?? "none"
+      if (!["none", "human", "governed_auto"].includes(mergePolicy)) return null
+      return { max_wus: mandate.max_wus, total_seconds: mandate.total_seconds, merge_policy: mergePolicy }
     }
     return null
   } catch { return null }

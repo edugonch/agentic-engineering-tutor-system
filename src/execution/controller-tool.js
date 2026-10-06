@@ -64,6 +64,7 @@ async function summary(controller) {
     reviews: state.reviews,
     pr_binding: state.pr_binding ?? null,
     ci_evidence: state.ci_evidence ?? {},
+    merge: state.merge ?? null,
     checkpoint: state.checkpoint,
   }
 }
@@ -181,6 +182,7 @@ export async function runExecutionController(projectRoot, input, candidateRegist
       mandate_revision: epic.source_revision,
       max_wus: epic.mandate.max_wus,
       total_seconds: epic.mandate.total_seconds,
+      merge_policy: epic.mandate.merge_policy ?? "none",
       authority_kind: MANDATE_AUTHORITY.OWNER_APPROVED_EPIC,
       source_artifact_id: epic.source_id,
       source_record_key: epic.record_key,
@@ -344,6 +346,24 @@ export async function runExecutionController(projectRoot, input, candidateRegist
       conclusion: String(input.conclusion ?? ""),
       evidence_ref: input.evidence_ref ?? null,
     })
+    return { action, commit_status: res.status, ...(await summary(controller)) }
+  }
+
+  if (action === "merge_start") {
+    const res = await commitAction(controller, holder, `${executionId}:merge-start`, "MERGE_START", {})
+    return { action, commit_status: res.status, ...(await summary(controller)) }
+  }
+
+  if (action === "merge_record") {
+    const res = await commitAction(controller, holder, `${executionId}:merge-record`, "MERGE_RECORD", {
+      merge_commit_sha: String(input.merge_commit_sha ?? ""),
+      merged_head_sha: input.merged_head_sha ? String(input.merged_head_sha) : null,
+    })
+    return { action, commit_status: res.status, ...(await summary(controller)) }
+  }
+
+  if (action === "merge_verify") {
+    const res = await commitAction(controller, holder, `${executionId}:merge-verify`, "MERGE_VERIFY", {})
     return { action, commit_status: res.status, ...(await summary(controller)) }
   }
 
