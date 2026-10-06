@@ -114,7 +114,7 @@ Environment overrides:
 | Variable | Default | Effect |
 |---|---:|---|
 | `HARNESS_MAX_TOOL_CALLS` | `250` | Emergency tool-execution ceiling in one OpenCode session run |
-| `HARNESS_MAX_DELEGATIONS` | `16` | Emergency delegation ceiling in one session run |
+| `HARNESS_MAX_DELEGATIONS` | Disabled | Optional emergency delegation ceiling in one session run; off by default because a fixed per-turn delegation count is not a WU budget |
 | `HARNESS_MAX_IDENTICAL_MUTATIONS` | `4` | Consecutive identical `subagent`, `bash`, `write`, `edit`, `patch`, or `apply_patch` calls before the circuit breaker trips |
 | `HARNESS_MAX_OUTPUT_TOKENS` | Disabled | Optional upper bound for each agent-loop response; when set, OpenCode receives this output-token limit |
 

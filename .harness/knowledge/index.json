@@ -23,7 +23,30 @@
       "archive_path": ".harness/epics/epic-phase3-wu01-v1.md",
       "declared_title": "First governed WU: resolveBinary executable-bit",
       "record_key": "9fbb02574c872960e9b2a4520e28f9203132534721055f0c0c5830a37fa7543d"
+    },
+    {
+      "source_id": "EPIC-EXECUTION-CONTROL-PLANE-REPAIR-001",
+      "source_system": "harness-artifact",
+      "source_ref": ".harness/epics/EPIC-EXECUTION-CONTROL-PLANE-REPAIR-001.md",
+      "source_revision": "53fdec4866c9c1c4efe574876939aa85226f1ea555ff07188e265b152385942d",
+      "retrieved_at": "2026-10-06T18:00:47.812Z",
+      "classification": "EPIC",
+      "declared_authority": "APPROVED",
+      "import_status": "OWNER_APPROVED_ARTIFACT",
+      "sha256": "53fdec4866c9c1c4efe574876939aa85226f1ea555ff07188e265b152385942d",
+      "byte_size": 2838,
+      "media_type": "text",
+      "relationships": [
+        "https://github.com/edugonch/agentic-engineering-tutor-system"
+      ],
+      "source_relationships": [
+        "https://github.com/edugonch/agentic-engineering-tutor-system"
+      ],
+      "unresolved_relationships": [],
+      "archive_path": ".harness/epics/EPIC-EXECUTION-CONTROL-PLANE-REPAIR-001.md",
+      "declared_title": "Repair the Harness execution control plane",
+      "record_key": "bddf60a0cb2f7c8d0d07a63f01c849a8da5a68cf6f82c0f0a017e90c6fa7626d"
     }
   ],
-  "updated_at": "2026-09-30T21:47:56.635Z"
+  "updated_at": "2026-10-06T18:00:47.812Z"
 }
