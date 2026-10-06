@@ -12,6 +12,7 @@ export const OPERATION_TYPES = Object.freeze([
   "PHASE_END", // leave a budget phase and settle its billable time
   "DISPATCH_RESERVE", // reserve budget for an external execution attempt
   "DISPATCH_PREPARE", // reserved -> pending_launch (before a session id is known)
+  "DISPATCH_LAUNCH_CLAIM", // pending_launch -> pending_launch (durably record a claimed launch attempt before the side effect)
   "DISPATCH_LAUNCH", // pending_launch/reserved -> launched, attach session id
   "DISPATCH_FINISH", // launched -> finished, attach result
   "DISPATCH_RECONCILE", // finished -> result_reconciled, settle reservation into consumption

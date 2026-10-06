@@ -123,6 +123,28 @@ async function commitAction(controller, holder, operation_id, operation_type, bo
   return res
 }
 
+// Internal (non-MCP) launch-claim boundary used by the runtime at
+// ctx.tool.hook("execute.before"): after the turn-guard admits a subagent launch
+// for a bound, claim_required dispatch, durably record the claim BEFORE OpenCode
+// executes the subagent. The deterministic operation identity (execution_id +
+// dispatch_id + call_id) makes a retry a replay (idempotent); a different tool
+// call for an already-claimed dispatch is rejected by the state machine, which
+// never overwrites launch_call_id.
+export async function claimDispatchLaunch(projectRoot, { execution_id, dispatch_id, call_id, session_id }) {
+  const executionId = sanitizeId(execution_id, "execution_id")
+  const dir = join(projectRoot, ".harness", "execution", "controller", executionId)
+  const controller = await createExecutionController({ dir, lease_ttl_ms: 30000 })
+  const holder = String(session_id)
+  const operation_id = `${executionId}:claim:${dispatch_id}:${call_id}`
+  const lease = await controller.acquire(holder)
+  const snap = await controller.snapshot()
+  const res = await controller.commit(
+    { operation_id, operation_type: "DISPATCH_LAUNCH_CLAIM", body: { dispatch_id, call_id } },
+    { holder_session_id: holder, expected_revision: snap.state.revision, lease_fencing_token: lease.fencing_token },
+  )
+  return res
+}
+
 export async function runExecutionController(projectRoot, input, candidateRegistry) {
   const executionId = sanitizeId(input.execution_id, "execution_id")
   const dir = join(projectRoot, ".harness", "execution", "controller", executionId)
@@ -192,7 +214,18 @@ export async function runExecutionController(projectRoot, input, candidateRegist
 
   if (action === "prepare_launch") {
     const dispatchId = requireDispatchId(input)
-    const res = await commitAction(controller, holder, `${executionId}:prepare:${dispatchId}`, "DISPATCH_PREPARE", { dispatch_id: dispatchId })
+    const body = { dispatch_id: dispatchId }
+    // Wave B launch-intent binding: when the orchestrator names the agent it is
+    // about to launch, the dispatch records who prepared it and what agent is
+    // expected. claim_required makes DISPATCH_LAUNCH require a prior
+    // DISPATCH_LAUNCH_CLAIM (the runtime writes it at the execute.before
+    // boundary). Omitting launch_agent keeps V1 backward-compatible behavior.
+    if (input.launch_agent) {
+      body.prepared_by_session_id = holder
+      body.expected_agent = String(input.launch_agent)
+      body.claim_required = true
+    }
+    const res = await commitAction(controller, holder, `${executionId}:prepare:${dispatchId}`, "DISPATCH_PREPARE", body)
     return { action, commit_status: res.status, dispatch_id: dispatchId, ...(await summary(controller)) }
   }
 

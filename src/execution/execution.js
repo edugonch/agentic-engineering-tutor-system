@@ -192,7 +192,8 @@ export async function createExecutionController({ root, dir, now = () => Date.no
         reserved_seconds: d.reserved_seconds,
         reservation_status: d.reservation_status,
         actual_consumption: d.actual_consumption,
-        classification: classifyDispatch(d.status),
+        launch_call_id: d.launch_call_id ?? null,
+        classification: d.status === DISPATCH_STATUS.PENDING_LAUNCH && d.launch_call_id ? 'AMBIGUOUS' : classifyDispatch(d.status),
       }))
       const byClassification = (value) => dispatches.filter((d) => d.classification === value).map((d) => d.dispatch_id)
       const classification = {
