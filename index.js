@@ -22,7 +22,7 @@ import {
   isJevReady,
   readJevSettings,
 } from "./src/decision/index.js"
-import { runContinuationProbe, createContinuationDriver, createCandidateRegistry, captureBaseSnapshot, freezeCandidate, runCandidateVerification, checkExecutionReadiness, pathDigest, validateVerificationContract, runExecutionController, claimDispatchLaunch, createVerificationReceipt, writeVerificationReceipt, BLOCKER_CLASSES } from "./src/execution/index.js"
+import { runContinuationProbe, createContinuationDriver, createCandidateRegistry, captureBaseSnapshot, freezeCandidate, runCandidateVerification, checkExecutionReadiness, pathDigest, validateVerificationContract, runExecutionController, claimDispatchLaunch, createLaunchBindingRegistry, createVerificationReceipt, writeVerificationReceipt, BLOCKER_CLASSES } from "./src/execution/index.js"
 
 const json = (value) => ({ content: JSON.stringify(value, null, 2) })
 const objectInput = (properties, required = []) => ({
@@ -50,13 +50,15 @@ export default Plugin.define({
     const settings = readGuardSettings(process.env)
     const guard = createTurnGuard(settings)
     const continuation = createContinuationDriver(ctx)
-    // Wave B launch-claim registry (in-memory, ephemeral): maps a controller
-    // session + the agent it prepared to launch, to the exact execution_id +
-    // dispatch_id. It exists only to bind the next subagent launch to its prepared
-    // dispatch at the execute.before boundary. If the process dies after
-    // prepare_launch but before the subagent, the registry is lost and the durable
-    // dispatch remains unclaimed (releasable). It never replaces the durable log.
-    const launchBindings = new Map()
+    // Wave B launch-claim registry (in-memory, ephemeral, single-use): maps a
+    // controller session + the agent it prepared to launch, to the exact
+    // execution_id + dispatch_id. It exists only to bind the next subagent launch
+    // to its prepared dispatch at the execute.before boundary. A binding is
+    // consumed exactly once; a second prepare for the same key is rejected. If the
+    // process dies after prepare_launch but before the subagent, the registry is
+    // lost and the durable dispatch remains unclaimed (releasable). It never
+    // replaces the durable log.
+    const launchBindings = createLaunchBindingRegistry()
     const eventSubscription = new AbortController()
     const projectRoot = ctx.location?.project?.canonical
     const requireProjectRoot = () => {
@@ -181,7 +183,10 @@ export default Plugin.define({
       if (event.tool === "subagent") {
         const agent = event.input?.agent
         if (agent) {
-          const binding = launchBindings.get(`${event.sessionID}::${agent}`)
+          // Consume exactly once: remove the binding BEFORE attempting the
+          // durable claim. If the claim fails, the subagent does not execute and
+          // no stale binding remains to re-claim the same dispatch later.
+          const binding = launchBindings.consume(event.sessionID, agent)
           if (binding) {
             const callId = String(event.id ?? "")
             if (!callId) {
@@ -445,6 +450,16 @@ export default Plugin.define({
           reason: { type: "string", minLength: 1, description: "Human-readable reason (block)." },
         }, ["action", "execution_id"]),
         execute: async (input, context) => {
+          // Reject a second prepare for the same session+agent BEFORE the durable
+          // mutation, so a pending binding can never be silently overwritten (and
+          // strand an already-prepared dispatch).
+          if (input.action === "prepare_launch" && input.launch_agent) {
+            const sid = context?.sessionID ?? input.session_id
+            const agent = String(input.launch_agent)
+            if (sid && launchBindings.peek(sid, agent)) {
+              throw new Error(`A launch binding is already pending for ${agent}; consume or release it before preparing another launch.`)
+            }
+          }
           const result = await runExecutionController(requireProjectRoot(), input, candidateRegistry)
           // Wave B: after a successful prepare_launch with a named launch_agent,
           // register the ephemeral launch binding so the runtime can claim the
@@ -452,7 +467,7 @@ export default Plugin.define({
           if (input.action === "prepare_launch" && input.launch_agent) {
             const sid = context?.sessionID ?? input.session_id
             if (sid) {
-              launchBindings.set(`${sid}::${String(input.launch_agent)}`, {
+              launchBindings.set(sid, String(input.launch_agent), {
                 execution_id: input.execution_id,
                 dispatch_id: input.dispatch_id,
               })
