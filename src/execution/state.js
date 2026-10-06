@@ -129,32 +129,6 @@ export function applyEvent(previous, event) {
       break
     }
 
-    case "CONTROLLER_TRANSFER": {
-      if (!state.mandate) throw new Error("CONTROLLER_TRANSFER requires an approved mandate.")
-      if (state.mandate.authority_kind !== MANDATE_AUTHORITY.OWNER_APPROVED_EPIC) {
-        throw new Error("CONTROLLER_TRANSFER requires an OWNER_APPROVED_EPIC mandate.")
-      }
-      if (state.completed) throw new Error("CONTROLLER_TRANSFER: execution is already complete.")
-      if (state.budget.active_phase) throw new Error("CONTROLLER_TRANSFER: active phase in progress.")
-      if (state.mandate.controller_session_id !== body.expected_old_controller_session_id) {
-        throw new Error("CONTROLLER_TRANSFER: expected old controller does not match durable state.")
-      }
-      if (body.expected_revision !== state.revision) {
-        throw new Error(`CONTROLLER_TRANSFER: stale revision (expected ${body.expected_revision}, current ${state.revision}).`)
-      }
-      const unsafeStatuses = new Set([
-        DISPATCH_STATUS.PENDING_LAUNCH,
-        DISPATCH_STATUS.LAUNCHED,
-        DISPATCH_STATUS.FINISHED,
-        DISPATCH_STATUS.AMBIGUOUS,
-      ])
-      const unsafe = Object.values(state.dispatches).some((d) => unsafeStatuses.has(d.status))
-      if (unsafe) throw new Error("CONTROLLER_TRANSFER: unsafe unsettled dispatch exists.")
-      if (!body.new_controller_session_id) throw new Error("CONTROLLER_TRANSFER requires new_controller_session_id.")
-      state.mandate.controller_session_id = body.new_controller_session_id
-      break
-    }
-
     case "WU_ACTIVATE": {
       if (!state.mandate) throw new Error("WU_ACTIVATE requires an approved mandate.")
       if (!body.wu_id) throw new Error("WU_ACTIVATE requires wu_id.")

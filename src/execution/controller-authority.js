@@ -15,24 +15,14 @@
 // runExecutionController() and before lease acquisition.
 
 export const CONTROLLER_READ_ACTIONS = new Set(['status', 'recover', 'verify'])
-export const CONTROLLER_TRANSFER_ACTIONS = new Set(['transfer_controller'])
 
 export function isControllerReadAction(action) {
   return CONTROLLER_READ_ACTIONS.has(String(action))
 }
 
-export function isControllerTransferAction(action) {
-  return CONTROLLER_TRANSFER_ACTIONS.has(String(action))
-}
-
 export function controllerMutationDenied(state, sessionID, action) {
   const controller = state?.mandate?.controller_session_id
   if (!controller) return false
-  // Controller transfer is admitted through the early guard and the tool
-  // boundary; its real preconditions (owner authorization, expected old
-  // controller, expected revision, lease expiry, dispatch safety, etc.) are
-  // validated at commit time inside runExecutionController / applyEvent.
-  if (isControllerTransferAction(action)) return false
   return sessionID !== controller && !isControllerReadAction(action)
 }
 

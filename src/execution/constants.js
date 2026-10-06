@@ -30,7 +30,6 @@ export const OPERATION_TYPES = Object.freeze([
   "BASELINE_REMEDIATE", // authorize a tightly bounded baseline-remediation lane within the Epic
   "EPIC_CONTINUE", // activate the next authorized WU after the current one is accepted
   "OWNER_DECISION_REQUEST", // record a blocker that requires human owner authority
-  "CONTROLLER_TRANSFER", // explicit, owner-authorized, durable controller session transfer
   "BIND_PR", // bind a GitHub PR to the active WU's frozen candidate (repository, pr_number, head/base)
   "RECORD_CI", // record exact-head CI evidence bound to the candidate (check identity, conclusion)
 ])
