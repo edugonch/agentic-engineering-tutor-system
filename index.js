@@ -22,7 +22,7 @@ import {
   isJevReady,
   readJevSettings,
 } from "./src/decision/index.js"
-import { runContinuationProbe, createContinuationDriver, createCandidateRegistry, captureBaseSnapshot, freezeCandidate, runCandidateVerification, checkExecutionReadiness, pathDigest, validateVerificationContract, runExecutionController, createVerificationReceipt, writeVerificationReceipt, BLOCKER_CLASSES } from "./src/execution/index.js"
+import { runContinuationProbe, createContinuationDriver, createCandidateRegistry, captureBaseSnapshot, freezeCandidate, runCandidateVerification, checkExecutionReadiness, pathDigest, validateVerificationContract, runExecutionController, claimDispatchLaunch, createVerificationReceipt, writeVerificationReceipt, BLOCKER_CLASSES } from "./src/execution/index.js"
 
 const json = (value) => ({ content: JSON.stringify(value, null, 2) })
 const objectInput = (properties, required = []) => ({
@@ -50,6 +50,13 @@ export default Plugin.define({
     const settings = readGuardSettings(process.env)
     const guard = createTurnGuard(settings)
     const continuation = createContinuationDriver(ctx)
+    // Wave B launch-claim registry (in-memory, ephemeral): maps a controller
+    // session + the agent it prepared to launch, to the exact execution_id +
+    // dispatch_id. It exists only to bind the next subagent launch to its prepared
+    // dispatch at the execute.before boundary. If the process dies after
+    // prepare_launch but before the subagent, the registry is lost and the durable
+    // dispatch remains unclaimed (releasable). It never replaces the durable log.
+    const launchBindings = new Map()
     const eventSubscription = new AbortController()
     const projectRoot = ctx.location?.project?.canonical
     const requireProjectRoot = () => {
@@ -157,12 +164,38 @@ export default Plugin.define({
       if (event.attempt >= 2) event.decision = { retry: false }
     })
 
-    // Count tool calls and delegations for the session that actually ran them.
-    await ctx.tool.hook("execute.before", (event) => {
+    // Count tool calls and delegations for the session that actually ran them,
+    // and (Wave B) claim a bound prepared dispatch at the launch boundary.
+    await ctx.tool.hook("execute.before", async (event) => {
+      // Run the circuit breaker first. If it trips, the subagent is rejected and
+      // no claim is written — the pre-side-effect failure stays NEVER_LAUNCHED and
+      // releasable (this is the WU-058 case, now structural).
       guard.before(
         { sessionID: event.sessionID, tool: event.tool },
         { args: event.input },
       )
+
+      // Launch-claim boundary: only after the guard passes, durably record the
+      // claim for the bound dispatch BEFORE OpenCode executes the subagent. A
+      // crash after this point is AMBIGUOUS, never never-launched.
+      if (event.tool === "subagent") {
+        const agent = event.input?.agent
+        if (agent) {
+          const binding = launchBindings.get(`${event.sessionID}::${agent}`)
+          if (binding) {
+            const callId = String(event.id ?? "")
+            if (!callId) {
+              throw new Error("Launch claim requires a tool call identity (event.id); the subagent launch is blocked.")
+            }
+            await claimDispatchLaunch(requireProjectRoot(), {
+              execution_id: binding.execution_id,
+              dispatch_id: binding.dispatch_id,
+              call_id: callId,
+              session_id: event.sessionID,
+            })
+          }
+        }
+      }
     })
 
     // Enforce the runtime prerequisite at the actual OpenCode permission
@@ -398,6 +431,7 @@ export default Plugin.define({
           total_seconds: { type: "number", exclusiveMinimum: 0 },
           dispatch_id: { type: "string", minLength: 1 },
           reserved_seconds: { type: "number", minimum: 0 },
+          launch_agent: { type: "string", minLength: 1, description: "Agent the orchestrator is about to launch (prepare_launch); enables the runtime launch-claim boundary." },
           launch_session_id: { type: "string", minLength: 1, description: "External identity persisted at record_launch (distinct from the lease-holding session_id)." },
           result: { type: "string", description: "Opaque result attached at record_finish, complete (Epic), or complete_wu." },
           wu_id: { type: "string", minLength: 1 },
@@ -410,7 +444,22 @@ export default Plugin.define({
           class: { type: "string", enum: [...BLOCKER_CLASSES], description: "Typed blocker class (block action); must be a BLOCKER_CLASSES value." },
           reason: { type: "string", minLength: 1, description: "Human-readable reason (block)." },
         }, ["action", "execution_id"]),
-        execute: async (input) => json(await runExecutionController(requireProjectRoot(), input, candidateRegistry)),
+        execute: async (input, context) => {
+          const result = await runExecutionController(requireProjectRoot(), input, candidateRegistry)
+          // Wave B: after a successful prepare_launch with a named launch_agent,
+          // register the ephemeral launch binding so the runtime can claim the
+          // exact dispatch at the execute.before boundary of the next subagent.
+          if (input.action === "prepare_launch" && input.launch_agent) {
+            const sid = context?.sessionID ?? input.session_id
+            if (sid) {
+              launchBindings.set(`${sid}::${String(input.launch_agent)}`, {
+                execution_id: input.execution_id,
+                dispatch_id: input.dispatch_id,
+              })
+            }
+          }
+          return json(result)
+        },
       })
 
       editor.add({

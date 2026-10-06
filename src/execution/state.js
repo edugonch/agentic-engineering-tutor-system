@@ -177,6 +177,24 @@ export function applyEvent(previous, event) {
       const d = state.dispatches[body.dispatch_id]
       if (!d || d.status !== DISPATCH_STATUS.RESERVED) throw new Error(`Cannot prepare dispatch ${body.dispatch_id}: not reserved.`)
       d.status = DISPATCH_STATUS.PENDING_LAUNCH
+      // Launch-intent binding (Wave B): when the orchestrator prepares a launch it
+      // may record what it intends to launch so the runtime can claim the exact
+      // dispatch before the external side effect. Optional for backward
+      // compatibility with V1 event logs that prepared without these fields.
+      if (body.prepared_by_session_id !== undefined) d.prepared_by_session_id = body.prepared_by_session_id
+      if (body.expected_agent !== undefined) d.expected_agent = body.expected_agent
+      if (body.claim_required !== undefined) d.claim_required = body.claim_required === true
+      break
+    }
+
+    case "DISPATCH_LAUNCH_CLAIM": {
+      const d = state.dispatches[body.dispatch_id]
+      if (!d) throw new Error(`Cannot claim unknown dispatch ${body.dispatch_id}.`)
+      if (d.status !== DISPATCH_STATUS.PENDING_LAUNCH) throw new Error(`Cannot claim dispatch ${body.dispatch_id}: not pending launch (status ${d.status}).`)
+      if (d.launch_call_id) throw new Error(`Cannot claim dispatch ${body.dispatch_id}: launch already claimed with call ${d.launch_call_id}.`)
+      if (!body.call_id) throw new Error("DISPATCH_LAUNCH_CLAIM requires call_id.")
+      d.launch_call_id = body.call_id
+      d.launch_claimed_at = event.timestamp
       break
     }
 
@@ -186,6 +204,12 @@ export function applyEvent(previous, event) {
         throw new Error(`Cannot launch dispatch ${body.dispatch_id}: not reserved/pending.`)
       }
       if (!body.session_id) throw new Error("DISPATCH_LAUNCH requires session_id.")
+      // New-contract dispatches (prepared under Wave B with claim_required) must
+      // cross the launch boundary through a durable DISPATCH_LAUNCH_CLAIM first.
+      // Historical V1 dispatches have no claim_required and launch unchanged.
+      if (d.claim_required === true && !d.launch_call_id) {
+        throw new Error(`Cannot launch dispatch ${body.dispatch_id}: claim_required dispatch has no launch claim (DISPATCH_LAUNCH_CLAIM first).`)
+      }
       d.status = DISPATCH_STATUS.LAUNCHED
       d.session_id = body.session_id
       break
@@ -225,6 +249,12 @@ export function applyEvent(previous, event) {
       if (!d) throw new Error(`Cannot release unknown dispatch ${body.dispatch_id}.`)
       if (d.status !== DISPATCH_STATUS.RESERVED && d.status !== DISPATCH_STATUS.PENDING_LAUNCH) {
         throw new Error(`Cannot release dispatch ${body.dispatch_id}: not in a never-launched state (status ${d.status}).`)
+      }
+      // A claimed launch means the side effect may have occurred even without a
+      // recorded session identity; releasing would treat an uncertain outcome as
+      // deterministically never-launched. mark_ambiguous is the correct path.
+      if (d.launch_call_id) {
+        throw new Error(`Cannot release dispatch ${body.dispatch_id}: launch was claimed (launch_call_id set); mark it ambiguous instead of releasing.`)
       }
       if (d.reservation_status !== RESERVATION_STATUS.RESERVED) throw new Error(`Cannot release dispatch ${body.dispatch_id}: reservation already ${d.reservation_status}.`)
       const reserved = d.reserved_seconds
