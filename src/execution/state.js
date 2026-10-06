@@ -8,6 +8,7 @@ import {
   CI_CONCLUSIONS,
   DISPATCH_STATUS,
   EXECUTION_AUTHORIZATION,
+  MERGE_POLICIES,
   OPERATION_TYPES,
   RESERVATION_STATUS,
   TERMINAL_BLOCKER_CLASSES,
@@ -29,6 +30,34 @@ const setsEqual = (a, b) => {
   return sa.size === sb.size && [...sa].every((x) => sb.has(x))
 }
 
+// Structural governed-merge gate. The merge policy can never come from a tool
+// input; this evaluates durable state against the immutable PR binding, the PASS
+// review, exact-head CI evidence, and settled dispatches. Pure and exported so it
+// can be tested in isolation.
+export function canStartMerge(state) {
+  if (!state.wu) return { allowed: false, reason: "no active WU" }
+  if (state.wu.completed) return { allowed: false, reason: "active WU already complete" }
+  const binding = state.pr_binding
+  if (!binding) return { allowed: false, reason: "no PR binding" }
+  const candidate = state.candidates[binding.candidate_id]
+  if (!candidate) return { allowed: false, reason: "bound candidate not recorded" }
+  if (candidate.wu_id !== state.wu.wu_id) return { allowed: false, reason: "bound candidate not in active WU" }
+  const review = state.reviews[binding.candidate_id]
+  if (!review || review.verdict !== "PASS") return { allowed: false, reason: "no PASS review" }
+  if (state.mandate?.merge_policy !== "governed_auto") return { allowed: false, reason: `merge policy is ${state.mandate?.merge_policy ?? "none"}, not governed_auto` }
+  if (state.blocker && TERMINAL_BLOCKER_CLASSES.has(state.blocker.class)) return { allowed: false, reason: `terminal blocker ${state.blocker.class}` }
+  const settled = new Set([DISPATCH_STATUS.RESULT_RECONCILED, DISPATCH_STATUS.RELEASED])
+  const unsettled = Object.values(state.dispatches).filter((d) => !settled.has(d.status))
+  if (unsettled.length > 0) return { allowed: false, reason: `${unsettled.length} unsettled dispatch(es)` }
+  const evidence = state.ci_evidence[binding.candidate_id]
+  if (!evidence || Object.keys(evidence).length === 0) return { allowed: false, reason: "no CI evidence" }
+  for (const [check, e] of Object.entries(evidence)) {
+    if (e.conclusion !== "SUCCESS") return { allowed: false, reason: `CI ${check} conclusion is ${e.conclusion}, not SUCCESS` }
+    if (e.head_sha !== binding.head_sha) return { allowed: false, reason: `CI ${check} head ${e.head_sha} does not match bound head ${binding.head_sha}` }
+  }
+  return { allowed: true }
+}
+
 export function initialState() {
   return {
     revision: 0,
@@ -42,6 +71,7 @@ export function initialState() {
     reviews: {}, // candidate_id -> { verdict, candidate_hashes, reviewer }
     pr_binding: null, // { repository, pr_number, candidate_id, head_sha, base_branch, base_sha, at_revision }
     ci_evidence: {}, // candidate_id -> check_identity -> { head_sha, conclusion, evidence_ref, observed_at }
+    merge: null, // { status, candidate_id, repository, pr_number, expected_head_sha, expected_base_sha, started_at_revision, merge_commit_sha, merged_head_sha, verified_at_revision }
     blocker: null, // { class, reason, at_revision }
     checkpoint: null, // { operation_id, revision, note, wu_id, used_seconds }
     completed: false,
@@ -88,6 +118,10 @@ export function applyEvent(previous, event) {
         mandate_revision: body.mandate_revision ?? null,
         max_wus: body.max_wus,
         authority_kind: body.authority_kind ?? MANDATE_AUTHORITY.PROBE,
+        merge_policy: body.merge_policy ?? "none",
+      }
+      if (!MERGE_POLICIES.includes(state.mandate.merge_policy)) {
+        throw new Error(`MANDATE_APPROVE: unknown merge_policy ${state.mandate.merge_policy}.`)
       }
       // Governed binding (approve_mandate) records the source of human authority;
       // legacy `init` has no source binding. The fields are present only when a
@@ -404,6 +438,45 @@ export function applyEvent(previous, event) {
         evidence_ref: body.evidence_ref ?? null,
         observed_at: event.timestamp,
       }
+      break
+    }
+
+    case "MERGE_START": {
+      const gate = canStartMerge(state)
+      if (!gate.allowed) throw new Error(`MERGE_START blocked: ${gate.reason}.`)
+      if (state.merge) throw new Error("MERGE_START: a merge is already in progress.")
+      const binding = state.pr_binding
+      state.merge = {
+        status: "STARTED",
+        candidate_id: binding.candidate_id,
+        repository: binding.repository,
+        pr_number: binding.pr_number,
+        expected_head_sha: binding.head_sha,
+        expected_base_sha: binding.base_sha,
+        started_at_revision: state.revision,
+        merge_commit_sha: null,
+        merged_head_sha: null,
+        verified_at_revision: null,
+      }
+      break
+    }
+
+    case "MERGE_RECORD": {
+      if (!state.merge || state.merge.status !== "STARTED") throw new Error("MERGE_RECORD requires MERGE_START first.")
+      if (!body.merge_commit_sha) throw new Error("MERGE_RECORD requires merge_commit_sha.")
+      state.merge.status = "RECORDED"
+      state.merge.merge_commit_sha = body.merge_commit_sha
+      state.merge.merged_head_sha = body.merged_head_sha ?? null
+      break
+    }
+
+    case "MERGE_VERIFY": {
+      if (!state.merge || state.merge.status !== "RECORDED") throw new Error("MERGE_VERIFY requires MERGE_RECORD first.")
+      if (state.merge.merged_head_sha !== state.merge.expected_head_sha) {
+        throw new Error(`MERGE_VERIFY: merged head ${state.merge.merged_head_sha} does not match expected ${state.merge.expected_head_sha}.`)
+      }
+      state.merge.status = "VERIFIED"
+      state.merge.verified_at_revision = state.revision
       break
     }
 

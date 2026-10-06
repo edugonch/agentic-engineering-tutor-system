@@ -26,6 +26,9 @@ export const OPERATION_TYPES = Object.freeze([
   "COMPLETE", // record EPIC_EXECUTION_VERIFIED (technical completion, not owner acceptance)
   "BIND_PR", // immutably bind a GitHub PR to the active WU's frozen candidate (repository, pr_number, head/base SHA)
   "RECORD_CI", // record exact-head CI evidence for one check, bound to a candidate (multiple checks per candidate)
+  "MERGE_START", // governed merge: evaluate structural gates and mark the merge started (no external side effect)
+  "MERGE_RECORD", // record the remote merge result (merge_commit_sha + merged head) after the side effect
+  "MERGE_VERIFY", // verify the recorded merge matches the expected head (fail closed on drift)
 ])
 
 export const PHASE_STATES = Object.freeze({
@@ -129,3 +132,10 @@ export const MANDATE_AUTHORITY = Object.freeze({
 // Only SUCCESS can satisfy a governed merge gate (enforced by the merge policy,
 // not by RECORD_CI itself); the others are recorded for audit but never gate.
 export const CI_CONCLUSIONS = Object.freeze(["SUCCESS", "FAILURE", "PENDING", "ERROR"])
+
+// Governed merge policy. Derived from the approved Epic's execution_mandate and
+// frozen in the mandate at MANDATE_APPROVE. It can never come from a tool input.
+//   none          — the Harness neither requires nor executes a merge.
+//   human         — the Harness may record/verify an external merge, never execute one.
+//   governed_auto — the Harness may execute a merge once every structural gate passes.
+export const MERGE_POLICIES = Object.freeze(["none", "human", "governed_auto"])

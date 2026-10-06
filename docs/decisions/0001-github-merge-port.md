@@ -1,6 +1,6 @@
 # ADR-001 — GitHubMergePort: narrow, credential-isolated governed merge
 
-- Status: PROPOSED (pending architecture review)
+- Status: ACCEPTED (independent review PASS 5/5, merged via PR #14)
 - Date: 2026-10-06
 - Affects: Harness governed merge (H-WU-06, H-WU-07)
 
