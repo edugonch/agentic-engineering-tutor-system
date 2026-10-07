@@ -188,6 +188,35 @@ test("GitHub adapter sends the token only as an Authorization header and never l
   )
 })
 
+test("GitHub adapter normalizes REST check conclusions to controller CI vocabulary", async () => {
+  const fetchImpl = async (url) => {
+    if (String(url).includes("/check-runs")) {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          check_runs: [
+            { name: "verify", conclusion: "success" },
+            { name: "lint", conclusion: "failure" },
+          ],
+        }),
+      }
+    }
+    throw new Error(`unexpected URL ${url}`)
+  }
+  const adapter = createGitHubAdapter({ token: "t", baseUrl: "https://api.example.com", fetchImpl })
+  const checks = await adapter.getChecks({
+    repository: "o/r",
+    head_sha: "head-a",
+    check_names: ["verify", "lint", "missing"],
+  })
+  assert.deepEqual(checks, [
+    { name: "verify", conclusion: "SUCCESS" },
+    { name: "lint", conclusion: "FAILURE" },
+    { name: "missing", conclusion: null },
+  ])
+})
+
 test("GitHub adapter without a token sends no Authorization header", async () => {
   const calls = []
   const fetchImpl = async (url, init) => {
