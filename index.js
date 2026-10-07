@@ -22,7 +22,7 @@ import {
   isJevReady,
   readJevSettings,
 } from "./src/decision/index.js"
-import { runContinuationProbe, createContinuationDriver, createCandidateRegistry, captureBaseSnapshot, freezeCandidate, runCandidateVerification, checkExecutionReadiness, pathDigest, validateVerificationContract, runExecutionController, claimDispatchLaunch, createLaunchBindingRegistry, createVerificationReceipt, writeVerificationReceipt, BLOCKER_CLASSES, CI_CONCLUSIONS } from "./src/execution/index.js"
+import { runContinuationProbe, createContinuationDriver, createCandidateRegistry, captureBaseSnapshot, freezeCandidate, runCandidateVerification, checkExecutionReadiness, pathDigest, validateVerificationContract, runExecutionController, claimDispatchLaunch, createLaunchBindingRegistry, createVerificationReceipt, writeVerificationReceipt, createGitHubAdapter, runMergeCandidate, BLOCKER_CLASSES, CI_CONCLUSIONS } from "./src/execution/index.js"
 
 const json = (value) => ({ content: JSON.stringify(value, null, 2) })
 const objectInput = (properties, required = []) => ({
@@ -426,7 +426,7 @@ export default Plugin.define({
         name: "harness_execution_controller",
         description: "Phase 2 durable execution control surface. Drives the recoverable execution machine under .harness/execution/controller/<execution_id>/. Dispatch actions: init (approve a mandate), reserve, prepare_launch, record_launch, mark_ambiguous, record_finish, reconcile, release, recover (read-only classification), status, verify (read-only invariant check). WU lifecycle actions (Phase 3): activate_wu, record_candidate (loads the candidate from the registry; the caller cannot supply hashes), record_review, complete_wu (WU close), checkpoint, block. complete remains Epic-level (EPIC_EXECUTION_VERIFIED). It is instrumentation, not new authority: every mutation routes through the controller commit path with operation_id + expected_revision + lease fencing. It never writes state.json or the event log directly, never edits OpenCode config/permissions/agents, and never simulates the model. Use verify after any restart to prove the durable core is intact.",
         input: objectInput({
-          action: { type: "string", enum: ["init", "approve_mandate", "status", "reserve", "prepare_launch", "record_launch", "mark_ambiguous", "record_finish", "recover", "reconcile", "release", "verify", "activate_wu", "record_candidate", "record_review", "complete_wu", "checkpoint", "block", "bind_pr", "record_ci", "merge_start", "merge_record", "merge_verify", "complete"], default: "status" },
+          action: { type: "string", enum: ["init", "approve_mandate", "status", "reserve", "prepare_launch", "record_launch", "mark_ambiguous", "record_finish", "recover", "reconcile", "release", "verify", "activate_wu", "record_candidate", "record_review", "complete_wu", "checkpoint", "block", "bind_pr", "record_ci", "complete"], default: "status" },
           execution_id: { type: "string", minLength: 1, description: "Stable isolation key; durable state lives under .harness/execution/controller/<execution_id>/." },
           session_id: { type: "string", minLength: 1, description: "OpenCode session ID holding the execution lease (required for mutations)." },
           mandate_id: { type: "string", minLength: 1 },
@@ -456,8 +456,6 @@ export default Plugin.define({
           check_identity: { type: "string", minLength: 1, description: "CI check identity recorded by record_ci." },
           conclusion: { type: "string", enum: [...CI_CONCLUSIONS], description: "CI conclusion recorded by record_ci; one of SUCCESS/FAILURE/PENDING/ERROR." },
           evidence_ref: { type: "string", description: "Optional CI evidence reference (run id/URL) recorded by record_ci." },
-          merge_commit_sha: { type: "string", minLength: 1, description: "Remote merge commit SHA recorded by merge_record." },
-          merged_head_sha: { type: "string", minLength: 1, description: "Merged head SHA recorded by merge_record." },
         }, ["action", "execution_id"]),
         execute: async (input, context) => {
           // Reject a second prepare for the same session+agent BEFORE the durable
@@ -483,6 +481,23 @@ export default Plugin.define({
               })
             }
           }
+          return json(result)
+        },
+      })
+
+      editor.add({
+        name: "harness_merge_candidate",
+        description: "Merge the exact already-reviewed candidate's bound PR, per the governed_auto policy. The model provides only candidate_id; repository/PR/head/base/policy/CI/review are resolved from durable state. Credentials come from the HARNESS_GITHUB_TOKEN runtime environment variable, never from this input. Idempotent: a retry after a crash re-queries GitHub and records an existing merge instead of merging twice. Head/base drift, a closed-without-merge PR, or a merge with a different head fail closed.",
+        input: objectInput({
+          candidate_id: { type: "string", minLength: 1, description: "Content-addressed candidate id already recorded via record_candidate." },
+        }, ["candidate_id"]),
+        execute: async (input, context) => {
+          const adapter = createGitHubAdapter({ token: process.env.HARNESS_GITHUB_TOKEN ?? "" })
+          const result = await runMergeCandidate(requireProjectRoot(), {
+            candidate_id: String(input.candidate_id ?? ""),
+            adapter,
+            session_id: context?.sessionID,
+          })
           return json(result)
         },
       })
