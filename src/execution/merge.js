@@ -7,7 +7,7 @@
 import { join } from "node:path"
 import { readdir } from "node:fs/promises"
 import { createExecutionController } from "./execution.js"
-import { canStartMerge } from "./state.js"
+import { canStartMerge, canVerifyExternalMerge } from "./state.js"
 
 async function commitMerge(controller, session_id, operation_id, operation_type, body) {
   const lease = await controller.acquire(session_id)
@@ -154,4 +154,73 @@ export async function runMergeCandidate(projectRoot, { candidate_id, adapter, se
   await commitMerge(controller, session_id, `${execution_id}:merge-verify`, "MERGE_VERIFY", {})
 
   return { status: "merged", execution_id, merge_commit_sha: merged.merge_commit_sha }
+}
+
+// Human-policy external merge verification. The Harness observes an already-
+// performed merge: it uses the adapter's getPullRequest/getChecks only, never
+// merge(). Never enters STARTED; the state goes null → RECORDED(source=HUMAN_
+// EXTERNAL) → VERIFIED. Recovers idempotently from RECORDED.
+export async function runVerifyExternalMerge(projectRoot, { candidate_id, adapter, session_id }) {
+  if (!adapter || typeof adapter.getPullRequest !== "function" || typeof adapter.getChecks !== "function") {
+    throw new Error("runVerifyExternalMerge requires a GitHub adapter (getPullRequest/getChecks).")
+  }
+  if (!session_id) throw new Error("runVerifyExternalMerge requires a session_id.")
+
+  const { controller, execution_id, state } = await findExecutionForCandidate(projectRoot, candidate_id)
+  const binding = state.pr_binding
+  if (!binding) throw new Error("external merge blocked: no PR binding.")
+  if (binding.candidate_id !== candidate_id) {
+    throw new Error(`external merge blocked: candidate ${candidate_id} is not the bound candidate ${binding.candidate_id}.`)
+  }
+
+  // Already verified → idempotent no-op.
+  if (state.merge?.status === "VERIFIED") return { status: "already_verified", execution_id }
+
+  // A fresh start must pass the human gate.
+  if (!state.merge) {
+    const gate = canVerifyExternalMerge(state)
+    if (!gate.allowed) throw new Error(`external merge blocked: ${gate.reason}.`)
+  }
+
+  const repository = binding.repository
+  const pr_number = binding.pr_number
+
+  // 1. Consult GitHub.
+  const pr = await adapter.getPullRequest({ repository, pr_number })
+
+  // 2. Require an already-merged PR on the exact head/branch with a merge commit.
+  if (!pr.merged) throw new Error("external merge blocked: PR is not merged.")
+  if (pr.head_sha !== binding.head_sha) throw new Error(`external merge blocked: PR head ${pr.head_sha} drifted from bound ${binding.head_sha}.`)
+  if (pr.base_branch !== binding.base_branch) throw new Error(`external merge blocked: PR base branch ${pr.base_branch} drifted from bound ${binding.base_branch}.`)
+  if (!pr.merge_commit_sha) throw new Error("external merge blocked: PR has no merge_commit_sha.")
+
+  // 3. Required CI (if governance declares it), on the exact head.
+  const required = state.mandate?.required_ci_checks ?? []
+  if (required.length > 0) {
+    const checks = await adapter.getChecks({ repository, head_sha: binding.head_sha, check_names: required })
+    for (const c of checks) {
+      if (c.conclusion !== "SUCCESS") {
+        throw new Error(`external merge blocked: required CI ${c.name} conclusion ${c.conclusion ?? "missing"}, not SUCCESS.`)
+      }
+    }
+  }
+
+  // 4. Recovery from RECORDED → verify only; else record + verify.
+  if (state.merge?.status === "RECORDED") {
+    if (state.merge.merge_commit_sha !== pr.merge_commit_sha) {
+      throw new Error(`external merge verify failed: remote merge commit ${pr.merge_commit_sha} differs from recorded ${state.merge.merge_commit_sha}.`)
+    }
+    await commitMerge(controller, session_id, `${execution_id}:merge-verify`, "MERGE_VERIFY", {})
+    return { status: "verified_external_merge", execution_id, merge_commit_sha: pr.merge_commit_sha }
+  }
+
+  // 5. null → MERGE_EXTERNAL_RECORD → MERGE_VERIFY (never STARTED, never merge()).
+  await commitMerge(controller, session_id, `${execution_id}:merge-external-record:${pr.merge_commit_sha}`, "MERGE_EXTERNAL_RECORD", {
+    merge_commit_sha: pr.merge_commit_sha,
+    merged_head_sha: binding.head_sha,
+    observed_base_sha: pr.base_sha ?? null,
+  })
+  await commitMerge(controller, session_id, `${execution_id}:merge-verify`, "MERGE_VERIFY", {})
+
+  return { status: "verified_external_merge", execution_id, merge_commit_sha: pr.merge_commit_sha }
 }

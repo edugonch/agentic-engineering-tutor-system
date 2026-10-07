@@ -115,6 +115,52 @@ test("merge happy path reaches VERIFIED", () => {
   assert.equal(verified.merge.status, "VERIFIED")
 })
 
+test("governed_auto: WU_COMPLETE requires a verified merge", () => {
+  const ev = makeBuilder()
+  const s = project(readyEvents(ev))
+  assert.throws(
+    () => applyEvent(s, nextEvent(s, "WU_COMPLETE", { candidate_id: "cand-1" })),
+    /merge policy governed_auto requires merge.status VERIFIED/,
+  )
+})
+
+test("governed_auto: WU_COMPLETE accepted after merge VERIFIED", () => {
+  const ev = makeBuilder()
+  const s = project(readyEvents(ev))
+  const started = applyEvent(s, nextEvent(s, "MERGE_START", {}))
+  const recorded = applyEvent(started, nextEvent(started, "MERGE_RECORD", { merge_commit_sha: "merge-1", merged_head_sha: "head-a" }))
+  const verified = applyEvent(recorded, nextEvent(recorded, "MERGE_VERIFY", {}))
+  const done = applyEvent(verified, nextEvent(verified, "WU_COMPLETE", { candidate_id: "cand-1" }))
+  assert.equal(done.wu.completed, true)
+})
+
+test("none: WU_COMPLETE keeps V1 behavior (no merge required)", () => {
+  const ev = makeBuilder()
+  const s = project(readyEvents(ev, { mergePolicy: "none" }))
+  const done = applyEvent(s, nextEvent(s, "WU_COMPLETE", { candidate_id: "cand-1" }))
+  assert.equal(done.wu.completed, true)
+})
+
+test("human: WU_COMPLETE requires a verified HUMAN_EXTERNAL merge", () => {
+  const ev = makeBuilder()
+  const s = project(readyEvents(ev, { mergePolicy: "human" }))
+  assert.throws(
+    () => applyEvent(s, nextEvent(s, "WU_COMPLETE", { candidate_id: "cand-1" })),
+    /merge policy human requires merge.status VERIFIED/,
+  )
+})
+
+test("human: WU_COMPLETE accepted after a verified HUMAN_EXTERNAL merge", () => {
+  const ev = makeBuilder()
+  const s = project(readyEvents(ev, { mergePolicy: "human" }))
+  const recorded = applyEvent(s, nextEvent(s, "MERGE_EXTERNAL_RECORD", { merge_commit_sha: "merge-1", merged_head_sha: "head-a" }))
+  assert.equal(recorded.merge.source, "HUMAN_EXTERNAL")
+  const verified = applyEvent(recorded, nextEvent(recorded, "MERGE_VERIFY", {}))
+  assert.equal(verified.merge.status, "VERIFIED")
+  const done = applyEvent(verified, nextEvent(verified, "WU_COMPLETE", { candidate_id: "cand-1" }))
+  assert.equal(done.wu.completed, true)
+})
+
 test("MERGE_START is blocked by the gate (e.g. human policy)", () => {
   const ev = makeBuilder()
   const s = project(readyEvents(ev, { mergePolicy: "human" }))

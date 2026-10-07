@@ -4,7 +4,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { runExecutionController } from "../../src/execution/controller-tool.js"
-import { runMergeCandidate } from "../../src/execution/merge.js"
+import { runMergeCandidate, runVerifyExternalMerge } from "../../src/execution/merge.js"
 import { createGitHubAdapter } from "../../src/execution/github-adapter.js"
 import { createCandidateRegistry } from "../../src/execution/candidate-registry.js"
 import { freezeCandidate } from "../../src/execution/candidate.js"
@@ -44,11 +44,11 @@ function fakeAdapter({ prState = "open", prHead = "head-a", prBase = "base-1", p
 }
 
 // Set up a fully-gated, merge-ready execution and return its candidate.
-async function setupReady(root, sid, { requiredCiChecks = ["check-1"] } = {}) {
+async function setupReady(root, sid, { requiredCiChecks = ["check-1"], mergePolicy = "governed_auto" } = {}) {
   await recordKnowledgeArtifact(root, {
     artifact_type: "epic", artifact_id: "epic-001", status: "APPROVED", owner_confirmed: true,
     title: "Test Epic",
-    content: `test epic\nexecution_mandate: ${JSON.stringify({ max_wus: 4, total_seconds: 100, merge_policy: "governed_auto", required_ci_checks: requiredCiChecks })}`,
+    content: `test epic\nexecution_mandate: ${JSON.stringify({ max_wus: 4, total_seconds: 100, merge_policy: mergePolicy, required_ci_checks: requiredCiChecks })}`,
     source_refs: ["https://example.com/epic-source"],
   })
   await runExecutionController(root, { action: "approve_mandate", execution_id: "E1", session_id: sid, epic_artifact_id: "epic-001" })
@@ -273,6 +273,102 @@ test("ambiguous execution ownership: same candidate in two controllers → fail 
     await assert.rejects(
       runMergeCandidate(root, { candidate_id: candidate.candidate_id, adapter, session_id: sid }),
       /Ambiguous execution ownership/,
+    )
+  })
+})
+
+// --- H-WU-06C: external human merge verification ---
+test("human: verify an already-merged external PR reaches VERIFIED (never merge())", async () => {
+  await withRoot(async (root) => {
+    const sid = "ses-1"
+    const candidate = await setupReady(root, sid, { mergePolicy: "human", requiredCiChecks: [] })
+    let mergeCalls = 0
+    const adapter = {
+      getPullRequest: async () => ({ state: "closed", merged: true, head_sha: "head-a", base_sha: "base-1", base_branch: "main", merge_commit_sha: "merge-h1" }),
+      getChecks: async () => [],
+      merge: async () => { mergeCalls += 1; return { merged: true, merge_commit_sha: "never" } },
+    }
+    const result = await runVerifyExternalMerge(root, { candidate_id: candidate.candidate_id, adapter, session_id: sid })
+    assert.equal(result.status, "verified_external_merge")
+    assert.equal(mergeCalls, 0) // merge() never called
+    const controller = await createExecutionController({ dir: join(root, ".harness", "execution", "controller", "E1"), lease_ttl_ms: 30000 })
+    const snap = await controller.snapshot()
+    assert.equal(snap.state.merge.status, "VERIFIED")
+    assert.equal(snap.state.merge.source, "HUMAN_EXTERNAL")
+  })
+})
+
+test("human: PR not merged is rejected", async () => {
+  await withRoot(async (root) => {
+    const sid = "ses-1"
+    const candidate = await setupReady(root, sid, { mergePolicy: "human", requiredCiChecks: [] })
+    const adapter = { getPullRequest: async () => ({ state: "open", merged: false, head_sha: "head-a", base_sha: "base-1", base_branch: "main", merge_commit_sha: null }), getChecks: async () => [], merge: async () => { throw new Error("no") } }
+    await assert.rejects(
+      runVerifyExternalMerge(root, { candidate_id: candidate.candidate_id, adapter, session_id: sid }),
+      /not merged/,
+    )
+  })
+})
+
+test("human: head drift is rejected", async () => {
+  await withRoot(async (root) => {
+    const sid = "ses-1"
+    const candidate = await setupReady(root, sid, { mergePolicy: "human", requiredCiChecks: [] })
+    const adapter = { getPullRequest: async () => ({ state: "closed", merged: true, head_sha: "head-DRIFTED", base_sha: "base-1", base_branch: "main", merge_commit_sha: "merge-h1" }), getChecks: async () => [] }
+    await assert.rejects(
+      runVerifyExternalMerge(root, { candidate_id: candidate.candidate_id, adapter, session_id: sid }),
+      /drifted/,
+    )
+  })
+})
+
+test("human: non-human policy is rejected", async () => {
+  await withRoot(async (root) => {
+    const sid = "ses-1"
+    const candidate = await setupReady(root, sid, { mergePolicy: "governed_auto" })
+    const adapter = { getPullRequest: async () => ({ state: "closed", merged: true, head_sha: "head-a", base_sha: "base-1", base_branch: "main", merge_commit_sha: "merge-h1" }), getChecks: async () => [] }
+    await assert.rejects(
+      runVerifyExternalMerge(root, { candidate_id: candidate.candidate_id, adapter, session_id: sid }),
+      /not human/,
+    )
+  })
+})
+
+test("human: RECORDED recovery validates remote merge commit and verifies only", async () => {
+  await withRoot(async (root) => {
+    const sid = "ses-1"
+    const candidate = await setupReady(root, sid, { mergePolicy: "human", requiredCiChecks: [] })
+    // pre-record an external merge (state = RECORDED, source=HUMAN_EXTERNAL)
+    const controller = await createExecutionController({ dir: join(root, ".harness", "execution", "controller", "E1"), lease_ttl_ms: 30000 })
+    const lease = await controller.acquire(sid)
+    await controller.commit(
+      { operation_id: "E1:ext-record:h1", operation_type: "MERGE_EXTERNAL_RECORD", body: { merge_commit_sha: "merge-h1", merged_head_sha: "head-a", observed_base_sha: "base-1" } },
+      { holder_session_id: sid, expected_revision: (await controller.snapshot()).state.revision, lease_fencing_token: lease.fencing_token },
+    )
+    // recovery with matching remote merge commit
+    const adapter = { getPullRequest: async () => ({ state: "closed", merged: true, head_sha: "head-a", base_sha: "base-1", base_branch: "main", merge_commit_sha: "merge-h1" }), getChecks: async () => [] }
+    const result = await runVerifyExternalMerge(root, { candidate_id: candidate.candidate_id, adapter, session_id: sid })
+    assert.equal(result.status, "verified_external_merge")
+    const snap = await controller.snapshot()
+    assert.equal(snap.state.merge.status, "VERIFIED")
+    assert.equal(snap.state.merge.source, "HUMAN_EXTERNAL")
+  })
+})
+
+test("human: RECORDED recovery with a different remote merge commit fails closed", async () => {
+  await withRoot(async (root) => {
+    const sid = "ses-1"
+    const candidate = await setupReady(root, sid, { mergePolicy: "human", requiredCiChecks: [] })
+    const controller = await createExecutionController({ dir: join(root, ".harness", "execution", "controller", "E1"), lease_ttl_ms: 30000 })
+    const lease = await controller.acquire(sid)
+    await controller.commit(
+      { operation_id: "E1:ext-record:h1", operation_type: "MERGE_EXTERNAL_RECORD", body: { merge_commit_sha: "merge-h1", merged_head_sha: "head-a" } },
+      { holder_session_id: sid, expected_revision: (await controller.snapshot()).state.revision, lease_fencing_token: lease.fencing_token },
+    )
+    const adapter = { getPullRequest: async () => ({ state: "closed", merged: true, head_sha: "head-a", base_sha: "base-1", base_branch: "main", merge_commit_sha: "merge-DIFFERENT" }), getChecks: async () => [] }
+    await assert.rejects(
+      runVerifyExternalMerge(root, { candidate_id: candidate.candidate_id, adapter, session_id: sid }),
+      /differs from recorded/,
     )
   })
 })
