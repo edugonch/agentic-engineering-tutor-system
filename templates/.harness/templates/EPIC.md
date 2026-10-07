@@ -37,6 +37,14 @@ Describe one cohesive user-facing result. Keep implementation detail secondary t
 - If exhausted before the terminal condition: stop with `EPIC_REBASE_REQUIRED`; no automatic extension.
 - The maximum is a ceiling, not permission to create unnamed WUs after activation.
 
+## Execution mandate envelope
+
+Before approval, encode the same finite sequence in the machine-readable mandate. Every `wu_sequence` entry must correspond to a WU contract already created and linked to this Epic before the mandate is approved.
+
+`execution_mandate: {"max_wus": 3, "total_seconds": 10800, "merge_policy": "none", "required_ci_checks": [], "wu_sequence": ["WU-001", "WU-002", "WU-003"]}`
+
+Replace the example values with this Epic's owner-approved budget/policy/sequence. The sequence order is binding during execution.
+
 ## Work Unit sequence
 
 This complete finite sequence is frozen before the first WU is activated. Every listed WU must already exist as a durable WU contract. Execution may advance through this list; it may not append successor WUs. If this sequence proves insufficient, stop `EPIC_REBASE_REQUIRED`.
