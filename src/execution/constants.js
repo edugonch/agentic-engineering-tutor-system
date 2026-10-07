@@ -6,7 +6,8 @@
 // contract each value participates in.
 
 export const OPERATION_TYPES = Object.freeze([
-  "MANDATE_APPROVE", // owner-approved Epic execution mandate (the sole human authority input)
+  "MANDATE_APPROVE", // owner-approved Epic execution mandate (initial authority input)
+  "MANDATE_AMEND", // versioned owner-approved policy amendment; budget/scope remain immutable
   "WU_ACTIVATE", // derive + activate a WU authorized by the mandate (JIT)
   "PHASE_START", // enter a budget phase (ACTIVE / WAITING_* / PAUSED)
   "PHASE_END", // leave a budget phase and settle its billable time
@@ -23,6 +24,7 @@ export const OPERATION_TYPES = Object.freeze([
   "WU_COMPLETE", // close one WU: candidate + PASS review + settled dispatches (distinct from EPIC COMPLETE)
   "CHECKPOINT", // persist a resumable checkpoint
   "BLOCK", // record a governed stop (typed blocker class)
+  "CLEAR_BLOCKER", // resolve one explicitly recoverable blocker after its cause is repaired
   "COMPLETE", // record EPIC_EXECUTION_VERIFIED (technical completion, not owner acceptance)
   "BIND_PR", // immutably bind a GitHub PR to the active WU's frozen candidate (repository, pr_number, head/base SHA)
   "RECORD_CI", // record exact-head CI evidence for one check, bound to a candidate (multiple checks per candidate)
@@ -105,6 +107,15 @@ export const TERMINAL_BLOCKER_CLASSES = new Set([
   "BUDGET_EXHAUSTED",
 ])
 
+// Recoverable blockers may be cleared only through an explicit audited
+// transition after the underlying condition has been repaired. Hard-stop
+// blockers are deliberately excluded and cannot be cleared by this mechanism.
+export const RECOVERABLE_BLOCKER_CLASSES = new Set([
+  "BLOCKED_TOOLING",
+  "BLOCKED_EXTERNAL_FACT",
+  "BLOCKED_ARCHITECTURE",
+])
+
 // Execution authorization is distinct from artifact approval. A JIT WU may be
 // artifact-status PROPOSED while its execution is AUTHORIZED_BY_MANDATE. The
 // two questions ("who approved this document?" vs "does the controller have
@@ -134,8 +145,10 @@ export const MANDATE_AUTHORITY = Object.freeze({
 // not by RECORD_CI itself); the others are recorded for audit but never gate.
 export const CI_CONCLUSIONS = Object.freeze(["SUCCESS", "FAILURE", "PENDING", "ERROR"])
 
-// Governed merge policy. Derived from the approved Epic's execution_mandate and
-// frozen in the mandate at MANDATE_APPROVE. It can never come from a tool input.
+// Governed merge policy. Derived from approved Epic authority. Initial policy is
+// recorded at MANDATE_APPROVE; a later MANDATE_AMEND may replace only policy
+// fields from a new APPROVED Epic artifact while preserving budget/scope. Policy
+// values can never come directly from a tool input.
 //   none          — the Harness neither requires nor executes a merge.
 //   human         — the Harness may record/verify an external merge, never execute one.
 //   governed_auto — the Harness may execute a merge once every structural gate passes.
