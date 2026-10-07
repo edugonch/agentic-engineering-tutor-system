@@ -30,16 +30,21 @@ async function findExecutionForCandidate(projectRoot, candidate_id) {
   } catch {
     entries = []
   }
+  const matches = []
   for (const entry of entries) {
     if (!entry.isDirectory()) continue
     const execution_id = entry.name
     const controller = await createExecutionController({ dir: join(controllerRoot, execution_id), lease_ttl_ms: 30000 })
     const snap = await controller.snapshot()
     if (snap.state.candidates[candidate_id]) {
-      return { controller, execution_id, state: snap.state }
+      matches.push({ controller, execution_id, state: snap.state })
     }
   }
-  throw new Error(`No execution records candidate ${candidate_id}.`)
+  if (matches.length === 0) throw new Error(`No execution records candidate ${candidate_id}.`)
+  if (matches.length > 1) {
+    throw new Error(`Ambiguous execution ownership: candidate ${candidate_id} is recorded in ${matches.length} executions; fail closed.`)
+  }
+  return matches[0]
 }
 
 export async function runMergeCandidate(projectRoot, { candidate_id, adapter, session_id }) {
@@ -88,9 +93,21 @@ export async function runMergeCandidate(projectRoot, { candidate_id, adapter, se
     await commitMerge(controller, session_id, `${execution_id}:merge-start`, "MERGE_START", {})
   }
 
-  // 4. Recovery: already merged remotely → record + verify the existing merge.
+  // 4. Recovery: already merged remotely.
   if (pr.merged) {
     if (!pr.merge_commit_sha) throw new Error("merge blocked: PR merged but has no merge_commit_sha; fail closed.")
+    // RECORDED means the merge was recorded before a crash (between MERGE_RECORD
+    // and MERGE_VERIFY). Validate the remote merge commit against the durable
+    // record, then verify only — never record again.
+    if (state.merge?.status === "RECORDED") {
+      if (state.merge.merge_commit_sha !== pr.merge_commit_sha) {
+        throw new Error(`merge verify failed: remote merge commit ${pr.merge_commit_sha} differs from recorded ${state.merge.merge_commit_sha}.`)
+      }
+      await commitMerge(controller, session_id, `${execution_id}:merge-verify`, "MERGE_VERIFY", {})
+      return { status: "recovered_existing_merge", execution_id, merge_commit_sha: pr.merge_commit_sha }
+    }
+    // STARTED (or a fresh run that just committed MERGE_START above): record the
+    // existing remote merge, then verify.
     await commitMerge(controller, session_id, `${execution_id}:merge-record:${pr.merge_commit_sha}`, "MERGE_RECORD", {
       merge_commit_sha: pr.merge_commit_sha,
       merged_head_sha: binding.head_sha,
@@ -126,10 +143,12 @@ export async function runMergeCandidate(projectRoot, { candidate_id, adapter, se
     merged_head_sha: binding.head_sha,
   })
 
-  // 8. Re-fetch the PR and verify the merge actually happened on the expected head.
+  // 8. Re-fetch the PR and verify the merge actually happened on the expected head
+  // with the exact recorded merge commit.
   const after = await adapter.getPullRequest({ repository, pr_number })
   if (!after.merged) throw new Error("merge verify failed: PR not merged after merge call.")
   if (after.head_sha !== binding.head_sha) throw new Error("merge verify failed: merged head drifted.")
+  if (after.merge_commit_sha !== merged.merge_commit_sha) throw new Error(`merge verify failed: remote merge commit ${after.merge_commit_sha} differs from recorded ${merged.merge_commit_sha}.`)
 
   // 9. MERGE_VERIFY (durable).
   await commitMerge(controller, session_id, `${execution_id}:merge-verify`, "MERGE_VERIFY", {})

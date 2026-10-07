@@ -46,7 +46,7 @@ function nextEvent(state, operation_type, body) {
 function readyState(overrides = {}) {
   return {
     wu: { wu_id: "WU-01", completed: false },
-    mandate: { merge_policy: "governed_auto" },
+    mandate: { merge_policy: "governed_auto", required_ci_checks: ["check-1"] },
     pr_binding: { repository: "o/r", pr_number: 158, candidate_id: "cand-1", head_sha: "head-a", base_sha: "base-1", base_branch: "main" },
     candidates: { "cand-1": { wu_id: "WU-01" } },
     reviews: { "cand-1": { verdict: "PASS" } },
@@ -60,7 +60,7 @@ function readyState(overrides = {}) {
 // A well-formed "ready" event sequence for the state machine.
 function readyEvents(ev, { mergePolicy = "governed_auto", verdict = "PASS" } = {}) {
   return [
-    ev("MANDATE_APPROVE", { mandate_id: "M1", max_wus: 4, total_seconds: 100, merge_policy: mergePolicy }),
+    ev("MANDATE_APPROVE", { mandate_id: "M1", max_wus: 4, total_seconds: 100, merge_policy: mergePolicy, required_ci_checks: mergePolicy === "governed_auto" ? ["check-1"] : [] }),
     ev("WU_ACTIVATE", { wu_id: "WU-01", mandate_id: "M1" }),
     ev("FREEZE_CANDIDATE", { candidate_id: "cand-1", manifest_hash: "m1", tree_hash: "t1", wu_id: "WU-01" }),
     ev("RECORD_REVIEW", { candidate_id: "cand-1", verdict, candidate_hashes: { manifest_hash: "m1", tree_hash: "t1" }, verification_evidence_ids: verdict === "PASS" ? ["ev-1"] : [], verified_check_ids: [], verification_contract_hash: null }),
@@ -72,6 +72,11 @@ function readyEvents(ev, { mergePolicy = "governed_auto", verdict = "PASS" } = {
 // --- pure gate: canStartMerge ---
 test("canStartMerge allows a fully-gated governed_auto merge", () => {
   assert.deepEqual(canStartMerge(readyState()), { allowed: true })
+})
+
+test("canStartMerge rejects governed_auto with empty required_ci_checks", () => {
+  assert.equal(canStartMerge(readyState({ mandate: { merge_policy: "governed_auto", required_ci_checks: [] } })).allowed, false)
+  assert.match(canStartMerge(readyState({ mandate: { merge_policy: "governed_auto", required_ci_checks: [] } })).reason, /non-empty required_ci_checks/)
 })
 
 test("canStartMerge rejects non-governed_auto policies", () => {
@@ -145,18 +150,21 @@ test("historical V1 mandate (no merge_policy) defaults to none and cannot merge"
   assert.throws(() => applyEvent(s, nextEvent(s, "MERGE_START", {})), /governed_auto/)
 })
 
-// --- merge_policy parsing via findApprovedEpic ---
-test("merge_policy is parsed from the Epic mandate (governed_auto) and defaults to none", async () => {
+// --- merge_policy + required_ci_checks parsing via findApprovedEpic ---
+test("merge_policy + required_ci_checks parsing (valid, default, and rejections)", async () => {
   const root = await mkdtemp(join(tmpdir(), "harness-merge-policy-"))
   try {
+    // governed_auto with valid required_ci_checks
     await recordKnowledgeArtifact(root, {
       artifact_type: "epic", artifact_id: "epic-auto", status: "APPROVED", owner_confirmed: true,
-      title: "Test Epic auto", content: 'epic\nexecution_mandate: {"max_wus": 4, "total_seconds": 100, "merge_policy": "governed_auto"}',
+      title: "Test Epic auto", content: 'epic\nexecution_mandate: {"max_wus": 4, "total_seconds": 100, "merge_policy": "governed_auto", "required_ci_checks": ["check-1"]}',
       source_refs: ["https://example.com/epic-source"],
     })
     const auto = await findApprovedEpic(root, "epic-auto")
     assert.equal(auto.mandate.merge_policy, "governed_auto")
+    assert.deepEqual(auto.mandate.required_ci_checks, ["check-1"])
 
+    // default (no merge_policy) → none, empty required_ci_checks
     await recordKnowledgeArtifact(root, {
       artifact_type: "epic", artifact_id: "epic-default", status: "APPROVED", owner_confirmed: true,
       title: "Test Epic default", content: 'epic\nexecution_mandate: {"max_wus": 4, "total_seconds": 100}',
@@ -164,6 +172,31 @@ test("merge_policy is parsed from the Epic mandate (governed_auto) and defaults 
     })
     const dflt = await findApprovedEpic(root, "epic-default")
     assert.equal(dflt.mandate.merge_policy, "none")
+    assert.deepEqual(dflt.mandate.required_ci_checks, [])
+
+    // governed_auto with empty required_ci_checks → rejected (fail closed)
+    await recordKnowledgeArtifact(root, {
+      artifact_type: "epic", artifact_id: "epic-empty", status: "APPROVED", owner_confirmed: true,
+      title: "Test Epic empty", content: 'epic\nexecution_mandate: {"max_wus": 4, "total_seconds": 100, "merge_policy": "governed_auto", "required_ci_checks": []}',
+      source_refs: ["https://example.com/epic-source"],
+    })
+    await assert.rejects(findApprovedEpic(root, "epic-empty"), /missing a machine-readable execution_mandate/)
+
+    // non-string/empty entry → rejected (not silently filtered)
+    await recordKnowledgeArtifact(root, {
+      artifact_type: "epic", artifact_id: "epic-badtype", status: "APPROVED", owner_confirmed: true,
+      title: "Test Epic badtype", content: 'epic\nexecution_mandate: {"max_wus": 4, "total_seconds": 100, "merge_policy": "governed_auto", "required_ci_checks": [""]}',
+      source_refs: ["https://example.com/epic-source"],
+    })
+    await assert.rejects(findApprovedEpic(root, "epic-badtype"), /missing a machine-readable execution_mandate/)
+
+    // duplicate entry → rejected
+    await recordKnowledgeArtifact(root, {
+      artifact_type: "epic", artifact_id: "epic-dup", status: "APPROVED", owner_confirmed: true,
+      title: "Test Epic dup", content: 'epic\nexecution_mandate: {"max_wus": 4, "total_seconds": 100, "merge_policy": "governed_auto", "required_ci_checks": ["check-1","check-1"]}',
+      source_refs: ["https://example.com/epic-source"],
+    })
+    await assert.rejects(findApprovedEpic(root, "epic-dup"), /missing a machine-readable execution_mandate/)
   } finally {
     await rm(root, { recursive: true, force: true })
   }

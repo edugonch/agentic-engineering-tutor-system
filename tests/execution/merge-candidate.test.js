@@ -8,6 +8,7 @@ import { runMergeCandidate } from "../../src/execution/merge.js"
 import { createGitHubAdapter } from "../../src/execution/github-adapter.js"
 import { createCandidateRegistry } from "../../src/execution/candidate-registry.js"
 import { freezeCandidate } from "../../src/execution/candidate.js"
+import { createExecutionController } from "../../src/execution/execution.js"
 import { recordKnowledgeArtifact } from "../../src/project-knowledge.js"
 import { createVerificationReceipt, writeVerificationReceipt } from "../../src/execution/verification-results.js"
 
@@ -196,4 +197,82 @@ test("GitHub adapter without a token sends no Authorization header", async () =>
   const adapter = createGitHubAdapter({ token: "", baseUrl: "https://api.example.com", fetchImpl })
   await adapter.getPullRequest({ repository: "o/r", pr_number: 1 })
   assert.equal(calls[0].headers.Authorization, undefined)
+})
+
+// --- H-WU-06B.1 hardening regressions ---
+async function commitMergeOps(root, executionId, sessionId, ops) {
+  const controller = await createExecutionController({ dir: join(root, ".harness", "execution", "controller", executionId), lease_ttl_ms: 30000 })
+  const lease = await controller.acquire(sessionId)
+  for (const [op_id, op_type, body] of ops) {
+    const snap = await controller.snapshot()
+    await controller.commit(
+      { operation_id: op_id, operation_type: op_type, body },
+      { holder_session_id: sessionId, expected_revision: snap.state.revision, lease_fencing_token: lease.fencing_token },
+    )
+  }
+  return controller
+}
+
+test("RECORDED recovery: exact remote merge → VERIFY, no second record or merge", async () => {
+  await withRoot(async (root) => {
+    const sid = "ses-1"
+    const candidate = await setupReady(root, sid)
+    // crash after MERGE_START + MERGE_RECORD (state = RECORDED)
+    await commitMergeOps(root, "E1", sid, [
+      ["E1:merge-start", "MERGE_START", {}],
+      ["E1:merge-record:merge-1", "MERGE_RECORD", { merge_commit_sha: "merge-1", merged_head_sha: "head-a" }],
+    ])
+    let mergeCalls = 0
+    const adapter = {
+      getPullRequest: async () => ({ state: "closed", merged: true, head_sha: "head-a", base_sha: "base-1", base_branch: "main", merge_commit_sha: "merge-1" }),
+      getChecks: async () => [],
+      merge: async () => { mergeCalls += 1; return { merged: true, merge_commit_sha: "merge-again" } },
+    }
+    const result = await runMergeCandidate(root, { candidate_id: candidate.candidate_id, adapter, session_id: sid })
+    assert.equal(result.status, "recovered_existing_merge")
+    assert.equal(mergeCalls, 0)
+    const controller = await createExecutionController({ dir: join(root, ".harness", "execution", "controller", "E1"), lease_ttl_ms: 30000 })
+    const snap = await controller.snapshot()
+    assert.equal(snap.state.merge.status, "VERIFIED")
+    assert.equal(snap.state.merge.merge_commit_sha, "merge-1") // never overwritten
+  })
+})
+
+test("RECORDED recovery: remote merge commit differs → fail closed", async () => {
+  await withRoot(async (root) => {
+    const sid = "ses-1"
+    const candidate = await setupReady(root, sid)
+    await commitMergeOps(root, "E1", sid, [
+      ["E1:merge-start", "MERGE_START", {}],
+      ["E1:merge-record:merge-1", "MERGE_RECORD", { merge_commit_sha: "merge-1", merged_head_sha: "head-a" }],
+    ])
+    const adapter = {
+      getPullRequest: async () => ({ state: "closed", merged: true, head_sha: "head-a", base_sha: "base-1", base_branch: "main", merge_commit_sha: "merge-DIFFERENT" }),
+      getChecks: async () => [],
+      merge: async () => { throw new Error("must not merge") },
+    }
+    await assert.rejects(
+      runMergeCandidate(root, { candidate_id: candidate.candidate_id, adapter, session_id: sid }),
+      /differs from recorded/,
+    )
+  })
+})
+
+test("ambiguous execution ownership: same candidate in two controllers → fail closed", async () => {
+  await withRoot(async (root) => {
+    const sid = "ses-1"
+    const candidate = await setupReady(root, sid)
+    // record the same candidate_id in a second execution
+    const controllerE2 = await createExecutionController({ dir: join(root, ".harness", "execution", "controller", "E2"), lease_ttl_ms: 30000 })
+    const lease = await controllerE2.acquire(sid)
+    await controllerE2.commit(
+      { operation_id: "E2:candidate", operation_type: "FREEZE_CANDIDATE", body: { candidate_id: candidate.candidate_id, manifest_hash: "x", tree_hash: "y" } },
+      { holder_session_id: sid, expected_revision: 0, lease_fencing_token: lease.fencing_token },
+    )
+    const adapter = fakeAdapter({ checks: { "check-1": "SUCCESS" } })
+    await assert.rejects(
+      runMergeCandidate(root, { candidate_id: candidate.candidate_id, adapter, session_id: sid }),
+      /Ambiguous execution ownership/,
+    )
+  })
 })

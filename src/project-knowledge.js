@@ -795,9 +795,21 @@ function parseExecutionMandate(content) {
     if (Number.isSafeInteger(mandate.max_wus) && mandate.max_wus >= 1 && Number.isFinite(mandate.total_seconds) && mandate.total_seconds > 0) {
       const mergePolicy = mandate.merge_policy ?? "none"
       if (!["none", "human", "governed_auto"].includes(mergePolicy)) return null
-      const requiredCiChecks = Array.isArray(mandate.required_ci_checks)
-        ? mandate.required_ci_checks.filter((c) => typeof c === "string" && c.length > 0)
-        : []
+      // required_ci_checks: reject empty/non-string/duplicate entries — fail
+      // closed, never silently filter.
+      let requiredCiChecks = []
+      if (mandate.required_ci_checks !== undefined && mandate.required_ci_checks !== null) {
+        if (!Array.isArray(mandate.required_ci_checks)) return null
+        const seen = new Set()
+        for (const c of mandate.required_ci_checks) {
+          if (typeof c !== "string" || c.length === 0) return null
+          if (seen.has(c)) return null
+          seen.add(c)
+        }
+        requiredCiChecks = mandate.required_ci_checks
+      }
+      // governed_auto requires non-empty required_ci_checks (no legacy CI fallback).
+      if (mergePolicy === "governed_auto" && requiredCiChecks.length === 0) return null
       return { max_wus: mandate.max_wus, total_seconds: mandate.total_seconds, merge_policy: mergePolicy, required_ci_checks: requiredCiChecks }
     }
     return null
