@@ -9,6 +9,10 @@ import { readdir } from "node:fs/promises"
 import { createExecutionController } from "./execution.js"
 import { canStartMerge, canVerifyExternalMerge } from "./state.js"
 
+function isSuccessConclusion(value) {
+  return typeof value === "string" && value.toUpperCase() === "SUCCESS"
+}
+
 async function commitMerge(controller, session_id, operation_id, operation_type, body) {
   const lease = await controller.acquire(session_id)
   const snap = await controller.snapshot()
@@ -126,7 +130,7 @@ export async function runMergeCandidate(projectRoot, { candidate_id, adapter, se
   if (required.length > 0) {
     const checks = await adapter.getChecks({ repository, head_sha: binding.head_sha, check_names: required })
     for (const c of checks) {
-      if (c.conclusion !== "SUCCESS") {
+      if (!isSuccessConclusion(c.conclusion)) {
         throw new Error(`merge blocked: required CI ${c.name} conclusion ${c.conclusion ?? "missing"}, not SUCCESS.`)
       }
     }
@@ -199,7 +203,7 @@ export async function runVerifyExternalMerge(projectRoot, { candidate_id, adapte
   if (required.length > 0) {
     const checks = await adapter.getChecks({ repository, head_sha: binding.head_sha, check_names: required })
     for (const c of checks) {
-      if (c.conclusion !== "SUCCESS") {
+      if (!isSuccessConclusion(c.conclusion)) {
         throw new Error(`external merge blocked: required CI ${c.name} conclusion ${c.conclusion ?? "missing"}, not SUCCESS.`)
       }
     }
