@@ -21,9 +21,15 @@ Two questions must never collapse into one field:
 - `APPROVED` is reserved for human/owner approval. The controller never invents it.
 - A JIT WU is an artifact with `status: PROPOSED`, `origin: DERIVED`, and
   execution `authorization: AUTHORIZED_BY_MANDATE`. These are not contradictory.
-- The mandate (`MANDATE_APPROVE`) is the sole human authority input for the
-  execution loop. It pins the Epic outcome, WU ceiling, and budget. The
-  controller may not change those fields; changing them requires a new mandate.
+- The initial mandate (`MANDATE_APPROVE`) is the human authority input that
+  pins the Epic outcome, WU ceiling, and budget. Those scope/budget fields remain
+  immutable for the execution.
+- `MANDATE_AMEND` is a narrow, versioned compatibility transition. It may update
+  only `merge_policy` and `required_ci_checks` from a new **APPROVED Epic
+  artifact** while keeping the same execution, mandate identity, WU ceiling,
+  budget ledger, dispatches, candidates, reviews, PR/CI bindings, and history.
+  The original authority event remains in `events.ndjson`; the amendment is a
+  new auditable event, never an overwrite.
 
 ## 2. Durability target
 
@@ -116,7 +122,13 @@ tree_hash      identifies the material tree reconstructed from the manifest
 `RECORD_REVIEW` binds a verdict to one exact candidate's hashes. A one-line
 repair produces a new candidate, and `PASS(A)` can never accredit `B`.
 
-## 9. Hard stops
+## 9. Blockers and hard stops
+
+Recoverable blockers (`BLOCKED_TOOLING`, `BLOCKED_EXTERNAL_FACT`,
+`BLOCKED_ARCHITECTURE`) may be resolved only by `CLEAR_BLOCKER`, bound to the
+exact blocker class + blocker revision and carrying a non-empty resolution.
+Terminal blockers cannot use this transition. Merge and WU closure require no
+unresolved blocker.
 
 `permission.rejected` is a **global invariant**:
 

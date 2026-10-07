@@ -12,6 +12,7 @@ import {
   OPERATION_TYPES,
   RESERVATION_STATUS,
   TERMINAL_BLOCKER_CLASSES,
+  RECOVERABLE_BLOCKER_CLASSES,
   WU_ORIGIN,
   MANDATE_AUTHORITY,
 } from "./constants.js"
@@ -48,7 +49,7 @@ export function canStartMerge(state) {
   const review = state.reviews[binding.candidate_id]
   if (!review || review.verdict !== "PASS") return { allowed: false, reason: "no PASS review" }
   if (state.mandate?.merge_policy !== "governed_auto") return { allowed: false, reason: `merge policy is ${state.mandate?.merge_policy ?? "none"}, not governed_auto` }
-  if (state.blocker && TERMINAL_BLOCKER_CLASSES.has(state.blocker.class)) return { allowed: false, reason: `terminal blocker ${state.blocker.class}` }
+  if (state.blocker) return { allowed: false, reason: `unresolved blocker ${state.blocker.class}` }
   const settled = new Set([DISPATCH_STATUS.RESULT_RECONCILED, DISPATCH_STATUS.RELEASED])
   const unsettled = Object.values(state.dispatches).filter((d) => !settled.has(d.status))
   if (unsettled.length > 0) return { allowed: false, reason: `${unsettled.length} unsettled dispatch(es)` }
@@ -81,7 +82,7 @@ export function canVerifyExternalMerge(state) {
   const review = state.reviews[binding.candidate_id]
   if (!review || review.verdict !== "PASS") return { allowed: false, reason: "no PASS review" }
   if (state.mandate?.merge_policy !== "human") return { allowed: false, reason: `merge policy is ${state.mandate?.merge_policy ?? "none"}, not human` }
-  if (state.blocker && TERMINAL_BLOCKER_CLASSES.has(state.blocker.class)) return { allowed: false, reason: `terminal blocker ${state.blocker.class}` }
+  if (state.blocker) return { allowed: false, reason: `unresolved blocker ${state.blocker.class}` }
   const settled = new Set([DISPATCH_STATUS.RESULT_RECONCILED, DISPATCH_STATUS.RELEASED])
   const unsettled = Object.values(state.dispatches).filter((d) => !settled.has(d.status))
   if (unsettled.length > 0) return { allowed: false, reason: `${unsettled.length} unsettled dispatch(es)` }
@@ -170,6 +171,70 @@ export function applyEvent(previous, event) {
         }
       }
       state.budget.total_seconds = body.total_seconds
+      break
+    }
+
+    case "MANDATE_AMEND": {
+      if (!state.mandate) throw new Error("MANDATE_AMEND requires an approved mandate.")
+      if (state.mandate.authority_kind !== MANDATE_AUTHORITY.OWNER_APPROVED_EPIC) {
+        throw new Error("MANDATE_AMEND requires an OWNER_APPROVED_EPIC mandate.")
+      }
+      if (state.completed) throw new Error("MANDATE_AMEND cannot modify a completed execution.")
+      if (state.merge) throw new Error("MANDATE_AMEND cannot modify policy after a merge has started or been recorded.")
+      if (!body.mandate_id || body.mandate_id !== state.mandate.mandate_id) {
+        throw new Error(`MANDATE_AMEND mandate mismatch: ${body.mandate_id ?? "missing"} vs ${state.mandate.mandate_id}.`)
+      }
+      if (body.max_wus !== state.mandate.max_wus) {
+        throw new Error(`MANDATE_AMEND cannot change max_wus: ${state.mandate.max_wus} -> ${body.max_wus}.`)
+      }
+      if (body.total_seconds !== state.budget.total_seconds) {
+        throw new Error(`MANDATE_AMEND cannot change total_seconds: ${state.budget.total_seconds} -> ${body.total_seconds}.`)
+      }
+
+      const currentPolicy = state.mandate.merge_policy ?? "none"
+      const currentChecks = state.mandate.required_ci_checks ?? []
+      const expectedPolicy = body.expected_merge_policy ?? "none"
+      const expectedChecks = body.expected_required_ci_checks ?? []
+      if (currentPolicy !== expectedPolicy || !setsEqual(currentChecks, expectedChecks)) {
+        throw new Error("MANDATE_AMEND expected policy does not match current effective mandate policy.")
+      }
+
+      const nextPolicy = body.merge_policy ?? "none"
+      const nextChecks = body.required_ci_checks ?? []
+      if (!MERGE_POLICIES.includes(nextPolicy)) {
+        throw new Error(`MANDATE_AMEND: unknown merge_policy ${nextPolicy}.`)
+      }
+      if (!Array.isArray(nextChecks) || nextChecks.some((check) => typeof check !== "string" || check.length === 0)) {
+        throw new Error("MANDATE_AMEND requires required_ci_checks to be non-empty strings.")
+      }
+      if (new Set(nextChecks).size !== nextChecks.length) {
+        throw new Error("MANDATE_AMEND required_ci_checks cannot contain duplicates.")
+      }
+      if (nextPolicy === "governed_auto" && nextChecks.length === 0) {
+        throw new Error("MANDATE_AMEND governed_auto requires non-empty required_ci_checks.")
+      }
+      if (!body.source_artifact_id || !body.source_record_key || !body.source_hash) {
+        throw new Error("MANDATE_AMEND requires source_artifact_id, source_record_key, and source_hash.")
+      }
+
+      state.mandate.merge_policy = nextPolicy
+      state.mandate.required_ci_checks = [...nextChecks]
+      state.mandate.policy_revision = body.source_revision ?? null
+      state.mandate.policy_source_artifact_id = body.source_artifact_id
+      state.mandate.policy_source_record_key = body.source_record_key
+      state.mandate.policy_source_hash = body.source_hash
+      state.mandate.policy_amendment_count = (state.mandate.policy_amendment_count ?? 0) + 1
+      state.mandate.last_policy_amendment = {
+        previous_merge_policy: currentPolicy,
+        previous_required_ci_checks: [...currentChecks],
+        merge_policy: nextPolicy,
+        required_ci_checks: [...nextChecks],
+        source_artifact_id: body.source_artifact_id,
+        source_record_key: body.source_record_key,
+        source_hash: body.source_hash,
+        source_revision: body.source_revision ?? null,
+        at_revision: state.revision,
+      }
       break
     }
 
@@ -414,6 +479,27 @@ export function applyEvent(previous, event) {
       break
     }
 
+    case "CLEAR_BLOCKER": {
+      if (!state.blocker) throw new Error("CLEAR_BLOCKER requires an active blocker.")
+      if (!RECOVERABLE_BLOCKER_CLASSES.has(state.blocker.class)) {
+        throw new Error(`CLEAR_BLOCKER cannot clear non-recoverable blocker ${state.blocker.class}.`)
+      }
+      if (body.blocker_class !== state.blocker.class || body.blocked_at_revision !== state.blocker.at_revision) {
+        throw new Error("CLEAR_BLOCKER target does not match the active blocker.")
+      }
+      if (typeof body.resolution !== "string" || body.resolution.trim().length === 0) {
+        throw new Error("CLEAR_BLOCKER requires a non-empty resolution.")
+      }
+      state.last_blocker_resolution = {
+        class: state.blocker.class,
+        blocked_at_revision: state.blocker.at_revision,
+        resolution: body.resolution,
+        at_revision: state.revision,
+      }
+      state.blocker = null
+      break
+    }
+
     case "BIND_PR": {
       const candidate = state.candidates[body.candidate_id]
       if (!candidate) throw new Error(`BIND_PR: unknown candidate ${body.candidate_id}.`)
@@ -542,8 +628,11 @@ export function applyEvent(previous, event) {
     case "WU_COMPLETE": {
       if (!state.wu) throw new Error("WU_COMPLETE requires an active WU.")
       if (state.wu.completed) throw new Error("WU_COMPLETE: the active WU is already complete.")
-      if (state.blocker && TERMINAL_BLOCKER_CLASSES.has(state.blocker.class)) {
-        throw new Error(`WU_COMPLETE blocked: terminal blocker ${state.blocker.class}; a WU cannot close under a hard stop.`)
+      if (state.blocker) {
+        if (TERMINAL_BLOCKER_CLASSES.has(state.blocker.class)) {
+          throw new Error(`WU_COMPLETE blocked: terminal blocker ${state.blocker.class}; a WU cannot close under a hard stop.`)
+        }
+        throw new Error(`WU_COMPLETE blocked: unresolved blocker ${state.blocker.class}; clear the recoverable blocker before closure.`)
       }
       const candidateId = body.candidate_id
       if (!candidateId) throw new Error("WU_COMPLETE requires candidate_id.")
