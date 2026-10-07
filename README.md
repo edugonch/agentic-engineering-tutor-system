@@ -141,6 +141,14 @@ Environment overrides:
 
 Each OpenCode session, including each subagent session, has its own counters; a new prompt resets that session's action budget. Total tool calls and subagent delegations are unlimited by default; when `HARNESS_MAX_TOOL_CALLS` or `HARNESS_MAX_DELEGATIONS` is explicitly set, that per-session ceiling gives a finite action bound, while agent `steps` limits usually stop earlier. This is not a precise dollar ceiling: input-token use and provider-side retries/cost reporting can vary. Configure provider spending limits as a second control.
 
+## Full-Epic execution mandates
+
+When an owner-approved Epic mandate explicitly delegates completion of the whole finite Epic, the orchestrator does not stop after each successful WU. A completed WU is an internal checkpoint: the orchestrator re-evaluates the Epic end condition, derives the next necessary bounded WU JIT within the approved WU/budget/scope ceiling, and continues until the integrated Epic outcome is proven.
+
+The final step is a terminal closure WU with integrated acceptance evidence and fresh independent outcome review. Only after that WU is durably completed may the controller's Epic-level `complete` action be committed; the external Epic tracker/state is closed only after controller verification reports `completed=true`.
+
+Without an explicit full-Epic delegation, successor WUs still require owner direction. Full-Epic continuation never widens scope or automates deploys, production migrations, secrets, destructive actions, or other human-gated operations.
+
 ## Development
 
 ```sh
