@@ -7,7 +7,11 @@ Owner activation: [PENDING]
 
 ## Story and Epic connection
 
-Explain how this outcome moves the current Epic chapter toward its terminal demo. Identify preceding/following relationships without splitting this WU.
+- Sequence position: [N of TOTAL]
+- Predecessor: [WU ID, PREVIOUS EPIC BOUNDARY, or NONE]
+- Successor: [WU ID, EPIC CLOSE, or NONE]
+
+Explain how this self-contained outcome continues the Epic story from its predecessor and hands a stable state to its already-declared successor without splitting this WU.
 
 ## Single outcome
 
@@ -31,7 +35,7 @@ State the one coherent result that will exist when this WU is accepted. The WU m
 ## Dependencies
 
 - [None or exact blocking predecessor/decision]
-- A blocker discovered during execution is reported; it does not authorize child, repair, coordination, or successor WUs.
+- A blocker discovered during execution is reported; it does not authorize child, repair, coordination, or successor WUs. Only WUs already present in the approved Epic sequence may follow this one.
 
 ## Approved execution budget
 

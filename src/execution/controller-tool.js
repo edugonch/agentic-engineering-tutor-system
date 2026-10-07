@@ -21,7 +21,7 @@ import { project, deriveBudget } from "./state.js"
 import { createExecutionController } from "./execution.js"
 import { createCandidateRegistry } from "./candidate-registry.js"
 import { readVerificationReceipt } from "./verification-results.js"
-import { findApprovedEpic } from "../project-knowledge.js"
+import { findApprovedEpic, verifyDeclaredWorkUnits } from "../project-knowledge.js"
 import { DISPATCH_STATUS, RESERVATION_STATUS, MANDATE_AUTHORITY, RECOVERABLE_BLOCKER_CLASSES } from "./constants.js"
 
 function sanitizeId(raw, label) {
@@ -177,7 +177,10 @@ export async function runExecutionController(projectRoot, input, candidateRegist
     if (!epicArtifactId) throw new Error("approve_mandate requires epic_artifact_id (an APPROVED Epic artifact in the knowledge index).")
     const epic = await findApprovedEpic(projectRoot, epicArtifactId)
     const mandateId = String(input.mandate_id ?? `${executionId}-MANDATE-001`)
-    const res = await commitAction(controller, holder, `${executionId}:mandate`, "MANDATE_APPROVE", {
+    if (epic.mandate.wu_sequence?.length) {
+      await verifyDeclaredWorkUnits(projectRoot, epic, epic.mandate.wu_sequence)
+    }
+    const body = {
       execution_id: `${executionId}:exec`,
       mandate_id: mandateId,
       mandate_revision: epic.source_revision,
@@ -189,7 +192,9 @@ export async function runExecutionController(projectRoot, input, candidateRegist
       source_artifact_id: epic.source_id,
       source_record_key: epic.record_key,
       source_hash: epic.sha256,
-    })
+      ...(epic.mandate.wu_sequence?.length ? { wu_sequence: epic.mandate.wu_sequence } : {}),
+    }
+    const res = await commitAction(controller, holder, `${executionId}:mandate`, "MANDATE_APPROVE", body)
     return { action, commit_status: res.status, source_artifact_id: epic.source_id, source_hash: epic.sha256, ...(await summary(controller)) }
   }
 

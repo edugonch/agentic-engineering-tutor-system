@@ -783,6 +783,33 @@ export async function findApprovedEpic(projectRoot, epicArtifactId) {
   }
 }
 
+// Verify that every WU named by a frozen Epic sequence already exists as a
+// durable Work Unit artifact linked back to that Epic. Sequence declaration is
+// not permission to materialize missing WUs during execution.
+export async function verifyDeclaredWorkUnits(projectRoot, epic, wuIds) {
+  if (!Array.isArray(wuIds) || wuIds.length === 0) return { verified: true, work_units: [] }
+  const root = assertRoot(projectRoot)
+  const index = await readIndex(root)
+  const workUnits = []
+  for (const wuId of wuIds) {
+    const matches = index.records.filter((record) =>
+      record.classification === "WORK_UNIT" &&
+      record.source_id === wuId
+    )
+    if (matches.length !== 1) {
+      throw new Error(`APPROVED_EPIC_WU_SEQUENCE_INVALID: expected exactly one durable Work Unit artifact for ${wuId}, found ${matches.length}.`)
+    }
+    const record = matches[0]
+    const links = new Set(record.relationships ?? [])
+    const linked = links.has(epic.source_id) || links.has(epic.record_key)
+    if (!linked) {
+      throw new Error(`APPROVED_EPIC_WU_SEQUENCE_INVALID: Work Unit ${wuId} is not linked to Epic ${epic.source_id}.`)
+    }
+    workUnits.push({ source_id: record.source_id, record_key: record.record_key, source_revision: record.source_revision })
+  }
+  return { verified: true, work_units: workUnits }
+}
+
 // Extract a machine-readable `execution_mandate: {max_wus, total_seconds}` from
 // an Epic artifact body. Returns null when absent/malformed so the caller fails
 // closed rather than inventing an envelope. An optional `merge_policy` is parsed
@@ -810,7 +837,32 @@ function parseExecutionMandate(content) {
       }
       // governed_auto requires non-empty required_ci_checks (no legacy CI fallback).
       if (mergePolicy === "governed_auto" && requiredCiChecks.length === 0) return null
-      return { max_wus: mandate.max_wus, total_seconds: mandate.total_seconds, merge_policy: mergePolicy, required_ci_checks: requiredCiChecks }
+
+      // Optional frozen WU sequence. New full-Epic mandates should provide this;
+      // omission remains readable for legacy executions but grants no structural
+      // sequence authority. When present it is finite, unique, ordered, and may
+      // never exceed max_wus.
+      let wuSequence
+      if (mandate.wu_sequence !== undefined && mandate.wu_sequence !== null) {
+        if (!Array.isArray(mandate.wu_sequence) || mandate.wu_sequence.length === 0) return null
+        if (mandate.wu_sequence.length > mandate.max_wus) return null
+        const seenWus = new Set()
+        wuSequence = []
+        for (const wu of mandate.wu_sequence) {
+          if (typeof wu !== "string" || !/^[A-Za-z0-9._:-]{1,181}$/.test(wu)) return null
+          if (seenWus.has(wu)) return null
+          seenWus.add(wu)
+          wuSequence.push(wu)
+        }
+      }
+
+      return {
+        max_wus: mandate.max_wus,
+        total_seconds: mandate.total_seconds,
+        merge_policy: mergePolicy,
+        required_ci_checks: requiredCiChecks,
+        ...(wuSequence ? { wu_sequence: wuSequence } : {}),
+      }
     }
     return null
   } catch { return null }

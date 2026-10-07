@@ -7,28 +7,33 @@ import { dirname, resolve } from "node:path"
 const here = dirname(fileURLToPath(import.meta.url))
 const profilePath = resolve(here, "../templates/.opencode/agents/harness-orchestrator.md")
 
-test("orchestrator continues a fully delegated finite Epic after intermediate WU completion", async () => {
+test("orchestrator advances through the predeclared Epic sequence after intermediate completion", async () => {
   const profile = await readFile(profilePath, "utf8")
-  assert.match(profile, /full-Epic autonomous completion/i)
-  assert.match(profile, /Treat each successful WU as an internal checkpoint/i)
-  assert.match(profile, /After every `complete_wu`, re-evaluate the Epic/i)
-  assert.match(profile, /derive exactly one next necessary bounded WU/i)
-  assert.match(profile, /without asking the owner for permission already granted by the mandate/i)
+  assert.match(profile, /complete finite WU sequence is defined when the Epic is approved\/started/i)
+  assert.match(profile, /activate the \*\*next already-declared WU in that approved sequence\*\*/i)
+  assert.match(profile, /another WU remains in the \*\*predeclared sequence\*\*/i)
+  assert.doesNotMatch(profile, /derive exactly one next necessary bounded WU/i)
 })
 
-test("orchestrator requires a terminal closure WU before Epic COMPLETE", async () => {
+test("orchestrator stops for rebase instead of creating successor WUs", async () => {
   const profile = await readFile(profilePath, "utf8")
-  assert.match(profile, /terminal closure WU/i)
-  assert.match(profile, /Call controller action `complete` only after that terminal closure WU is durably complete/i)
-  assert.match(profile, /require `completed=true`/i)
-  assert.match(profile, /only after that may the external Epic issue\/state be marked CLOSED\/COMPLETED/i)
-  assert.match(profile, /A passing intermediate WU is never sufficient reason to call `complete`/i)
+  assert.match(profile, /Never derive, create, insert, append, or replace successor WUs while the Epic is executing/i)
+  assert.match(profile, /EPIC_REBASE_REQUIRED/i)
+  assert.match(profile, /Do not create repair, coordination, research-follow-up, child, or successor WUs automatically/i)
 })
 
-test("full-Epic continuation does not weaken production or scope gates", async () => {
+test("orchestrator closes Epic only after the final predeclared WU", async () => {
+  const profile = await readFile(profilePath, "utf8")
+  assert.match(profile, /final predeclared WU/i)
+  assert.match(profile, /Call controller action `complete` only after the final predeclared WU is durably complete/i)
+  assert.match(profile, /completed=true/i)
+  assert.match(profile, /only then close the external Epic tracker item/i)
+})
+
+test("predeclared-sequence autonomy does not weaken production or scope gates", async () => {
   const profile = await readFile(profilePath, "utf8")
   assert.match(profile, /does not authorize automatic deploys/i)
   assert.match(profile, /production migrations/i)
   assert.match(profile, /scope expansion/i)
-  assert.match(profile, /builders\/reviewers still cannot create successor WUs/i)
+  assert.match(profile, /dynamic WU creation/i)
 })

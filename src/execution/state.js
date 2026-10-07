@@ -155,6 +155,21 @@ export function applyEvent(previous, event) {
       if (!MERGE_POLICIES.includes(state.mandate.merge_policy)) {
         throw new Error(`MANDATE_APPROVE: unknown merge_policy ${state.mandate.merge_policy}.`)
       }
+      if (body.wu_sequence !== undefined) {
+        if (!Array.isArray(body.wu_sequence) || body.wu_sequence.length === 0) {
+          throw new Error("MANDATE_APPROVE: wu_sequence must be a non-empty array when provided.")
+        }
+        if (body.wu_sequence.length > body.max_wus) {
+          throw new Error("MANDATE_APPROVE: wu_sequence exceeds max_wus.")
+        }
+        if (new Set(body.wu_sequence).size !== body.wu_sequence.length) {
+          throw new Error("MANDATE_APPROVE: wu_sequence cannot contain duplicates.")
+        }
+        if (body.wu_sequence.some((wu) => typeof wu !== "string" || wu.length === 0)) {
+          throw new Error("MANDATE_APPROVE: wu_sequence entries must be non-empty strings.")
+        }
+        state.mandate.wu_sequence = [...body.wu_sequence]
+      }
       // Governed binding (approve_mandate) records the source of human authority;
       // legacy `init` has no source binding. The fields are present only when a
       // governed mandate supplied them, so the projection never fabricates one.
@@ -252,6 +267,15 @@ export function applyEvent(previous, event) {
       }
       if (state.activated_wu_ids.length >= state.mandate.max_wus) {
         throw new Error(`WU_ACTIVATE blocked: mandate max_wus (${state.mandate.max_wus}) reached.`)
+      }
+      if (Array.isArray(state.mandate.wu_sequence)) {
+        const expectedWu = state.mandate.wu_sequence[state.activated_wu_ids.length]
+        if (!expectedWu) {
+          throw new Error("WU_ACTIVATE blocked: frozen Epic WU sequence is exhausted; EPIC_REBASE_REQUIRED.")
+        }
+        if (body.wu_id !== expectedWu) {
+          throw new Error(`WU_ACTIVATE blocked: next frozen WU is ${expectedWu}, got ${body.wu_id}; successor creation/reordering is not authorized.`)
+        }
       }
       state.wu = {
         wu_id: body.wu_id,
@@ -680,6 +704,16 @@ export function applyEvent(previous, event) {
     case "COMPLETE": {
       if (state.wu && !state.wu.completed) {
         throw new Error(`COMPLETE blocked: active WU ${state.wu.wu_id} is not complete.`)
+      }
+      if (Array.isArray(state.mandate?.wu_sequence)) {
+        if (state.activated_wu_ids.length !== state.mandate.wu_sequence.length) {
+          const remaining = state.mandate.wu_sequence.slice(state.activated_wu_ids.length)
+          throw new Error(`COMPLETE blocked: frozen Epic WU sequence is incomplete; remaining WUs: ${remaining.join(", ")}.`)
+        }
+        const terminalWu = state.mandate.wu_sequence.at(-1)
+        if (!state.wu || state.wu.wu_id !== terminalWu || !state.wu.completed) {
+          throw new Error(`COMPLETE blocked: terminal frozen WU ${terminalWu} is not durably complete.`)
+        }
       }
       state.completed = true
       state.completion = { result: body.result ?? null, at_revision: state.revision }
