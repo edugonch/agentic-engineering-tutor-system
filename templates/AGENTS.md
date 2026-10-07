@@ -10,7 +10,7 @@ The `.harness/` directory is the project governance record. Keep the project sto
 - Research only to answer one exact question that blocks the next authorized decision or WU. Do not let research create child questions, WUs, or an automatic expansion path.
 - A WU may depend on or connect to another WU, but it cannot create child WUs. Never treat a repair, review finding, or discovered prerequisite as authorization for more work.
 - Stop when an approved WU or Epic budget is exhausted. Report the blocker and return control to the owner.
-- Do not merge or deploy automatically. Follow the merge and release policy explicitly approved for this project.
+- Follow the merge policy frozen in the approved Epic mandate. `none` requires no merge; `human` means a human merges and the Harness observes/verifies it via `harness_verify_external_merge`; `governed_auto` means the Harness executes the governed merge via `harness_merge_candidate` once every structural gate passes. Never deploy or run production migrations, secrets, or live DB actions automatically.
 
 ## Story shape
 
