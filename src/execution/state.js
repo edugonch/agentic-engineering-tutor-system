@@ -629,7 +629,10 @@ export function applyEvent(previous, event) {
       if (!state.wu) throw new Error("WU_COMPLETE requires an active WU.")
       if (state.wu.completed) throw new Error("WU_COMPLETE: the active WU is already complete.")
       if (state.blocker) {
-        throw new Error(`WU_COMPLETE blocked: unresolved blocker ${state.blocker.class}; clear a recoverable blocker or resolve the hard stop before closure.`)
+        if (TERMINAL_BLOCKER_CLASSES.has(state.blocker.class)) {
+          throw new Error(`WU_COMPLETE blocked: terminal blocker ${state.blocker.class}; a WU cannot close under a hard stop.`)
+        }
+        throw new Error(`WU_COMPLETE blocked: unresolved blocker ${state.blocker.class}; clear the recoverable blocker before closure.`)
       }
       const candidateId = body.candidate_id
       if (!candidateId) throw new Error("WU_COMPLETE requires candidate_id.")
