@@ -8,6 +8,13 @@ Product Owner approval: [PENDING]
 
 What changes for the user at the end of this chapter, and why is this the next chapter in the project story?
 
+## Story boundaries
+
+- Previous Epic / starting boundary: [PREVIOUS EPIC ID OR NONE]
+- Verified starting state: [EXACT ACCEPTED STATE THIS EPIC INHERITS]
+- Next Epic / handoff boundary: [NEXT EPIC ID OR UNKNOWN]
+- Required handoff at closure: [STATE THIS EPIC MUST LEAVE FOR THE NEXT CHAPTER]
+
 ## Start condition
 
 State the verified condition that must be true before the chapter starts.
@@ -28,12 +35,17 @@ Describe one cohesive user-facing result. Keep implementation detail secondary t
 - Budget approval status: [PENDING]
 - Approval reference: [APPROVED DECISION ID / DATE]
 - If exhausted before the terminal condition: stop with `EPIC_REBASE_REQUIRED`; no automatic extension.
+- The maximum is a ceiling, not permission to create unnamed WUs after activation.
 
 ## Work Unit sequence
 
-| Order | WU | Outcome | Depends on | Status |
-|---:|---|---|---|---|
-| 1 | [WU ID] | [one outcome] | [none or WU ID] | DRAFT |
+This complete finite sequence is frozen before the first WU is activated. Every listed WU must already exist as a durable WU contract. Execution may advance through this list; it may not append successor WUs. If this sequence proves insufficient, stop `EPIC_REBASE_REQUIRED`.
+
+| Order | WU | Outcome | Depends on | Hands off to | Status |
+|---:|---|---|---|---|---|
+| 1 | [WU ID] | [one self-contained outcome] | [none or WU ID] | [next WU ID or EPIC CLOSE] | DRAFT |
+
+- Terminal WU: [WU ID ALREADY LISTED ABOVE]
 
 ## Out of scope
 
