@@ -188,6 +188,20 @@ test("GitHub adapter sends the token only as an Authorization header and never l
   )
 })
 
+test("governed merge accepts SUCCESS conclusions case-insensitively", async () => {
+  await withRoot(async (root) => {
+    const sid = "ses-1"
+    for (const conclusion of ["SUCCESS", "success", "Success", "sUcCeSs"]) {
+      const caseRoot = join(root, conclusion)
+      await import("node:fs/promises").then(({ mkdir }) => mkdir(caseRoot, { recursive: true }))
+      const candidate = await setupReady(caseRoot, sid)
+      const adapter = fakeAdapter({ checks: { "check-1": conclusion } })
+      const result = await runMergeCandidate(caseRoot, { candidate_id: candidate.candidate_id, adapter, session_id: sid })
+      assert.equal(result.status, "merged")
+    }
+  })
+})
+
 test("GitHub adapter without a token sends no Authorization header", async () => {
   const calls = []
   const fetchImpl = async (url, init) => {
