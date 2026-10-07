@@ -50,24 +50,15 @@ export function canStartMerge(state) {
   const unsettled = Object.values(state.dispatches).filter((d) => !settled.has(d.status))
   if (unsettled.length > 0) return { allowed: false, reason: `${unsettled.length} unsettled dispatch(es)` }
   const required = state.mandate?.required_ci_checks ?? []
+  // governed_auto must have explicit, non-empty governance coverage. The legacy
+  // "any recorded CI" fallback never applies to governed_auto.
+  if (required.length === 0) return { allowed: false, reason: "governed_auto requires non-empty required_ci_checks" }
   const evidence = state.ci_evidence[binding.candidate_id]
-  if (required.length > 0) {
-    // Explicit governance coverage: every required check must be present,
-    // SUCCESS, and bound to the exact head SHA. Missing/failed/stale rejects.
-    for (const check of required) {
-      const e = evidence?.[check]
-      if (!e) return { allowed: false, reason: `required CI ${check} is missing` }
-      if (e.conclusion !== "SUCCESS") return { allowed: false, reason: `required CI ${check} conclusion is ${e.conclusion}, not SUCCESS` }
-      if (e.head_sha !== binding.head_sha) return { allowed: false, reason: `required CI ${check} head ${e.head_sha} does not match bound head ${binding.head_sha}` }
-    }
-  } else {
-    // No explicit required checks (legacy): any recorded CI must be all-SUCCESS
-    // and bound to the exact head.
-    if (!evidence || Object.keys(evidence).length === 0) return { allowed: false, reason: "no CI evidence" }
-    for (const [check, e] of Object.entries(evidence)) {
-      if (e.conclusion !== "SUCCESS") return { allowed: false, reason: `CI ${check} conclusion is ${e.conclusion}, not SUCCESS` }
-      if (e.head_sha !== binding.head_sha) return { allowed: false, reason: `CI ${check} head ${e.head_sha} does not match bound head ${binding.head_sha}` }
-    }
+  for (const check of required) {
+    const e = evidence?.[check]
+    if (!e) return { allowed: false, reason: `required CI ${check} is missing` }
+    if (e.conclusion !== "SUCCESS") return { allowed: false, reason: `required CI ${check} conclusion is ${e.conclusion}, not SUCCESS` }
+    if (e.head_sha !== binding.head_sha) return { allowed: false, reason: `required CI ${check} head ${e.head_sha} does not match bound head ${binding.head_sha}` }
   }
   return { allowed: true }
 }
