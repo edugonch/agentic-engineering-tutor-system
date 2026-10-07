@@ -143,11 +143,15 @@ Each OpenCode session, including each subagent session, has its own counters; a 
 
 ## Full-Epic execution mandates
 
-When an owner-approved Epic mandate explicitly delegates completion of the whole finite Epic, the orchestrator does not stop after each successful WU. A completed WU is an internal checkpoint: the orchestrator re-evaluates the Epic end condition, derives the next necessary bounded WU JIT within the approved WU/budget/scope ceiling, and continues until the integrated Epic outcome is proven.
+An Epic is planned as one finite chapter **before execution starts**. Its complete ordered Work Unit sequence is declared up front; each WU is a self-contained outcome/story, while predecessor/following relationships give the chapter continuity from the verified end of the previous Epic (when one exists) to the Epic terminal outcome and next-Epic handoff.
 
-The final step is a terminal closure WU with integrated acceptance evidence and fresh independent outcome review. Only after that WU is durably completed may the controller's Epic-level `complete` action be committed; the external Epic tracker/state is closed only after controller verification reports `completed=true`.
+When an owner-approved mandate delegates full-Epic completion, the orchestrator may advance automatically through that **existing sequence**. A completed WU is an internal checkpoint: the next action is to activate the next predeclared WU, never to invent a successor.
 
-Without an explicit full-Epic delegation, successor WUs still require owner direction. Full-Epic continuation never widens scope or automates deploys, production migrations, secrets, destructive actions, or other human-gated operations.
+If the declared sequence is exhausted before the Epic terminal condition is met, execution stops `EPIC_REBASE_REQUIRED`. Only an owner-approved rebase may replace/extend the remaining finite plan. The runtime itself cannot grow an Epic.
+
+The final predeclared WU must prove integrated Epic acceptance/closure (or be explicitly the closure WU). After it is durably completed, the controller's Epic-level `complete` action is committed and verified; only then is the external Epic tracker/state closed.
+
+Full-Epic continuation never widens scope or automates deploys, production migrations, secrets, destructive actions, or dynamic WU creation.
 
 ## Development
 
