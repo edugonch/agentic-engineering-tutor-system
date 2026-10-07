@@ -57,6 +57,7 @@ async function summary(controller) {
     })),
     fencing_token: lease?.fencing_token ?? null,
     blocker: state.blocker,
+    last_blocker_resolution: state.last_blocker_resolution ?? null,
     completed: state.completed,
     mandate: state.mandate,
     wu: state.wu,
@@ -203,6 +204,37 @@ export async function runExecutionController(projectRoot, input, candidateRegist
     if (current.authority_kind !== MANDATE_AUTHORITY.OWNER_APPROVED_EPIC) {
       throw new Error("amend_mandate requires an OWNER_APPROVED_EPIC mandate.")
     }
+
+    const operationId = `${executionId}:mandate-amend:${epic.source_id}:${epic.sha256}`
+    const existing = snap.events.find((event) => event.operation_id === operationId)
+    if (existing) {
+      const replay = await controller.commit(
+        { operation_id: operationId, operation_type: "MANDATE_AMEND", body: existing.body },
+        { holder_session_id: holder, expected_revision: snap.state.revision, lease_fencing_token: lease.fencing_token },
+      )
+      return {
+        action,
+        commit_status: replay.status,
+        amendment_receipt: {
+          operation_id: operationId,
+          source_artifact_id: existing.body.source_artifact_id,
+          source_hash: existing.body.source_hash,
+          previous: {
+            merge_policy: existing.body.expected_merge_policy,
+            required_ci_checks: existing.body.expected_required_ci_checks ?? [],
+          },
+          effective: {
+            merge_policy: replay.state.mandate.merge_policy,
+            required_ci_checks: replay.state.mandate.required_ci_checks,
+            policy_revision: replay.state.mandate.policy_revision ?? null,
+            policy_source_artifact_id: replay.state.mandate.policy_source_artifact_id ?? null,
+            policy_source_hash: replay.state.mandate.policy_source_hash ?? null,
+          },
+        },
+        ...(await summary(controller)),
+      }
+    }
+
     if (snap.state.completed) throw new Error("amend_mandate cannot modify a completed execution.")
     if (snap.state.merge) throw new Error("amend_mandate cannot modify policy after a merge has started or been recorded.")
     if (epic.mandate.max_wus !== current.max_wus) {
@@ -231,7 +263,6 @@ export async function runExecutionController(projectRoot, input, candidateRegist
       source_hash: epic.sha256,
       source_revision: epic.source_revision,
     }
-    const operationId = `${executionId}:mandate-amend:${epic.source_id}:${epic.sha256}`
     const res = await controller.commit(
       { operation_id: operationId, operation_type: "MANDATE_AMEND", body },
       { holder_session_id: holder, expected_revision: snap.state.revision, lease_fencing_token: lease.fencing_token },
@@ -397,7 +428,31 @@ export async function runExecutionController(projectRoot, input, candidateRegist
     const lease = await controller.acquire(holder)
     const snap = await controller.snapshot()
     const blocker = snap.state.blocker
-    if (!blocker) throw new Error("clear_blocker requires an active blocker.")
+    if (!blocker) {
+      const prior = snap.state.last_blocker_resolution
+      if (prior && prior.resolution === resolution) {
+        const operationId = `${executionId}:clear-blocker:${prior.blocked_at_revision}`
+        const existing = snap.events.find((event) => event.operation_id === operationId)
+        if (existing) {
+          const replay = await controller.commit(
+            { operation_id: operationId, operation_type: "CLEAR_BLOCKER", body: existing.body },
+            { holder_session_id: holder, expected_revision: snap.state.revision, lease_fencing_token: lease.fencing_token },
+          )
+          return {
+            action,
+            commit_status: replay.status,
+            blocker_resolution_receipt: {
+              operation_id: operationId,
+              class: existing.body.blocker_class,
+              blocked_at_revision: existing.body.blocked_at_revision,
+              resolution: existing.body.resolution,
+            },
+            ...(await summary(controller)),
+          }
+        }
+      }
+      throw new Error("clear_blocker requires an active blocker.")
+    }
     if (!RECOVERABLE_BLOCKER_CLASSES.has(blocker.class)) {
       throw new Error(`clear_blocker cannot clear non-recoverable blocker ${blocker.class}.`)
     }
