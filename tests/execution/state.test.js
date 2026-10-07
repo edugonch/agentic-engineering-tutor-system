@@ -26,7 +26,7 @@ test("projects a mandate, JIT WU activation, and billable phase", () => {
   ]
   const state = project(events)
   assert.equal(state.execution_id, "exec")
-  assert.deepEqual(state.mandate, { mandate_id: "M1", mandate_revision: "r0", max_wus: 4, authority_kind: "PROBE", merge_policy: "none" })
+  assert.deepEqual(state.mandate, { mandate_id: "M1", mandate_revision: "r0", max_wus: 4, authority_kind: "PROBE", merge_policy: "none", required_ci_checks: [] })
   assert.equal(state.wu.execution_authorization, "AUTHORIZED_BY_MANDATE")
   assert.equal(state.wu.origin, "DERIVED")
   assert.equal(state.budget.used_seconds, 100)

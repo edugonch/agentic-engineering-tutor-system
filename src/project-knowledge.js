@@ -795,7 +795,10 @@ function parseExecutionMandate(content) {
     if (Number.isSafeInteger(mandate.max_wus) && mandate.max_wus >= 1 && Number.isFinite(mandate.total_seconds) && mandate.total_seconds > 0) {
       const mergePolicy = mandate.merge_policy ?? "none"
       if (!["none", "human", "governed_auto"].includes(mergePolicy)) return null
-      return { max_wus: mandate.max_wus, total_seconds: mandate.total_seconds, merge_policy: mergePolicy }
+      const requiredCiChecks = Array.isArray(mandate.required_ci_checks)
+        ? mandate.required_ci_checks.filter((c) => typeof c === "string" && c.length > 0)
+        : []
+      return { max_wus: mandate.max_wus, total_seconds: mandate.total_seconds, merge_policy: mergePolicy, required_ci_checks: requiredCiChecks }
     }
     return null
   } catch { return null }
