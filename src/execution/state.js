@@ -22,6 +22,9 @@ const FORWARD_EXECUTION_TYPES = new Set([
   "DISPATCH_RESERVE",
   "DISPATCH_PREPARE",
   "DISPATCH_LAUNCH",
+  "DISPATCH_LAUNCH_CLAIM", // claiming a launch is forward execution (a hard stop forbids it)
+  "MERGE_START", // starting a governed merge is forward execution
+  "MERGE_EXTERNAL_RECORD", // recording an external merge is forward integration
 ])
 
 const setsEqual = (a, b) => {
@@ -539,6 +542,9 @@ export function applyEvent(previous, event) {
     case "WU_COMPLETE": {
       if (!state.wu) throw new Error("WU_COMPLETE requires an active WU.")
       if (state.wu.completed) throw new Error("WU_COMPLETE: the active WU is already complete.")
+      if (state.blocker && TERMINAL_BLOCKER_CLASSES.has(state.blocker.class)) {
+        throw new Error(`WU_COMPLETE blocked: terminal blocker ${state.blocker.class}; a WU cannot close under a hard stop.`)
+      }
       const candidateId = body.candidate_id
       if (!candidateId) throw new Error("WU_COMPLETE requires candidate_id.")
       const candidate = state.candidates[candidateId]
