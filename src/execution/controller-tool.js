@@ -22,7 +22,7 @@ import { createExecutionController } from "./execution.js"
 import { createCandidateRegistry } from "./candidate-registry.js"
 import { readVerificationReceipt } from "./verification-results.js"
 import { findApprovedEpic } from "../project-knowledge.js"
-import { DISPATCH_STATUS, RESERVATION_STATUS, MANDATE_AUTHORITY } from "./constants.js"
+import { DISPATCH_STATUS, RESERVATION_STATUS, MANDATE_AUTHORITY, RECOVERABLE_BLOCKER_CLASSES } from "./constants.js"
 
 function sanitizeId(raw, label) {
   const value = String(raw ?? "")
@@ -192,6 +192,70 @@ export async function runExecutionController(projectRoot, input, candidateRegist
     return { action, commit_status: res.status, source_artifact_id: epic.source_id, source_hash: epic.sha256, ...(await summary(controller)) }
   }
 
+  if (action === "amend_mandate") {
+    const epicArtifactId = String(input.epic_artifact_id ?? "")
+    if (!epicArtifactId) throw new Error("amend_mandate requires epic_artifact_id (an APPROVED Epic artifact in the knowledge index).")
+    const epic = await findApprovedEpic(projectRoot, epicArtifactId)
+    const lease = await controller.acquire(holder)
+    const snap = await controller.snapshot()
+    const current = snap.state.mandate
+    if (!current) throw new Error("amend_mandate requires an existing approved mandate.")
+    if (current.authority_kind !== MANDATE_AUTHORITY.OWNER_APPROVED_EPIC) {
+      throw new Error("amend_mandate requires an OWNER_APPROVED_EPIC mandate.")
+    }
+    if (snap.state.completed) throw new Error("amend_mandate cannot modify a completed execution.")
+    if (snap.state.merge) throw new Error("amend_mandate cannot modify policy after a merge has started or been recorded.")
+    if (epic.mandate.max_wus !== current.max_wus) {
+      throw new Error(`amend_mandate refuses scope change: max_wus ${current.max_wus} -> ${epic.mandate.max_wus}.`)
+    }
+    if (epic.mandate.total_seconds !== snap.state.budget.total_seconds) {
+      throw new Error(`amend_mandate refuses budget change: total_seconds ${snap.state.budget.total_seconds} -> ${epic.mandate.total_seconds}.`)
+    }
+
+    const previous = {
+      merge_policy: current.merge_policy ?? "none",
+      required_ci_checks: [...(current.required_ci_checks ?? [])],
+      policy_source_artifact_id: current.policy_source_artifact_id ?? current.source_artifact_id ?? null,
+      policy_source_hash: current.policy_source_hash ?? current.source_hash ?? null,
+    }
+    const body = {
+      mandate_id: current.mandate_id,
+      max_wus: current.max_wus,
+      total_seconds: snap.state.budget.total_seconds,
+      expected_merge_policy: previous.merge_policy,
+      expected_required_ci_checks: previous.required_ci_checks,
+      merge_policy: epic.mandate.merge_policy ?? "none",
+      required_ci_checks: epic.mandate.required_ci_checks ?? [],
+      source_artifact_id: epic.source_id,
+      source_record_key: epic.record_key,
+      source_hash: epic.sha256,
+      source_revision: epic.source_revision,
+    }
+    const operationId = `${executionId}:mandate-amend:${epic.source_id}:${epic.sha256}`
+    const res = await controller.commit(
+      { operation_id: operationId, operation_type: "MANDATE_AMEND", body },
+      { holder_session_id: holder, expected_revision: snap.state.revision, lease_fencing_token: lease.fencing_token },
+    )
+    return {
+      action,
+      commit_status: res.status,
+      amendment_receipt: {
+        operation_id: operationId,
+        source_artifact_id: epic.source_id,
+        source_hash: epic.sha256,
+        previous,
+        effective: {
+          merge_policy: res.state.mandate.merge_policy,
+          required_ci_checks: res.state.mandate.required_ci_checks,
+          policy_revision: res.state.mandate.policy_revision ?? null,
+          policy_source_artifact_id: res.state.mandate.policy_source_artifact_id ?? null,
+          policy_source_hash: res.state.mandate.policy_source_hash ?? null,
+        },
+      },
+      ...(await summary(controller)),
+    }
+  }
+
   if (action === "activate_wu") {
     const wuId = String(input.wu_id ?? "")
     if (!wuId) throw new Error("activate_wu requires wu_id.")
@@ -325,6 +389,42 @@ export async function runExecutionController(projectRoot, input, candidateRegist
     if (!reason) throw new Error("block requires reason (a human-readable explanation of the stop).")
     const res = await commitAction(controller, holder, `${executionId}:block`, "BLOCK", { class: cls, reason })
     return { action, commit_status: res.status, ...(await summary(controller)) }
+  }
+
+  if (action === "clear_blocker") {
+    const resolution = String(input.resolution ?? "")
+    if (!resolution.trim()) throw new Error("clear_blocker requires resolution.")
+    const lease = await controller.acquire(holder)
+    const snap = await controller.snapshot()
+    const blocker = snap.state.blocker
+    if (!blocker) throw new Error("clear_blocker requires an active blocker.")
+    if (!RECOVERABLE_BLOCKER_CLASSES.has(blocker.class)) {
+      throw new Error(`clear_blocker cannot clear non-recoverable blocker ${blocker.class}.`)
+    }
+    const operationId = `${executionId}:clear-blocker:${blocker.at_revision}`
+    const res = await controller.commit(
+      {
+        operation_id: operationId,
+        operation_type: "CLEAR_BLOCKER",
+        body: {
+          blocker_class: blocker.class,
+          blocked_at_revision: blocker.at_revision,
+          resolution,
+        },
+      },
+      { holder_session_id: holder, expected_revision: snap.state.revision, lease_fencing_token: lease.fencing_token },
+    )
+    return {
+      action,
+      commit_status: res.status,
+      blocker_resolution_receipt: {
+        operation_id: operationId,
+        class: blocker.class,
+        blocked_at_revision: blocker.at_revision,
+        resolution,
+      },
+      ...(await summary(controller)),
+    }
   }
 
   if (action === "bind_pr") {
