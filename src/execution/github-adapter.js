@@ -52,7 +52,10 @@ export function createGitHubAdapter({ token = process.env.HARNESS_GITHUB_TOKEN ?
     async getChecks({ repository, head_sha, check_names }) {
       const data = await request("GET", `/repos/${repository}/commits/${head_sha}/check-runs`)
       const runs = Array.isArray(data.check_runs) ? data.check_runs : []
-      const byName = new Map(runs.map((r) => [r.name, r.conclusion ?? null]))
+      const byName = new Map(runs.map((r) => [
+        r.name,
+        typeof r.conclusion === "string" ? r.conclusion.toUpperCase() : null,
+      ]))
       return check_names.map((name) => ({ name, conclusion: byName.get(name) ?? null }))
     },
 
