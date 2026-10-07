@@ -506,6 +506,15 @@ export function applyEvent(previous, event) {
       if (unsettled.length > 0) {
         throw new Error(`WU_COMPLETE: ${unsettled.length} dispatch(es) not settled (must be RESULT_RECONCILED or RELEASED): ${unsettled.map(([id]) => id).join(", ")}.`)
       }
+      // Governed merge gate: governed_auto requires a verified merge before the WU
+      // can close. none keeps the V1 completion behavior. (The `human` policy's
+      // external-merge recording/verification path is a separate concern.)
+      const mergePolicy = state.mandate?.merge_policy ?? "none"
+      if (mergePolicy === "governed_auto") {
+        if (state.merge?.status !== "VERIFIED") {
+          throw new Error(`WU_COMPLETE: merge policy ${mergePolicy} requires merge.status VERIFIED, got ${state.merge?.status ?? "none"}.`)
+        }
+      }
       state.wu.completed = true
       state.wu.completion = { candidate_id: candidateId, at_revision: state.revision }
       break
