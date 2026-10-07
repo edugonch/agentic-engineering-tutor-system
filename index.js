@@ -22,7 +22,7 @@ import {
   isJevReady,
   readJevSettings,
 } from "./src/decision/index.js"
-import { runContinuationProbe, createContinuationDriver, createCandidateRegistry, captureBaseSnapshot, freezeCandidate, runCandidateVerification, checkExecutionReadiness, pathDigest, validateVerificationContract, runExecutionController, claimDispatchLaunch, createLaunchBindingRegistry, createVerificationReceipt, writeVerificationReceipt, createGitHubAdapter, runMergeCandidate, BLOCKER_CLASSES, CI_CONCLUSIONS } from "./src/execution/index.js"
+import { runContinuationProbe, createContinuationDriver, createCandidateRegistry, captureBaseSnapshot, freezeCandidate, runCandidateVerification, checkExecutionReadiness, pathDigest, validateVerificationContract, runExecutionController, claimDispatchLaunch, createLaunchBindingRegistry, createVerificationReceipt, writeVerificationReceipt, createGitHubAdapter, runMergeCandidate, runVerifyExternalMerge, BLOCKER_CLASSES, CI_CONCLUSIONS } from "./src/execution/index.js"
 
 const json = (value) => ({ content: JSON.stringify(value, null, 2) })
 const objectInput = (properties, required = []) => ({
@@ -494,6 +494,23 @@ export default Plugin.define({
         execute: async (input, context) => {
           const adapter = createGitHubAdapter({ token: process.env.HARNESS_GITHUB_TOKEN ?? "" })
           const result = await runMergeCandidate(requireProjectRoot(), {
+            candidate_id: String(input.candidate_id ?? ""),
+            adapter,
+            session_id: context?.sessionID,
+          })
+          return json(result)
+        },
+      })
+
+      editor.add({
+        name: "harness_verify_external_merge",
+        description: "Verify an already-performed external (human) merge for the bound candidate, under merge_policy=human. The model provides only candidate_id; repository/PR/head/base/policy/CI are resolved from durable state. It only observes GitHub (getPullRequest/getChecks) and never executes a merge. Idempotent: a retry after a crash re-queries GitHub and verifies the existing record.",
+        input: objectInput({
+          candidate_id: { type: "string", minLength: 1, description: "Content-addressed candidate id already recorded via record_candidate." },
+        }, ["candidate_id"]),
+        execute: async (input, context) => {
+          const adapter = createGitHubAdapter({ token: process.env.HARNESS_GITHUB_TOKEN ?? "" })
+          const result = await runVerifyExternalMerge(requireProjectRoot(), {
             candidate_id: String(input.candidate_id ?? ""),
             adapter,
             session_id: context?.sessionID,

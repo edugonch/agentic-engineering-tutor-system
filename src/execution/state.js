@@ -63,6 +63,28 @@ export function canStartMerge(state) {
   return { allowed: true }
 }
 
+// Structural gate for the human merge policy: the Harness observes/verifies an
+// already-performed external merge — it never authorizes executing one. CI is
+// not required here (the side effect already happened); it is checked remotely
+// in the orchestration when the mandate declares required_ci_checks.
+export function canVerifyExternalMerge(state) {
+  if (!state.wu) return { allowed: false, reason: "no active WU" }
+  if (state.wu.completed) return { allowed: false, reason: "active WU already complete" }
+  const binding = state.pr_binding
+  if (!binding) return { allowed: false, reason: "no PR binding" }
+  const candidate = state.candidates[binding.candidate_id]
+  if (!candidate) return { allowed: false, reason: "bound candidate not recorded" }
+  if (candidate.wu_id !== state.wu.wu_id) return { allowed: false, reason: "bound candidate not in active WU" }
+  const review = state.reviews[binding.candidate_id]
+  if (!review || review.verdict !== "PASS") return { allowed: false, reason: "no PASS review" }
+  if (state.mandate?.merge_policy !== "human") return { allowed: false, reason: `merge policy is ${state.mandate?.merge_policy ?? "none"}, not human` }
+  if (state.blocker && TERMINAL_BLOCKER_CLASSES.has(state.blocker.class)) return { allowed: false, reason: `terminal blocker ${state.blocker.class}` }
+  const settled = new Set([DISPATCH_STATUS.RESULT_RECONCILED, DISPATCH_STATUS.RELEASED])
+  const unsettled = Object.values(state.dispatches).filter((d) => !settled.has(d.status))
+  if (unsettled.length > 0) return { allowed: false, reason: `${unsettled.length} unsettled dispatch(es)` }
+  return { allowed: true }
+}
+
 export function initialState() {
   return {
     revision: 0,
@@ -454,6 +476,7 @@ export function applyEvent(previous, event) {
       const binding = state.pr_binding
       state.merge = {
         status: "STARTED",
+        source: "GOVERNED_AUTO",
         candidate_id: binding.candidate_id,
         repository: binding.repository,
         pr_number: binding.pr_number,
@@ -462,6 +485,33 @@ export function applyEvent(previous, event) {
         started_at_revision: state.revision,
         merge_commit_sha: null,
         merged_head_sha: null,
+        observed_base_sha: null,
+        verified_at_revision: null,
+      }
+      break
+    }
+
+    case "MERGE_EXTERNAL_RECORD": {
+      const mergePolicy = state.mandate?.merge_policy ?? "none"
+      if (mergePolicy !== "human") throw new Error(`MERGE_EXTERNAL_RECORD requires merge_policy human, got ${mergePolicy}.`)
+      if (state.merge) throw new Error("MERGE_EXTERNAL_RECORD: a merge is already recorded.")
+      const binding = state.pr_binding
+      if (!binding) throw new Error("MERGE_EXTERNAL_RECORD: no PR binding.")
+      if (!body.merge_commit_sha) throw new Error("MERGE_EXTERNAL_RECORD requires merge_commit_sha.")
+      // Records an already-performed external (human) merge. Never sets STARTED and
+      // never authorizes the Harness to execute a merge.
+      state.merge = {
+        status: "RECORDED",
+        source: "HUMAN_EXTERNAL",
+        candidate_id: binding.candidate_id,
+        repository: binding.repository,
+        pr_number: binding.pr_number,
+        expected_head_sha: binding.head_sha,
+        expected_base_sha: binding.base_sha,
+        started_at_revision: state.revision,
+        merge_commit_sha: body.merge_commit_sha,
+        merged_head_sha: body.merged_head_sha ?? binding.head_sha,
+        observed_base_sha: body.observed_base_sha ?? null,
         verified_at_revision: null,
       }
       break
@@ -477,7 +527,7 @@ export function applyEvent(previous, event) {
     }
 
     case "MERGE_VERIFY": {
-      if (!state.merge || state.merge.status !== "RECORDED") throw new Error("MERGE_VERIFY requires MERGE_RECORD first.")
+      if (!state.merge || state.merge.status !== "RECORDED") throw new Error("MERGE_VERIFY requires a RECORDED merge first (MERGE_RECORD or MERGE_EXTERNAL_RECORD).")
       if (state.merge.merged_head_sha !== state.merge.expected_head_sha) {
         throw new Error(`MERGE_VERIFY: merged head ${state.merge.merged_head_sha} does not match expected ${state.merge.expected_head_sha}.`)
       }
@@ -506,13 +556,25 @@ export function applyEvent(previous, event) {
       if (unsettled.length > 0) {
         throw new Error(`WU_COMPLETE: ${unsettled.length} dispatch(es) not settled (must be RESULT_RECONCILED or RELEASED): ${unsettled.map(([id]) => id).join(", ")}.`)
       }
-      // Governed merge gate: governed_auto requires a verified merge before the WU
-      // can close. none keeps the V1 completion behavior. (The `human` policy's
-      // external-merge recording/verification path is a separate concern.)
+      // Governed merge gate: governed_auto and human require a verified merge bound
+      // to the exact candidate being closed. none keeps the V1 completion behavior.
       const mergePolicy = state.mandate?.merge_policy ?? "none"
       if (mergePolicy === "governed_auto") {
         if (state.merge?.status !== "VERIFIED") {
           throw new Error(`WU_COMPLETE: merge policy ${mergePolicy} requires merge.status VERIFIED, got ${state.merge?.status ?? "none"}.`)
+        }
+        if (state.merge.candidate_id !== candidateId) {
+          throw new Error(`WU_COMPLETE: merge candidate ${state.merge.candidate_id} does not match the candidate being closed ${candidateId}.`)
+        }
+      } else if (mergePolicy === "human") {
+        if (state.merge?.status !== "VERIFIED") {
+          throw new Error(`WU_COMPLETE: merge policy ${mergePolicy} requires merge.status VERIFIED, got ${state.merge?.status ?? "none"}.`)
+        }
+        if (state.merge.source !== "HUMAN_EXTERNAL") {
+          throw new Error(`WU_COMPLETE: merge policy human requires source HUMAN_EXTERNAL, got ${state.merge?.source ?? "none"}.`)
+        }
+        if (state.merge.candidate_id !== candidateId) {
+          throw new Error(`WU_COMPLETE: merge candidate ${state.merge.candidate_id} does not match the candidate being closed ${candidateId}.`)
         }
       }
       state.wu.completed = true
