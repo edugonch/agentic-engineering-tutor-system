@@ -783,6 +783,40 @@ export async function findApprovedEpic(projectRoot, epicArtifactId) {
   }
 }
 
+// Budget authority uses a typed envelope in an immutable owner-approved decision.
+// Prose approval can be normalized into a linked versioned artifact using the
+// existing owner decision; no new approval is implied by normalization.
+export async function findApprovedWuBudgetAmendment(projectRoot, artifactId) {
+  const root = assertRoot(projectRoot)
+  const index = await readIndex(root)
+  const matches = index.records.filter(r => r.classification === "DECISION" &&
+    r.declared_authority === "APPROVED" && r.import_status === "OWNER_APPROVED_ARTIFACT" &&
+    (r.source_id === artifactId || r.record_key === artifactId))
+  if (matches.length !== 1) throw new Error("amend_wu_budget requires exactly one local owner-approved DECISION artifact")
+  const record = matches[0]
+  const archivePath = resolve(root, record.archive_path)
+  if (!inside(root, archivePath)) throw new Error("WU_BUDGET_AUTHORITY_INTEGRITY: unsafe archive path")
+  const info = await lstat(archivePath)
+  if (!info.isFile() || info.isSymbolicLink()) throw new Error("WU_BUDGET_AUTHORITY_INTEGRITY: expected regular archive")
+  const bytes = await readFile(archivePath)
+  if (sha256(bytes) !== record.sha256 || record.source_system !== "harness-artifact" || record.sha256 !== record.source_revision) {
+    throw new Error("WU_BUDGET_AUTHORITY_INTEGRITY: decision differs from approved content")
+  }
+  const lines = bytes.toString("utf8").split(/\r?\n/).filter(line => line.startsWith("wu_budget_amendment: "))
+  if (lines.length !== 1) throw new Error("Decision needs exactly one wu_budget_amendment: JSON line; normalize existing approval into a new linked decision without requesting approval again")
+  const amendment = JSON.parse(lines[0].slice("wu_budget_amendment: ".length))
+  const keys = ["execution_id", "mandate_id", "wu_id", "blocked_at_revision", "expected_used_seconds", "additional_seconds", "epic_total_seconds"]
+  if (!amendment || typeof amendment !== "object" || Object.keys(amendment).some(k => !keys.includes(k))) throw new Error("Invalid WU budget amendment fields")
+  for (const key of ["execution_id", "mandate_id", "wu_id"]) {
+    if (typeof amendment[key] !== "string" || !amendment[key].trim()) throw new Error(`WU budget amendment requires ${key}`)
+  }
+  for (const key of ["blocked_at_revision", "expected_used_seconds", "additional_seconds", "epic_total_seconds"]) {
+    if (!Number.isSafeInteger(amendment[key]) || amendment[key] < 0) throw new Error(`WU budget amendment requires a nonnegative integer ${key}`)
+  }
+  if (!amendment.additional_seconds || !amendment.epic_total_seconds) throw new Error("WU budget amendment requires positive additional_seconds and epic_total_seconds")
+  return { amendment, source_artifact_id: record.source_id, source_record_key: record.record_key, source_hash: record.sha256 }
+}
+
 // Verify that every WU named by a frozen Epic sequence already exists as a
 // durable Work Unit artifact linked back to that Epic. Sequence declaration is
 // not permission to materialize missing WUs during execution.

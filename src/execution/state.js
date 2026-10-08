@@ -1,3 +1,4 @@
+import { wuBudgetUsage } from "./wu-budget.js"
 // State projection. state is derived, never canonical: events.ndjson is the
 // source of truth and every read replays it. This makes divergence between a
 // cached state file and the log impossible by construction.
@@ -256,6 +257,31 @@ export function applyEvent(previous, event) {
       break
     }
 
+    case "WU_BUDGET_AMEND": {
+      if (state.completed || !state.wu || state.wu.completed) throw new Error("WU_BUDGET_AMEND requires an active incomplete WU")
+      if (state.mandate?.authority_kind !== MANDATE_AUTHORITY.OWNER_APPROVED_EPIC || body.mandate_id !== state.mandate.mandate_id || body.wu_id !== state.wu.wu_id || `${body.execution_id}:exec` !== state.execution_id) {
+        throw new Error("WU_BUDGET_AMEND authority does not match this execution, mandate and active WU")
+      }
+      if (state.blocker?.class !== "BUDGET_EXHAUSTED" || body.blocked_at_revision !== state.blocker.at_revision) throw new Error("WU_BUDGET_AMEND must target the exact active BUDGET_EXHAUSTED blocker")
+      if (!body.source_artifact_id || !body.source_record_key || !/^[a-f0-9]{64}$/.test(body.source_hash ?? "")) throw new Error("WU_BUDGET_AMEND requires approved decision provenance")
+      if (body.epic_total_seconds !== state.budget.total_seconds) throw new Error("WU_BUDGET_AMEND cannot change the Epic total")
+      const usage = wuBudgetUsage(state, body.wu_id)
+      if (state.budget.active_phase || Object.values(state.dispatches).some(d => d.wu_id === body.wu_id && ![DISPATCH_STATUS.RESULT_RECONCILED, DISPATCH_STATUS.RELEASED].includes(d.status))) {
+        throw new Error("WU_BUDGET_AMEND requires settled WU dispatches and no active phase")
+      }
+      if (body.expected_used_seconds !== usage.used_seconds) throw new Error("WU_BUDGET_AMEND stale consumed budget baseline")
+      if (!Number.isSafeInteger(body.additional_seconds) || body.additional_seconds <= 0 || !Number.isSafeInteger(usage.used_seconds + body.additional_seconds)) throw new Error("WU_BUDGET_AMEND requires a finite positive integer allocation")
+      if (body.additional_seconds > deriveBudget(state.budget).available_seconds) throw new Error("WU_BUDGET_AMEND allocation exceeds available Epic budget")
+      const ceiling = usage.used_seconds + body.additional_seconds
+      if (usage.ceiling_seconds !== null && ceiling <= usage.ceiling_seconds) throw new Error("WU_BUDGET_AMEND must increase the existing WU ceiling")
+      state.wu_budget_amendments ??= {}
+      state.wu_budget_amendments[body.wu_id] = { ...body, ceiling_seconds: ceiling, at_revision: state.revision }
+      state.last_blocker_resolution = { class: state.blocker.class, blocked_at_revision: state.blocker.at_revision,
+        resolution: `Owner-approved WU budget amendment ${body.source_artifact_id}`, source_hash: body.source_hash, at_revision: state.revision }
+      state.blocker = null
+      break
+    }
+
     case "WU_ACTIVATE": {
       if (!state.mandate) throw new Error("WU_ACTIVATE requires an approved mandate.")
       if (!body.wu_id) throw new Error("WU_ACTIVATE requires wu_id.")
@@ -295,6 +321,7 @@ export function applyEvent(previous, event) {
     case "PHASE_START": {
       if (state.budget.active_phase) throw new Error("Cannot start a phase while another is active.")
       if (!body.phase) throw new Error("PHASE_START requires a phase.")
+      state.active_phase_wu_id = state.wu?.wu_id ?? null
       state.budget.active_phase = body.phase
       state.budget.active_started_at = body.started_at
       break
@@ -306,8 +333,15 @@ export function applyEvent(previous, event) {
       const ended = body.ended_at
       if (!Number.isFinite(ended)) throw new Error("PHASE_END requires a finite ended_at.")
       if (BILLABLE_PHASES.has(state.budget.active_phase)) {
-        state.budget.used_seconds += Math.max(0, ended - started)
+        const charged = Math.max(0, ended - started)
+        state.budget.used_seconds += charged
+        if (state.active_phase_wu_id) {
+          state.wu_phase_seconds ??= {}
+          const phaseWu = state.active_phase_wu_id
+          state.wu_phase_seconds[phaseWu] = (state.wu_phase_seconds[phaseWu] ?? 0) + charged
+        }
       }
+      delete state.active_phase_wu_id
       state.budget.active_phase = null
       state.budget.active_started_at = null
       break

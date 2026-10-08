@@ -16,13 +16,14 @@
 // AMBIGUOUS hazard: recovery marks AMBIGUOUS and never auto-launches.
 
 import { join } from "node:path"
+import { wuBudgetUsage } from "./wu-budget.js"
 import { stableHash } from "./serialize.js"
 import { readLog, validateLog } from "./event-log.js"
 import { project, deriveBudget } from "./state.js"
 import { createExecutionController } from "./execution.js"
 import { createCandidateRegistry } from "./candidate-registry.js"
 import { readVerificationReceipt } from "./verification-results.js"
-import { findApprovedEpic, verifyDeclaredWorkUnits } from "../project-knowledge.js"
+import { findApprovedEpic, findApprovedWuBudgetAmendment, verifyDeclaredWorkUnits } from "../project-knowledge.js"
 import { DISPATCH_STATUS, RESERVATION_STATUS, MANDATE_AUTHORITY, RECOVERABLE_BLOCKER_CLASSES } from "./constants.js"
 
 function sanitizeId(raw, label) {
@@ -62,6 +63,8 @@ async function summary(controller) {
     completed: state.completed,
     mandate: state.mandate,
     wu: state.wu,
+    wu_budget: state.wu ? wuBudgetUsage(state, state.wu.wu_id) : null,
+    wu_budget_amendments: state.wu_budget_amendments ?? {},
     candidates: state.candidates,
     reviews: state.reviews,
     pr_binding: state.pr_binding ?? null,
@@ -313,6 +316,16 @@ export async function runExecutionController(projectRoot, input, candidateRegist
     }
   }
 
+  if (action === "amend_wu_budget") {
+    const authority = await findApprovedWuBudgetAmendment(projectRoot, String(input.decision_artifact_id ?? ""))
+    if (authority.amendment.execution_id !== executionId) throw new Error("WU budget amendment execution_id mismatch")
+    const body = { ...authority.amendment, source_artifact_id: authority.source_artifact_id,
+      source_record_key: authority.source_record_key, source_hash: authority.source_hash }
+    const res = await commitAction(controller, holder,
+      `${executionId}:wu-budget:${authority.source_record_key}`, "WU_BUDGET_AMEND", body)
+    return { action, commit_status: res.status, amendment_receipt: body, ...(await summary(controller)) }
+  }
+
   if (action === "activate_wu") {
     const wuId = String(input.wu_id ?? "")
     if (!wuId) throw new Error("activate_wu requires wu_id.")
@@ -507,7 +520,7 @@ export async function runExecutionController(projectRoot, input, candidateRegist
       throw new Error("clear_blocker requires an active blocker.")
     }
     if (!RECOVERABLE_BLOCKER_CLASSES.has(blocker.class)) {
-      throw new Error(`clear_blocker cannot clear non-recoverable blocker ${blocker.class}.`)
+      throw new Error(`clear_blocker cannot clear non-recoverable blocker ${blocker.class}.${blocker.class === "BUDGET_EXHAUSTED" ? " For an owner-approved WU allocation within the existing Epic total, use amend_wu_budget with decision_artifact_id." : ""}`)
     }
     const operationId = `${executionId}:clear-blocker:${blocker.at_revision}`
     const res = await controller.commit(
