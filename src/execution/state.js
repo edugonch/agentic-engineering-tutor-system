@@ -437,6 +437,33 @@ export function applyEvent(previous, event) {
       break
     }
 
+    case "DISPATCH_RESOLVE_AMBIGUOUS_LAUNCH": {
+      const d = state.dispatches[body.dispatch_id]
+      if (!d) throw new Error(`Cannot resolve unknown dispatch ${body.dispatch_id}.`)
+      if (d.status !== DISPATCH_STATUS.AMBIGUOUS) {
+        throw new Error(`Cannot resolve ambiguous launch for dispatch ${body.dispatch_id}: status is ${d.status}, not ambiguous.`)
+      }
+      if (!body.session_id || typeof body.session_id !== "string") {
+        throw new Error("DISPATCH_RESOLVE_AMBIGUOUS_LAUNCH requires the exact recovered external session_id.")
+      }
+      if (!body.recovery_evidence || typeof body.recovery_evidence !== "string" || body.recovery_evidence.trim().length === 0) {
+        throw new Error("DISPATCH_RESOLVE_AMBIGUOUS_LAUNCH requires non-empty recovery_evidence.")
+      }
+      if (d.session_id) {
+        throw new Error(`Cannot resolve ambiguous launch for dispatch ${body.dispatch_id}: session identity is already set.`)
+      }
+      d.status = DISPATCH_STATUS.LAUNCHED
+      d.session_id = body.session_id
+      d.ambiguous_launch_recovery = {
+        session_id: body.session_id,
+        recovery_evidence: body.recovery_evidence,
+        at_revision: state.revision,
+      }
+      // Reservation remains held exactly as it was. Normal record_finish ->
+      // reconcile settles it once the recovered launched session is accounted for.
+      break
+    }
+
     case "FREEZE_CANDIDATE": {
       if (!body.candidate_id) throw new Error("FREEZE_CANDIDATE requires candidate_id.")
       if (!body.manifest_hash || !body.tree_hash) throw new Error("FREEZE_CANDIDATE requires manifest_hash and tree_hash.")
