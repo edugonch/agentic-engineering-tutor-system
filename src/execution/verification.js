@@ -18,7 +18,8 @@ export function validateVerificationContract(contract) {
     throw new Error("verification contract must declare at least one command.")
   }
   const ids = new Set()
-  for (const check of contract.commands) {
+  if (contract.setup !== undefined && !Array.isArray(contract.setup)) throw new Error("setup must be an array of declared commands")
+  for (const check of [...(contract.setup ?? []), ...contract.commands]) {
     if (!check || typeof check !== "object" || typeof check.id !== "string" || !check.id.trim()) {
       throw new Error("each verification command needs a non-empty id.")
     }
@@ -27,6 +28,9 @@ export function validateVerificationContract(contract) {
     }
     if (!Array.isArray(check.args) || check.args.some((arg) => typeof arg !== "string")) {
       throw new Error(`verification check "${check.id}" needs an args array of strings.`)
+    }
+    if (check.timeout_ms !== undefined && (!Number.isSafeInteger(check.timeout_ms) || check.timeout_ms < 1 || check.timeout_ms > 86_400_000)) {
+      throw new Error(`verification check "${check.id}" requires a positive timeout_ms within 24 hours.`)
     }
     if (ids.has(check.id)) throw new Error(`duplicate verification check id: ${check.id}.`)
     ids.add(check.id)
@@ -58,9 +62,10 @@ export function sanitizedEnv(workspace) {
 // on normal close, the whole process group is killed. A grandchild that outlives
 // its parent (and is orphaned out of the group) is a known POSIX limitation:
 // full containment requires cgroups/containers, out of scope for this phase.
-export function runCommand(program, args, { cwd, env = sanitizedEnv(cwd), timeoutMs = 30000, maxOutputBytes = MAX_OUTPUT_BYTES } = {}) {
+export function runCommand(program, args, { cwd, env = sanitizedEnv(cwd), timeoutMs = 30000, signal, maxOutputBytes = MAX_OUTPUT_BYTES } = {}) {
   return new Promise((resolve) => {
     const startedAt = Date.now()
+    if (signal?.aborted) { resolve({ ok: false, aborted: true, exitCode: null, stdout: "", stderr: "", durationMs: 0 }); return }
     let child
     try {
       child = spawn(program, args, { cwd, env, shell: false, detached: true, stdio: ["ignore", "pipe", "pipe"] })
@@ -73,6 +78,7 @@ export function runCommand(program, args, { cwd, env = sanitizedEnv(cwd), timeou
     let stderr = ""
     let truncated = false
     let timedOut = false
+    let aborted = false
     let settled = false
     const append = (current, chunk) => {
       if (truncated) return current
@@ -87,6 +93,7 @@ export function runCommand(program, args, { cwd, env = sanitizedEnv(cwd), timeou
       if (settled) return
       settled = true
       clearTimeout(timer)
+      signal?.removeEventListener("abort", abort)
       // cleanup: kill any survivors in the process group
       try { process.kill(-child.pid, "SIGKILL") } catch {}
       resolve(result)
@@ -96,10 +103,16 @@ export function runCommand(program, args, { cwd, env = sanitizedEnv(cwd), timeou
       try { process.kill(-child.pid, "SIGKILL") } catch {}
     }, timeoutMs)
 
+    const abort = () => {
+      aborted = true
+      try { process.kill(-child.pid, "SIGKILL") } catch {}
+    }
+    signal?.addEventListener("abort", abort, { once: true })
+    if (signal?.aborted) abort()
     child.stdout?.on("data", (chunk) => { stdout = append(stdout, chunk) })
     child.stderr?.on("data", (chunk) => { stderr = append(stderr, chunk) })
     child.on("close", (code, signal) => {
-      finish({ ok: code === 0, exitCode: code, signal: signal ?? null, timedOut, truncated, stdout, stderr, durationMs: Date.now() - startedAt })
+      finish({ ok: code === 0 && !aborted && !timedOut, aborted, exitCode: code, signal: signal ?? null, timedOut, truncated, stdout, stderr, durationMs: Date.now() - startedAt })
     })
     child.on("error", (error) => {
       finish({ ok: false, error: String(error?.message ?? error), exitCode: null, stdout, stderr, truncated, timedOut, durationMs: Date.now() - startedAt })
@@ -107,7 +120,7 @@ export function runCommand(program, args, { cwd, env = sanitizedEnv(cwd), timeou
   })
 }
 
-export async function runDeclaredCheck(candidate, contract, checkId, { timeoutMs = 30000 } = {}) {
+export async function runDeclaredCheck(candidate, contract, checkId, { timeoutMs, budgetMs = Infinity, signal } = {}) {
   try {
     validateVerificationContract(contract)
   } catch (error) {
@@ -130,10 +143,22 @@ export async function runDeclaredCheck(candidate, contract, checkId, { timeoutMs
   }
 
   const { workspace } = await materializeCandidate(candidate)
+  const started = Date.now()
+  const setupResults = []
+  const remaining = () => Math.max(0, budgetMs - (Date.now() - started))
   try {
-    const result = await runCommand(check.program, check.args, { cwd: workspace, env: sanitizedEnv(workspace), timeoutMs })
+    for (const setup of contract.setup ?? []) {
+      if (remaining() <= 0) return { status: "BLOCKED_BUDGET", check_id: checkId, setup_results: setupResults }
+      const result = await runCommand(setup.program, setup.args, { cwd: workspace, signal, timeoutMs: Math.min(setup.timeout_ms ?? 300000, remaining()) })
+      setupResults.push({ id: setup.id, ...result })
+      if (!result.ok) return { status: "FAIL", candidate_id: candidate.candidate_id, check_id: checkId,
+        reason: `Declared setup ${setup.id} failed`, setup_results: setupResults, ...result }
+    }
+    if (remaining() <= 0) return { status: "BLOCKED_BUDGET", check_id: checkId, setup_results: setupResults }
+    const result = await runCommand(check.program, check.args, { cwd: workspace, env: sanitizedEnv(workspace), signal, timeoutMs: Math.min(timeoutMs ?? check.timeout_ms ?? 30000, remaining()) })
     return {
       status: result.ok ? "PASS" : "FAIL",
+      setup_results: setupResults,
       check_id: checkId,
       program: check.program,
       args: check.args,
@@ -151,11 +176,11 @@ export async function runDeclaredCheck(candidate, contract, checkId, { timeoutMs
 // Run a check against the candidate's FROZEN verification contract (not a
 // free-form contract supplied by the reviewer). This is the only path the
 // harness_run_verification tool calls.
-export async function runCandidateVerification(candidate, checkId, { timeoutMs } = {}) {
+export async function runCandidateVerification(candidate, checkId, { timeoutMs, budgetMs, signal } = {}) {
   const contract = candidate.verification_contract
   if (!contract) {
     return { status: "BLOCKED_NO_CONTRACT", check_id: checkId, reason: "the candidate has no frozen verification contract." }
   }
-  const result = await runDeclaredCheck(candidate, contract, checkId, { timeoutMs })
+  const result = await runDeclaredCheck(candidate, contract, checkId, { timeoutMs, budgetMs, signal })
   return { ...result, verification_contract_hash: candidate.manifest?.verification_contract?.contract_hash ?? null }
 }

@@ -104,6 +104,23 @@ test("runCommand caps output and kills its process group", async () => {
   assert.ok(result.stdout.length <= 100)
 })
 
+test("cancelling verification terminates the running command and cannot produce PASS", async () => {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), 100)
+  try {
+    const result = await runCommand(process.execPath, ["-e", "setTimeout(() => {}, 10000)"], {
+      cwd: tmpdir(), timeoutMs: 20000, signal: controller.signal,
+    })
+    assert.equal(result.aborted, true)
+    assert.equal(result.ok, false)
+    const cancelled = await runCommand(process.execPath, ["-e", "process.exit(0)"], {
+      cwd: tmpdir(), signal: controller.signal,
+    })
+    assert.equal(cancelled.aborted, true)
+    assert.equal(cancelled.ok, false)
+  } finally { clearTimeout(timer) }
+})
+
 test("runCandidateVerification runs only the frozen contract's checks", async () => {
   const root = await mkdtemp(join(tmpdir(), "harness-verify-candidate-"))
   try {
@@ -142,4 +159,17 @@ test("timeout kills the check and its still-running children (process group)", a
   assert.equal(result.timedOut, true)
   await new Promise((resolveDelay) => setTimeout(resolveDelay, 1200))
   assert.equal(existsSync(marker), false) // child killed with the group on timeout
+})
+
+test("declared setup and the check share a fresh workspace; setup and timeout are frozen identity", async () => {
+  const { freezeCandidate } = await import("../../src/execution/candidate.js")
+  const { verificationContractHash } = await import("../../src/execution/verification-contract.js")
+  const contract = { setup: [{ id: "prepare", program: process.execPath, args: ["-e", "require('fs').writeFileSync('dependency.js', 'module.exports = 42')"], timeout_ms: 1000 }],
+    commands: [{ id: "test", program: process.execPath, args: ["-e", "require('assert').equal(require('./dependency.js'), 42)"], timeout_ms: 45000 }] }
+  const candidate = await freezeCandidate(process.cwd(), { verification_contract: contract })
+  const result = await runDeclaredCheck(candidate, contract, "test")
+  assert.equal(result.status, "PASS")
+  assert.equal(result.setup_results[0].exitCode, 0)
+  assert.notEqual(verificationContractHash(contract), verificationContractHash({ ...contract, setup: [] }))
+  assert.notEqual(verificationContractHash(contract), verificationContractHash({ ...contract, commands: [{ ...contract.commands[0], timeout_ms: 1 }] }))
 })

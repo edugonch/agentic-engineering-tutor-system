@@ -15,7 +15,10 @@ async function fixture(t) {
   const record = input => recordKnowledgeArtifact(root, { title: "Owner decision", status: "APPROVED", owner_confirmed: true, source_refs: ["https://example.com/owner-approval"], ...input })
   await record({ artifact_type: "epic", artifact_id: "EPIC03", content: 'execution_mandate: {"max_wus":10,"total_seconds":86400}' })
   await run("approve_mandate", { epic_artifact_id: "EPIC03", mandate_id: "M1" })
-  await run("activate_wu", { wu_id: "WU063", mandate_id: "M1" })
+  const historical = await createExecutionController({ dir: join(root, ".harness/execution/controller/E1") })
+  const lease = await historical.acquire("parent")
+  await historical.commit({ operation_id: "legacy-activate", operation_type: "WU_ACTIVATE", body: { wu_id: "WU063", mandate_id: "M1" } },
+    { holder_session_id: "parent", expected_revision: (await historical.snapshot()).state.revision, lease_fencing_token: lease.fencing_token })
   await run("reserve", { dispatch_id: "builder", reserved_seconds: 13500 })
   await run("record_launch", { dispatch_id: "builder", launch_session_id: "ses_child" })
   await run("record_finish", { dispatch_id: "builder", result: "Partial branch; 49 passed, 3 failed; no historical RED" })

@@ -109,9 +109,14 @@ export function createTurnGuard(settings = readGuardSettings()) {
     // Wrap the actual Harness call: reads/checkpoints do not erase failures.
     // Two identical failures permit diagnosis; the third attempt is refused.
     // This cannot interrupt reasoning inside an outstanding provider request.
-    async runHarness(sessionID, tool, args, run) {
+    async runHarness(sessionID, tool, args, run, observeProgress) {
       const key = sessionID || "unknown-session"
-      const signature = `${tool}:${stableStringify(args)}`
+      let observation = null
+      if (observeProgress) {
+        try { observation = await observeProgress() }
+        catch (error) { observation = { observation_error: String(error?.message ?? error) } }
+      }
+      const signature = `${tool}:${stableStringify(args)}:${stableStringify(observation)}`
       const prior = failures.get(key)?.get(signature)
       if (prior?.count >= 2) {
         throw guardError(GUARD_ERROR_CODES.NO_PROGRESS, "Harness repeated failure without progress. Record BLOCKED_TOOLING/checkpoint with the original error and required recovery; do not retry unchanged input or ask permission to record the blocker.")

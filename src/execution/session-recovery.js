@@ -140,7 +140,7 @@ export function createSessionRecovery(ctx, projectRoot) {
   return {
     recover,
     reset() { cached.clear() },
-    track(binding) { launches.set(key(binding.session_id, binding.call_id), binding) },
+    track(binding) { launches.set(key(binding.session_id, binding.call_id), { ...binding, monotonic_started: performance.now() }) },
     async afterTool(event) {
       if (event.tool !== "subagent") return
       const k = key(event.sessionID, event.id)
@@ -149,10 +149,31 @@ export function createSessionRecovery(ctx, projectRoot) {
       try {
         // Error events may not retain progress metadata. Read the exact call's
         // persisted progress through context instead of parsing error prose.
-        return await recover(binding, event.status === "completed" && event.result?.metadata?.sessionID ? {
+        const result = await recover(binding, event.status === "completed" && event.result?.metadata?.sessionID ? {
           tool: event.tool, sessionID: event.sessionID, id: event.id, input: event.input,
           metadata: event.result?.metadata, source: "execute.after", message_id: event.messageID ?? null,
         } : undefined)
+        if (event.status === "completed" && event.result?.metadata?.status === "completed" && result?.child_session_id) {
+          const controller = await createExecutionController({ dir: join(projectRoot, ".harness/execution/controller", id(binding.execution_id)) })
+          const lease = await controller.acquire(binding.session_id)
+          let snap = await controller.snapshot()
+          const d = snap.state.dispatches[binding.dispatch_id]
+          if (!d.handoff) {
+            const raw = event.result.content
+            const text = typeof raw === "string" ? raw : (Array.isArray(raw) ? raw.filter(p => p.type === "text").map(p => p.text).join("\n") : "")
+            await controller.commit({ operation_id: `${binding.execution_id}:handoff:${binding.dispatch_id}`, operation_type: "DISPATCH_HANDOFF",
+              body: { dispatch_id: binding.dispatch_id, session_id: d.session_id, call_id: binding.call_id,
+                content: text.slice(0, 16000), content_hash: stableHash(text), truncated: text.length > 16000 } },
+              { holder_session_id: binding.session_id, expected_revision: snap.state.revision, lease_fencing_token: lease.fencing_token })
+            snap = await controller.snapshot()
+          }
+          if (!d.usage && d.status === "launched") await controller.commit({
+            operation_id: `${binding.execution_id}:runtime-usage:${binding.dispatch_id}`,
+            operation_type: "DISPATCH_USAGE", body: { dispatch_id: binding.dispatch_id, session_id: d.session_id,
+              call_id: binding.call_id, source: "runtime.monotonic_dispatch_envelope", seconds: Math.ceil((performance.now() - binding.monotonic_started) / 1000) },
+          }, { holder_session_id: binding.session_id, expected_revision: snap.state.revision, lease_fencing_token: lease.fencing_token })
+        }
+        return result
       } finally { launches.delete(k) }
     },
   }

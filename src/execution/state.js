@@ -1,3 +1,4 @@
+import { executionProgress } from "./progress.js"
 import { wuBudgetUsage } from "./wu-budget.js"
 // State projection. state is derived, never canonical: events.ndjson is the
 // source of truth and every read replays it. This makes divergence between a
@@ -143,6 +144,22 @@ export function applyEvent(previous, event) {
   }
 
   switch (event.operation_type) {
+    case "SUPERVISOR_BIND": {
+      if (!body.session_id || state.mandate?.authority_kind !== MANDATE_AUTHORITY.OWNER_APPROVED_EPIC) throw new Error("Supervisor requires an approved execution and root identity")
+      state.supervisor = { session_id: body.session_id, intent: null }
+      break
+    }
+    case "SUPERVISOR_CONTINUE": {
+      if (!state.supervisor || state.blocker || state.completed || executionProgress(state) !== body.progress_hash) throw new Error("Continuation no longer eligible")
+      state.supervisor.intent = { ...body, sent: false }
+      break
+    }
+    case "SUPERVISOR_SENT": {
+      if (state.supervisor?.intent?.intent_id !== body.intent_id) throw new Error("Continuation intent mismatch")
+      state.supervisor.intent.sent = true
+      break
+    }
+
     case "MANDATE_APPROVE": {
       if (!body.mandate_id) throw new Error("MANDATE_APPROVE requires mandate_id.")
       if (!Number.isSafeInteger(body.max_wus) || body.max_wus < 1) throw new Error("MANDATE_APPROVE requires a positive integer max_wus.")
@@ -282,6 +299,15 @@ export function applyEvent(previous, event) {
       break
     }
 
+    case "WU_CONTRACT_BIND": {
+      if (!state.wu || state.wu.completed || body.contract?.wu_id !== state.wu.wu_id) throw new Error("WU contract target mismatch")
+      const old = state.wu.contract
+      if (old && (old.verification_contract_hash || old.active_seconds !== body.contract.active_seconds || !body.contract.source_content.includes(old.source_content)))
+        throw new Error("WU normalization must preserve the original source and budget; an executable contract cannot be silently replaced")
+      state.wu.contract = body.contract
+      break
+    }
+
     case "WU_ACTIVATE": {
       if (!state.mandate) throw new Error("WU_ACTIVATE requires an approved mandate.")
       if (!body.wu_id) throw new Error("WU_ACTIVATE requires wu_id.")
@@ -313,6 +339,7 @@ export function applyEvent(previous, event) {
         origin: WU_ORIGIN.DERIVED,
         execution_authorization: EXECUTION_AUTHORIZATION.AUTHORIZED_BY_MANDATE,
         completed: false,
+        ...(body.contract ? { contract: body.contract } : {}),
       }
       state.activated_wu_ids.push(body.wu_id)
       break
@@ -413,6 +440,24 @@ export function applyEvent(previous, event) {
       break
     }
 
+    case "DISPATCH_HANDOFF": {
+      const d = state.dispatches[body.dispatch_id]
+      if (!d || d.session_id !== body.session_id || d.launch_call_id !== body.call_id) throw new Error("Handoff identity mismatch")
+      if (d.handoff) throw new Error("Handoff already recorded")
+      d.handoff = { content: body.content, content_hash: body.content_hash, truncated: body.truncated,
+        source: "execute.after", acceptance: "UNVERIFIED", at_revision: state.revision }
+      break
+    }
+
+    case "DISPATCH_USAGE": {
+      const d = state.dispatches[body.dispatch_id]
+      if (!d || d.status !== DISPATCH_STATUS.LAUNCHED || d.session_id !== body.session_id || d.launch_call_id !== body.call_id) throw new Error("Runtime usage identity mismatch")
+      if (d.usage) throw new Error("Runtime usage already captured")
+      if (body.source !== "runtime.monotonic_dispatch_envelope" || !Number.isFinite(body.seconds) || body.seconds < 0) throw new Error("Invalid runtime usage")
+      d.usage = { seconds: body.seconds, source: body.source, call_id: body.call_id, at_revision: state.revision }
+      break
+    }
+
     case "DISPATCH_FINISH": {
       const d = state.dispatches[body.dispatch_id]
       if (!d || d.status !== DISPATCH_STATUS.LAUNCHED) throw new Error(`Cannot finish dispatch ${body.dispatch_id}: not launched.`)
@@ -430,15 +475,24 @@ export function applyEvent(previous, event) {
       const reported = body.actual_consumption
       // Conservative policy: unknown consumption is never rewritten to zero; a
       // missing report consumes the whole reservation.
-      const actual = reported === undefined || reported === null ? reserved : reported
+      const actual = reported === undefined || reported === null ? (d.usage?.seconds ?? reserved) : reported
       if (!Number.isFinite(actual) || actual < 0) throw new Error("DISPATCH_RECONCILE actual_consumption must be a finite non-negative number.")
-      if (actual > reserved) throw new Error(`DISPATCH_RECONCILE consumption ${actual} exceeds reservation ${reserved}; overrun requires an explicit transition, never a silent adjustment.`)
+      if (actual > reserved && !d.usage) throw new Error(`DISPATCH_RECONCILE consumption ${actual} exceeds reservation ${reserved}; overrun requires an explicit transition, never a silent adjustment.`)
       d.status = DISPATCH_STATUS.RESULT_RECONCILED
       d.reservation_status = RESERVATION_STATUS.CONSUMED
       d.actual_consumption = actual
+      d.consumption_basis = d.usage ? "observed_wall_upper_bound" : (reported == null ? "conservative_reservation" : "legacy_reported")
       d.reconciled = { verdict: body.verdict ?? null, evidence: body.evidence ?? null, at_revision: state.revision }
       state.budget.reserved_seconds -= reserved
       state.budget.used_seconds += actual
+      if (state.blocker?.class === "BUDGET_EXHAUSTED" && state.blocker.budget_reason === "reservation_expired" && state.blocker.dispatch_id === body.dispatch_id) {
+        const remainingWu = wuBudgetUsage(state, d.wu_id).available_seconds
+        if (remainingWu > 0 && deriveBudget(state.budget).available_seconds > 0) {
+          state.last_blocker_resolution = { class: state.blocker.class, blocked_at_revision: state.blocker.at_revision,
+            resolution: "Reservation settled; unused authorized WU allocation remains", at_revision: state.revision }
+          state.blocker = null
+        }
+      }
       break
     }
 
@@ -515,6 +569,7 @@ export function applyEvent(previous, event) {
         manifest: body.manifest ?? null,
         verification_contract_hash: body.verification_contract_hash ?? null,
         required_check_ids: body.required_check_ids ?? [],
+        wu_contract_hash: body.wu_contract_hash ?? null,
       }
       break
     }
@@ -539,6 +594,9 @@ export function applyEvent(previous, event) {
           throw new Error("RECORD_REVIEW: verification contract hash mismatch.")
         }
       }
+      state.review_history ??= {}
+      state.review_history[body.candidate_id] ??= []
+      if (state.reviews[body.candidate_id]) state.review_history[body.candidate_id].push(state.reviews[body.candidate_id])
       state.reviews[body.candidate_id] = {
         verdict: body.verdict ?? null,
         candidate_hashes: { manifest_hash: candidate.manifest_hash, tree_hash: candidate.tree_hash },
@@ -563,7 +621,7 @@ export function applyEvent(previous, event) {
 
     case "BLOCK": {
       if (!BLOCKER_CLASSES.includes(body.class)) throw new Error(`Unknown blocker class: ${body.class}.`)
-      state.blocker = { class: body.class, reason: body.reason ?? null, at_revision: state.revision }
+      state.blocker = { class: body.class, reason: body.reason ?? null, at_revision: state.revision, ...(body.class === "NO_PROGRESS" ? { progress_hash: executionProgress(state) } : {}), ...(body.budget_reason === "reservation_expired" ? { budget_reason: body.budget_reason, dispatch_id: body.dispatch_id } : {}) }
       break
     }
 
@@ -588,6 +646,7 @@ export function applyEvent(previous, event) {
     }
 
     case "CLEAR_BLOCKER": {
+      if (state.blocker?.class === "NO_PROGRESS" && state.blocker.progress_hash === executionProgress(state)) throw new Error("NO_PROGRESS requires new durable execution evidence; a resolution string or checkpoint is insufficient")
       if (!state.blocker) throw new Error("CLEAR_BLOCKER requires an active blocker.")
       if (!RECOVERABLE_BLOCKER_CLASSES.has(state.blocker.class)) {
         throw new Error(`CLEAR_BLOCKER cannot clear non-recoverable blocker ${state.blocker.class}.`)
@@ -646,13 +705,18 @@ export function applyEvent(previous, event) {
           const sameWuReplacement = previousCandidate?.wu_id === candidate.wu_id && !state.merge
           const completedPredecessor = priorComplete && (!state.merge ||
             (state.merge.status === "VERIFIED" && state.merge.candidate_id === existing.candidate_id))
-          if (existing.candidate_id === binding.candidate_id || state.pr_bindings?.[binding.candidate_id] ||
+          const revalidated = body.revalidated === true && existing.candidate_id === binding.candidate_id && !state.merge &&
+            existing.repository === binding.repository && existing.pr_number === binding.pr_number && /^[a-f0-9]{40}$/.test(body.tree_sha ?? "")
+          if ((!revalidated && (existing.candidate_id === binding.candidate_id || state.pr_bindings?.[binding.candidate_id])) ||
               !state.wu || state.wu.completed || state.reviews[binding.candidate_id]?.verdict !== "PASS" ||
               (!sameWuReplacement && !completedPredecessor)) {
             throw new Error(`BIND_PR: already bound to repository ${existing.repository} PR #${existing.pr_number} head ${existing.head_sha}; replacement requires a new reviewed candidate and a settled predecessor (no merge in progress).`)
           }
           // Archive is retained below/on earlier events. Selecting a new candidate
           // must never inherit the previous candidate's verified merge.
+          state.binding_history ??= []
+          state.binding_history.push(existing)
+          if (revalidated) delete state.ci_evidence[binding.candidate_id]
           state.merge = null
         }
       }
@@ -673,8 +737,20 @@ export function applyEvent(previous, event) {
         head_sha: body.head_sha,
         conclusion: body.conclusion,
         evidence_ref: body.evidence_ref ?? null,
+        binding_at_revision: body.binding_at_revision ?? null,
         observed_at: event.timestamp,
       }
+      break
+    }
+
+    case "MERGE_ABORT": {
+      if (state.merge?.status !== "STARTED" || body.candidate_id !== state.merge.candidate_id ||
+          body.observed_state !== "closed" || body.observed_merged !== false || !body.evidence_ref) throw new Error("MERGE_ABORT requires a confirmed closed, unmerged PR for the exact attempt")
+      state.merge_history ??= []
+      const aborted = { ...state.merge, status: "ABORTED", evidence_ref: body.evidence_ref }
+      state.merge_history.push(aborted)
+      state.merges[state.merge.candidate_id] = aborted
+      state.merge = null
       break
     }
 
@@ -685,6 +761,7 @@ export function applyEvent(previous, event) {
       const binding = state.pr_binding
       state.merge = {
         status: "STARTED",
+        attempt_id: body.attempt_id ?? null,
         source: "GOVERNED_AUTO",
         candidate_id: binding.candidate_id,
         repository: binding.repository,

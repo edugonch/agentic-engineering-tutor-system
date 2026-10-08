@@ -39,3 +39,20 @@ export async function inspectOrchestratorSteps(agentApi) {
     return { status: "unknown", effective_steps: null, note: error?.message ?? "Cannot inspect the loaded orchestrator" }
   }
 }
+
+// Migrate only the shipped legacy defaults; preserve explicit custom values.
+export async function registerSpecialistSteps(agentApi, env = {}) {
+  const defaults = { "harness-builder": 20, "harness-reviewer": 10, "harness-researcher": 8, "harness-designer": 18 }
+  await agentApi.transform(editor => {
+    for (const [id, legacy] of Object.entries(defaults)) {
+      const key = `HARNESS_${id.slice(8).toUpperCase()}_MAX_STEPS`
+      const raw = env[key]
+      if (raw !== undefined && raw !== "" && (!/^[1-9]\d*$/.test(String(raw)) || !Number.isSafeInteger(Number(raw)))) throw new Error(`${key} must be a positive integer`)
+      if (typeof editor.get === "function" && !editor.get(id)) continue
+      editor.update(id, agent => {
+        if (raw !== undefined && raw !== "") agent.steps = Number(raw)
+        else if (agent.steps === legacy) delete agent.steps
+      })
+    }
+  })
+}

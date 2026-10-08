@@ -162,3 +162,21 @@ test('Harness no-progress guard isolates sessions and does not trip on successfu
   guard.reset('s')
   await assert.rejects(guard.runHarness('s', 'harness_merge_candidate', { candidate_id: 'c2' }, fail), /drift/)
 })
+
+test("external progress permits retry without resetting the guard", async () => {
+  const guard = createTurnGuard()
+  let observed = "CI_PENDING"
+  let calls = 0
+  const run = () => guard.runHarness("s", "harness_merge_candidate", { candidate_id: "c" }, async () => {
+    calls++
+    if (observed === "CI_PENDING") throw new Error("CI pending")
+    return { status: "merged" }
+  }, async () => ({ checks: observed }))
+  await assert.rejects(run(), /CI pending/)
+  await assert.rejects(run(), /CI pending/)
+  await assert.rejects(run(), /without progress/)
+  assert.equal(calls, 2)
+  observed = "CI_SUCCESS"
+  assert.equal((await run()).status, "merged")
+  assert.equal(calls, 3)
+})

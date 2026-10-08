@@ -1,3 +1,4 @@
+import { seedWuContract } from "./wu-fixture.js"
 import test from "node:test"
 import assert from "node:assert/strict"
 import { mkdtemp, rm } from "node:fs/promises"
@@ -229,6 +230,7 @@ test("controller applies an approved policy-only amendment idempotently and clea
   await withRoot(async (root) => {
     const sid = "ses-1"
     await seedEpic(root, "epic-original", { max_wus: 40, total_seconds: 43200 })
+    await seedWuContract(root, "WU-059", "epic-original", 43200)
     await runExecutionController(root, {
       action: "approve_mandate",
       execution_id: "E1",

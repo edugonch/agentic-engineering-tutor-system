@@ -33,7 +33,7 @@ Three layers are used:
 
 1. **Contract limits:** finite Epic WU budget, one outcome per WU, no child WUs, stop/rebase states.
 2. **OpenCode limits:** configured `steps` and `subagent_depth` restrict iterations/delegation depth.
-3. **Plugin circuit breaker:** V2 `tool.execute.before` counts tool actions per OpenCode session run, optionally caps subagent delegations, and trips on repeated identical mutation/delegation calls. An opt-in V2 session `context` hook can cap output tokens before agent-loop model requests, including tool continuations; `retry` limits provider retries.
+3. **Plugin circuit breaker:** V2 `tool.execute.before` counts tool actions per OpenCode session run, optionally caps subagent delegations, and trips on repeated identical mutation/delegation calls. An opt-in V2 session `context` hook can cap output tokens before agent-loop model requests, including tool continuations; provider retry policy is preserved unless HARNESS_PROVIDER_RETRY_LIMIT is explicitly configured.
 
 The `context` hook can reduce each agent-loop model request's `maxTokens` to `HARNESS_MAX_OUTPUT_TOKENS` when the request asks for more or does not set a cap. It is disabled by default because output-token options can map to provider-specific request parameters that a model endpoint may reject. Enable it only after verifying compatibility with every provider/model route in use. V2 documents this hook as running before the agent loop, including tool-driven continuations. It does not include every auxiliary request or reliably sum provider-specific input tokens and USD across primary and subagent calls. The owner/provider must set a provider-side spending limit for a real dollar ceiling. Prompts alone are not a cost control.
 
@@ -54,7 +54,7 @@ This experiment does not implement advisor mode, automatic routing, LLM fallback
 
 ## Merge autonomy
 
-The current workflow keeps independent human review and merge at each WU. The plugin never merges, deploys, or creates external backlog items. Moving the human gate to the end of an Epic is a future option, not the initial policy: it requires validated bounded automation, per-WU verification, branch isolation, recovery behavior, and explicit Product Owner approval of a separate release policy.
+The approved mandate selects `none`, `human`, or `governed_auto` merge policy. Governed merge verifies the frozen candidate Git tree against the remote head, review, exact-head CI and current blockers before the external effect. Recovery observes an existing remote merge without repeating it. Deployments and production migrations remain outside this policy.
 
 ## Reference library retrieval
 

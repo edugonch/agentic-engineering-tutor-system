@@ -1,3 +1,6 @@
+import { freezeCandidate } from '../../src/execution/candidate.js'
+import { createCandidateRegistry } from '../../src/execution/candidate-registry.js'
+import { candidateGitTree } from '../../src/execution/git-tree.js'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtemp, rm, readFile } from 'node:fs/promises'
@@ -14,18 +17,23 @@ async function fixture(fn, policy = 'governed_auto') {
   const commit = async (operation_type, body, operation_id) => {
     const lease = await controller.acquire('audit')
     const { state } = await controller.snapshot()
-    return controller.commit({ operation_id: operation_id ?? `seed:${state.revision}`, operation_type, body }, {
+    return controller.commit({ operation_id: operation_id ?? `seed:${state.revision}`, operation_type, body: body?.candidate_id ? { ...body, candidate_id: ids[body.candidate_id] ?? body.candidate_id } : body }, {
       holder_session_id: 'audit', expected_revision: state.revision, lease_fencing_token: lease.fencing_token,
     })
   }
-  const tool = input => runExecutionController(root, { execution_id: 'E1', session_id: 'audit', ...input })
+  const ids = {}
+  const registry = createCandidateRegistry({ dir: join(root, '.harness/execution') })
+  const tool = input => runExecutionController(root, { execution_id: 'E1', session_id: 'audit', ...input, ...(input.candidate_id ? { candidate_id: ids[input.candidate_id] ?? input.candidate_id } : {}) })
   const prepare = async n => {
     await commit('WU_ACTIVATE', { wu_id: `WU${n}`, mandate_id: 'M1' })
     await candidate(n)
   }
   const candidate = async n => {
     const { state } = await controller.snapshot()
-    await commit('FREEZE_CANDIDATE', { candidate_id: `c${n}`, wu_id: state.wu.wu_id, manifest_hash: `m${n}`, tree_hash: `t${n}` })
+    const frozen = await freezeCandidate(root, { base: { kind: 'snapshot', files: [{ path: 'n.txt', type: 'file', mode: '100644', content: Buffer.from(String(n)).toString('base64'), sha256: (await import('node:crypto')).createHash('sha256').update(String(n)).digest('hex') }] } })
+    await registry.store(frozen)
+    ids[`c${n}`] = frozen.candidate_id
+    await commit('FREEZE_CANDIDATE', { candidate_id: frozen.candidate_id, wu_id: state.wu.wu_id, manifest_hash: `m${n}`, tree_hash: `t${n}` })
     await commit('RECORD_REVIEW', { candidate_id: `c${n}`, candidate_hashes: { manifest_hash: `m${n}`, tree_hash: `t${n}` }, verdict: 'PASS', verification_evidence_ids: [`e${n}`] })
   }
   const bind = n => tool({ action: 'bind_pr', candidate_id: `c${n}`, repository: 'o/r', pr_number: 160 + n, head_sha: `h${n}`, base_branch: 'main', base_sha: `b${n}` })
@@ -33,14 +41,15 @@ async function fixture(fn, policy = 'governed_auto') {
   const calls = []
   const merged = new Set()
   const adapter = {
+    getCommitTree: async ({ head_sha }) => candidateGitTree(await registry.load(ids[`c${head_sha.slice(1)}`])),
     getPullRequest: async ({ pr_number }) => { const n = pr_number - 160; return { state: merged.has(n) ? 'closed' : 'open', merged: merged.has(n), head_sha: `h${n}`, base_sha: `b${n}`, base_branch: 'main', merge_commit_sha: merged.has(n) ? `merge${n}` : null } },
     getChecks: async () => [{ name: 'verify', conclusion: 'SUCCESS' }],
     merge: async ({ pr_number }) => { const n = pr_number - 160; calls.push(n); merged.add(n); return { merged: true, merge_commit_sha: `merge${n}` } },
   }
-  const merge = n => (policy === 'human' ? runVerifyExternalMerge : runMergeCandidate)(root, { candidate_id: `c${n}`, adapter, session_id: 'audit' })
+  const merge = n => (policy === 'human' ? runVerifyExternalMerge : runMergeCandidate)(root, { candidate_id: ids[`c${n}`], adapter, session_id: 'audit' })
   try {
     await commit('MANDATE_APPROVE', { execution_id: 'E1', mandate_id: 'M1', max_wus: 4, total_seconds: 100, merge_policy: policy, required_ci_checks: ['verify'] })
-    await fn({ root, dir, controller, commit, tool, prepare, candidate, bind, ci, merge, calls, merged, adapter })
+    await fn({ ids, root, dir, controller, commit, tool, prepare, candidate, bind, ci, merge, calls, merged, adapter })
   } finally { await rm(root, { recursive: true, force: true }) }
 }
 
@@ -55,10 +64,10 @@ for (const policy of ['governed_auto', 'human']) test(`two consecutive WUs: ${po
     }
     const { state } = await f.controller.snapshot()
     assert.equal(state.wu.completed, true)
-    assert.equal(state.merges.c1.status, 'VERIFIED')
-    assert.equal(state.merges.c2.status, 'VERIFIED')
-    assert.equal(state.pr_bindings.c1.pr_number, 161)
-    assert.equal(state.pr_bindings.c2.pr_number, 162)
+    assert.equal(state.merges[f.ids.c1].status, 'VERIFIED')
+    assert.equal(state.merges[f.ids.c2].status, 'VERIFIED')
+    assert.equal(state.pr_bindings[f.ids.c1].pr_number, 161)
+    assert.equal(state.pr_bindings[f.ids.c2].pr_number, 162)
     assert.deepEqual(f.calls, policy === 'human' ? [] : [1, 2])
   }, policy)
 })
@@ -93,7 +102,7 @@ test('CI observations can change and each candidate reuses the same check name',
     assert.equal((await f.ci(1)).commit_status, 'replayed')
     await f.ci(1, 'FAILURE', 'run2')
     await f.ci(1, 'SUCCESS', 'run3')
-    assert.equal((await f.controller.snapshot()).state.ci_evidence.c1.verify.conclusion, 'SUCCESS')
+    assert.equal((await f.controller.snapshot()).state.ci_evidence[f.ids.c1].verify.conclusion, 'SUCCESS')
     await f.candidate(2); await f.ci(2)
   })
 })
@@ -127,7 +136,7 @@ test('second WU recovers a crash after remote merge and durable record without m
     let reads = 0
     f.adapter.getPullRequest = async input => {
       reads++
-      if (reads === 2) throw new Error('simulated connection loss after merge record')
+      if (f.merged.has(2)) throw new Error('simulated connection loss after merge record')
       return original(input)
     }
     await assert.rejects(f.merge(2), /simulated connection loss/)
@@ -160,7 +169,7 @@ test('replacement requires fresh PASS review and cannot change an existing candi
     await f.commit('RECORD_REVIEW', { candidate_id: 'c2', candidate_hashes: { manifest_hash: 'm2', tree_hash: 't2' }, verdict: 'PASS', verification_evidence_ids: ['e2'] })
     await f.bind(2)
     await assert.rejects(f.tool({ action: 'bind_pr', candidate_id: 'c2', repository: 'o/r', pr_number: 162, head_sha: 'changed', base_branch: 'main', base_sha: 'b2' }), /conflict|already bound/)
-    assert.equal((await f.controller.snapshot()).state.pr_bindings.c1.head_sha, 'h1')
+    assert.equal((await f.controller.snapshot()).state.pr_bindings[f.ids.c1].head_sha, 'h1')
   })
 })
 

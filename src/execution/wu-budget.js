@@ -8,7 +8,7 @@ export function wuBudgetUsage(state, wuId) {
     if (d.reservation_status === "consumed") used += d.actual_consumption ?? d.reserved_seconds
     if (d.reservation_status === "reserved") reserved += d.reserved_seconds
   }
-  const ceiling = state.wu_budget_amendments?.[wuId]?.ceiling_seconds ?? null
+  const ceiling = state.wu_budget_amendments?.[wuId]?.ceiling_seconds ?? (state.wu?.wu_id === wuId ? state.wu.contract?.active_seconds : null) ?? null
   return { wu_id: wuId, used_seconds: used, reserved_seconds: reserved, ceiling_seconds: ceiling,
     available_seconds: ceiling === null ? null : ceiling - used - reserved }
 }

@@ -39,6 +39,11 @@ export function createLaunchBindingRegistry() {
     peek(sessionID, agent) {
       return bindings.get(key(sessionID, agent))
     },
+    release(executionID, dispatchID) {
+      for (const [k, binding] of bindings) {
+        if (binding.execution_id === executionID && binding.dispatch_id === dispatchID) bindings.delete(k)
+      }
+    },
     clear() {
       bindings.clear()
     },
@@ -46,4 +51,28 @@ export function createLaunchBindingRegistry() {
       return bindings.size
     },
   }
+}
+
+// Restart recovery: reconstruct the ephemeral lookup from durable preparation.
+export async function findPendingLaunchBinding(projectRoot, sessionID, agent) {
+  const { readdir } = await import("node:fs/promises")
+  const { join } = await import("node:path")
+  const { createExecutionController } = await import("./execution.js")
+  const root = join(projectRoot, ".harness/execution/controller")
+  let entries
+  try { entries = await readdir(root, { withFileTypes: true }) }
+  catch (error) { if (error.code === "ENOENT") return null; throw error }
+  const matches = []
+  for (const entry of entries.filter(e => e.isDirectory())) {
+    const c = await createExecutionController({ dir: join(root, entry.name) })
+    const { state } = await c.snapshot()
+    if (state.completed) continue
+    for (const [dispatch_id, d] of Object.entries(state.dispatches)) {
+      if (d.prepared_by_session_id !== sessionID || d.expected_agent !== agent || d.status !== "pending_launch") continue
+      if (d.launch_call_id) throw new Error("HARNESS_UNRESOLVED_LAUNCH: recover the claimed dispatch before another launch")
+      matches.push({ execution_id: entry.name, dispatch_id })
+    }
+  }
+  if (matches.length > 1) throw new Error("Multiple pending launch bindings; resolve the exact dispatch before launching")
+  return matches[0] ?? null
 }

@@ -7,6 +7,8 @@
 import { join } from "node:path"
 import { readdir } from "node:fs/promises"
 import { createExecutionController } from "./execution.js"
+import { createCandidateRegistry } from "./candidate-registry.js"
+import { candidateGitTree } from "./git-tree.js"
 import { canStartMerge, canVerifyExternalMerge } from "./state.js"
 
 function isSuccessConclusion(value) {
@@ -74,6 +76,8 @@ export async function runMergeCandidate(projectRoot, { candidate_id, adapter, se
     if (!gate.allowed) throw new Error(`merge blocked: ${gate.reason}.`)
   }
 
+  const attempt = state.merge?.attempt_id ?? state.merge?.started_at_revision ?? state.revision
+  const attemptKey = `${execution_id}:${candidate_id}:merge:${attempt}`
   const repository = binding.repository
   const pr_number = binding.pr_number
 
@@ -91,15 +95,12 @@ export async function runMergeCandidate(projectRoot, { candidate_id, adapter, se
     throw new Error(`merge blocked: PR base branch ${pr.base_branch} drifted from bound ${binding.base_branch}.`)
   }
 
-  // 3. Ensure MERGE_START is durable before either recovery or a fresh merge.
-  // (In a fresh run the gate was already checked above; in recovery the merge is
-  // already STARTED or RECORDED, so this is a no-op.)
-  if (!state.merge) {
-    await commitMerge(controller, session_id, `${execution_id}:${candidate_id}:merge-start`, "MERGE_START", {})
-  }
-
   // 4. Recovery: already merged remotely.
   if (pr.merged) {
+    if (!state.merge) {
+      await verifyCandidateTree(projectRoot, candidate_id, adapter, binding)
+      await commitMerge(controller, session_id, `${attemptKey}:start`, "MERGE_START", { attempt_id: attempt })
+    }
     if (!pr.merge_commit_sha) throw new Error("merge blocked: PR merged but has no merge_commit_sha; fail closed.")
     // RECORDED means the merge was recorded before a crash (between MERGE_RECORD
     // and MERGE_VERIFY). Validate the remote merge commit against the durable
@@ -108,16 +109,16 @@ export async function runMergeCandidate(projectRoot, { candidate_id, adapter, se
       if (state.merge.merge_commit_sha !== pr.merge_commit_sha) {
         throw new Error(`merge verify failed: remote merge commit ${pr.merge_commit_sha} differs from recorded ${state.merge.merge_commit_sha}.`)
       }
-      await commitMerge(controller, session_id, `${execution_id}:${candidate_id}:merge-verify`, "MERGE_VERIFY", {})
+      await commitMerge(controller, session_id, `${attemptKey}:verify`, "MERGE_VERIFY", {})
       return { status: "recovered_existing_merge", execution_id, merge_commit_sha: pr.merge_commit_sha }
     }
     // STARTED (or a fresh run that just committed MERGE_START above): record the
     // existing remote merge, then verify.
-    await commitMerge(controller, session_id, `${execution_id}:${candidate_id}:merge-record:${pr.merge_commit_sha}`, "MERGE_RECORD", {
+    await commitMerge(controller, session_id, `${attemptKey}:record:${pr.merge_commit_sha}`, "MERGE_RECORD", {
       merge_commit_sha: pr.merge_commit_sha,
       merged_head_sha: binding.head_sha,
     })
-    await commitMerge(controller, session_id, `${execution_id}:${candidate_id}:merge-verify`, "MERGE_VERIFY", {})
+    await commitMerge(controller, session_id, `${attemptKey}:verify`, "MERGE_VERIFY", {})
     return { status: "recovered_existing_merge", execution_id, merge_commit_sha: pr.merge_commit_sha }
   }
 
@@ -130,7 +131,8 @@ export async function runMergeCandidate(projectRoot, { candidate_id, adapter, se
   const required = state.mandate?.required_ci_checks ?? []
   if (required.length > 0) {
     const checks = await adapter.getChecks({ repository, head_sha: binding.head_sha, check_names: required })
-    for (const c of checks) {
+    for (const name of required) {
+      const c = checks.find(c => c.name === name) ?? { name, conclusion: null }
       if (!isSuccessConclusion(c.conclusion)) {
         throw new Error(`merge blocked: required CI ${c.name} conclusion ${c.conclusion ?? "missing"}, not SUCCESS.`)
       }
@@ -138,12 +140,37 @@ export async function runMergeCandidate(projectRoot, { candidate_id, adapter, se
   }
 
   // 6. Merge, pinning the exact reviewed head — never a drifted head.
-  const merged = await adapter.merge({ repository, pr_number, expected_head_sha: binding.head_sha })
+  const tree_sha = await verifyCandidateTree(projectRoot, candidate_id, adapter, binding)
+  if (!state.merge) {
+    await commitMerge(controller, session_id, `${attemptKey}:start`, "MERGE_START", { tree_sha, attempt_id: attempt })
+  }
+  const fresh = await controller.snapshot()
+  const merged = await controller.guardedEffect({
+    holder_session_id: session_id,
+    expected_revision: fresh.state.revision,
+    validate(current) {
+      const gate = canStartMerge(current)
+      if (!gate.allowed) throw new Error(`merge blocked: ${gate.reason}.`)
+      if (JSON.stringify(current.pr_binding) !== JSON.stringify(binding)) throw new Error("PR binding changed before merge.")
+    },
+    effect: async () => {
+      // Another same-session invocation may have finished the remote effect
+      // while this call waited for the mutex. Observe before issuing it again.
+      const latest = await adapter.getPullRequest({ repository, pr_number })
+      if (latest.head_sha !== binding.head_sha || latest.base_branch !== binding.base_branch) throw new Error("PR drifted immediately before merge")
+      if (latest.merged) {
+        if (!latest.merge_commit_sha) throw new Error("Merged PR has no commit identity")
+        return { merged: true, merge_commit_sha: latest.merge_commit_sha }
+      }
+      if (latest.state !== "open" || latest.base_sha !== binding.base_sha) throw new Error("PR base/state drifted immediately before merge")
+      return adapter.merge({ repository, pr_number, expected_head_sha: binding.head_sha })
+    },
+  })
   if (!merged.merged) throw new Error("merge failed: GitHub did not confirm merged=true.")
   if (!merged.merge_commit_sha) throw new Error("merge failed: no merge_commit_sha returned.")
 
   // 7. MERGE_RECORD (durable).
-  await commitMerge(controller, session_id, `${execution_id}:${candidate_id}:merge-record:${merged.merge_commit_sha}`, "MERGE_RECORD", {
+  await commitMerge(controller, session_id, `${attemptKey}:record:${merged.merge_commit_sha}`, "MERGE_RECORD", {
     merge_commit_sha: merged.merge_commit_sha,
     merged_head_sha: binding.head_sha,
   })
@@ -156,7 +183,7 @@ export async function runMergeCandidate(projectRoot, { candidate_id, adapter, se
   if (after.merge_commit_sha !== merged.merge_commit_sha) throw new Error(`merge verify failed: remote merge commit ${after.merge_commit_sha} differs from recorded ${merged.merge_commit_sha}.`)
 
   // 9. MERGE_VERIFY (durable).
-  await commitMerge(controller, session_id, `${execution_id}:${candidate_id}:merge-verify`, "MERGE_VERIFY", {})
+  await commitMerge(controller, session_id, `${attemptKey}:verify`, "MERGE_VERIFY", {})
 
   return { status: "merged", execution_id, merge_commit_sha: merged.merge_commit_sha }
 }
@@ -200,11 +227,14 @@ export async function runVerifyExternalMerge(projectRoot, { candidate_id, adapte
   if (pr.base_branch !== binding.base_branch) throw new Error(`external merge blocked: PR base branch ${pr.base_branch} drifted from bound ${binding.base_branch}.`)
   if (!pr.merge_commit_sha) throw new Error("external merge blocked: PR has no merge_commit_sha.")
 
+  await verifyCandidateTree(projectRoot, candidate_id, adapter, binding)
+
   // 3. Required CI (if governance declares it), on the exact head.
   const required = state.mandate?.required_ci_checks ?? []
   if (required.length > 0) {
     const checks = await adapter.getChecks({ repository, head_sha: binding.head_sha, check_names: required })
-    for (const c of checks) {
+    for (const name of required) {
+      const c = checks.find(c => c.name === name) ?? { name, conclusion: null }
       if (!isSuccessConclusion(c.conclusion)) {
         throw new Error(`external merge blocked: required CI ${c.name} conclusion ${c.conclusion ?? "missing"}, not SUCCESS.`)
       }
@@ -229,4 +259,56 @@ export async function runVerifyExternalMerge(projectRoot, { candidate_id, adapte
   await commitMerge(controller, session_id, `${execution_id}:${candidate_id}:merge-verify`, "MERGE_VERIFY", {})
 
   return { status: "verified_external_merge", execution_id, merge_commit_sha: pr.merge_commit_sha }
+}
+
+async function verifyCandidateTree(projectRoot, candidateId, adapter, binding) {
+  if (typeof adapter.getCommitTree !== "function") throw new Error("merge blocked: adapter cannot verify candidate Git tree.")
+  const registry = createCandidateRegistry({ dir: join(projectRoot, ".harness", "execution") })
+  const candidate = await registry.load(candidateId)
+  if (!candidate) throw new Error("merge blocked: frozen candidate missing.")
+  const expected = candidateGitTree(candidate)
+  const observed = await adapter.getCommitTree({ repository: binding.repository, head_sha: binding.head_sha })
+  if (observed !== expected) throw new Error(`merge blocked: candidate Git tree ${expected} differs from remote ${observed}.`)
+  return expected
+}
+
+// Read-only external progress fingerprint, used before the no-progress guard.
+export async function observeMergeProgress(projectRoot, candidate_id, adapter) {
+  const { state } = await findExecutionForCandidate(projectRoot, candidate_id)
+  const binding = state.pr_binding
+  if (!binding) return { binding: null }
+  return {
+    binding, blocker: state.blocker, review: state.reviews[candidate_id],
+    pr: await adapter.getPullRequest({ repository: binding.repository, pr_number: binding.pr_number }),
+    checks: await adapter.getChecks({ repository: binding.repository, head_sha: binding.head_sha, check_names: state.mandate?.required_ci_checks ?? [] }),
+  }
+}
+
+export async function runRebindPR(projectRoot, { candidate_id, adapter, session_id }) {
+  const { controller, execution_id, state } = await findExecutionForCandidate(projectRoot, candidate_id)
+  const binding = state.pr_binding
+  if (!binding || binding.candidate_id !== candidate_id || state.merge) throw new Error("Rebind requires the currently bound candidate with no unresolved merge")
+  const pr = await adapter.getPullRequest(binding)
+  if (pr.state !== "open" || pr.merged) throw new Error("Rebind requires an open unmerged PR")
+  const next = { repository: binding.repository, pr_number: binding.pr_number, candidate_id,
+    head_sha: pr.head_sha, base_sha: pr.base_sha, base_branch: pr.base_branch }
+  const tree_sha = await verifyCandidateTree(projectRoot, candidate_id, adapter, next)
+  const lease = await controller.acquire(session_id)
+  await controller.commit({ operation_id: `${execution_id}:rebind:${state.revision}`, operation_type: "BIND_PR",
+    body: { ...next, revalidated: true, tree_sha } }, { holder_session_id: session_id, expected_revision: state.revision, lease_fencing_token: lease.fencing_token })
+  return { status: "rebound", binding: next, tree_sha, next_action: "Record fresh exact-head CI evidence before merge" }
+}
+
+export async function runAbortMerge(projectRoot, { candidate_id, adapter, session_id }) {
+  const { controller, execution_id, state } = await findExecutionForCandidate(projectRoot, candidate_id)
+  if (state.merge?.status !== "STARTED" || state.merge.candidate_id !== candidate_id) throw new Error("No STARTED attempt to abort")
+  const binding = state.pr_binding
+  const pr = await adapter.getPullRequest(binding)
+  if (pr.merged) return runMergeCandidate(projectRoot, { candidate_id, adapter, session_id })
+  if (pr.state !== "closed" || pr.head_sha !== binding.head_sha) throw new Error("An open or drifted PR cannot prove an ambiguous merge was cancelled; inspect/recover the existing attempt")
+  const lease = await controller.acquire(session_id)
+  await controller.commit({ operation_id: `${execution_id}:merge-abort:${state.merge.started_at_revision}`, operation_type: "MERGE_ABORT",
+    body: { candidate_id, observed_state: "closed", observed_merged: false, evidence_ref: `${binding.repository}#${binding.pr_number}@${pr.head_sha}` } },
+    { holder_session_id: session_id, expected_revision: state.revision, lease_fencing_token: lease.fencing_token })
+  return { status: "aborted", next_action: "Bind a reviewed replacement candidate and PR; prior attempt retained" }
 }

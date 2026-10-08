@@ -122,6 +122,10 @@ export async function createExecutionController({ root, dir, now = () => Date.no
         return { status: "replayed", revision: state.revision, state, result: existing.result ?? null }
       }
 
+      if (state.completed && !["CHECKPOINT", "DISPATCH_RECONCILE", "DISPATCH_FINISH", "DISPATCH_USAGE", "DISPATCH_HANDOFF", "DISPATCH_RELEASE"].includes(operation.operation_type)) {
+        throw new Error("Execution completed: no new work or state mutation is permitted.")
+      }
+
       // Admission only: preserve replay of historical logs. Never create or
       // launch replacement work while this WU has an unresolved launch identity.
       if (["DISPATCH_RESERVE", "DISPATCH_PREPARE", "DISPATCH_LAUNCH_CLAIM"].includes(operation.operation_type)) {
@@ -131,6 +135,15 @@ export async function createExecutionController({ root, dir, now = () => Date.no
           dispatchID !== operation.body?.dispatch_id && (d.wu_id ?? null) === wu &&
           (d.status === "ambiguous" || (d.status === "pending_launch" && d.launch_call_id)))
         if (ambiguous) throw new Error(`HARNESS_UNRESOLVED_LAUNCH: recover dispatch ${ambiguous[0]} before authorizing more work for this WU.`)
+      }
+
+      // Avoid billing the same worker interval through both phase and dispatch.
+      if (operation.operation_type === "PHASE_START" && operation.body?.phase === "ACTIVE" &&
+          Object.values(state.dispatches).some(d => d.reservation_status === "reserved" && d.reserved_seconds > 0)) {
+        throw new Error("Billable phase overlaps a dispatch reservation; use dispatch accounting.")
+      }
+      if (operation.operation_type === "DISPATCH_RESERVE" && (operation.body?.reserved_seconds ?? 0) > 0 && state.budget.active_phase === "ACTIVE") {
+        throw new Error("End the billable phase before reserving worker time.")
       }
 
       // Budget authorization ceiling: the ledger may describe debt (over-budget
@@ -305,7 +318,21 @@ export async function createExecutionController({ root, dir, now = () => Date.no
     return { dispatch_id, found: true, status: res.status }
   }
 
+  // Serialize the authorization check and one bounded remote effect against
+  // every local writer. Never call commit/snapshot from inside effect.
+  const guardedEffect = async ({ holder_session_id, expected_revision, validate, effect }) =>
+    withMutex(mutexPath, async () => {
+      const { state, lease } = await load()
+      if (!lease || isLeaseExpired(lease, now) || lease.holder_session_id !== holder_session_id)
+        throw new Error("Remote effect requires a current execution lease.")
+      if (state.revision !== expected_revision) throw new Error("State changed before remote effect; revalidate.")
+      if (state.completed) throw new Error("Execution completed.")
+      validate(state)
+      return effect(state)
+    })
+
   return {
+    guardedEffect,
     dir: execDir,
     snapshot,
     acquire,

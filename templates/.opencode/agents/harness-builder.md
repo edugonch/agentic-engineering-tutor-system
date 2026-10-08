@@ -1,7 +1,6 @@
 ---
 description: Implements one explicitly activated, bounded Work Unit from its approved contract and returns verifiable handoff evidence.
 mode: subagent
-steps: 20
 permissions:
   - action: subagent
     resource: "*"
@@ -44,3 +43,15 @@ question. Insufficient retrospective evidence or failing tests remain real findi
 No budget extension, functional waiver, scope change or early WU completion follows
 from this authorization. Include the decision reference and process deviation in
 the handoff/review so the orchestrator can preserve them with candidate evidence.
+
+
+## Execution continuity
+
+Use the durable execution context supplied at the runtime boundary: its exact
+WU contract, remaining reservation and scoped owner authority resolution. Do
+not ask again for an already applicable owner decision. If an authorized
+retrospective validation replaces historical RED, report that distinction
+accurately and evaluate the required functional evidence. Return a compact
+handoff identifying `completed`, `yielded`, `failed` or `blocked`, changed paths,
+verification evidence and precise remaining work. `completed` describes your
+assignment, not automatic WU acceptance or permission to merge.

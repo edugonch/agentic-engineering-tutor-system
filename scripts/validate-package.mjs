@@ -121,13 +121,13 @@ for (const path of await filesIn("templates/.opencode/agents")) {
   if (!content.startsWith("---\n") || !/^mode:\s*(primary|subagent)\s*$/m.test(content)) errors.push(`${relative(root, path)}: missing OpenCode agent frontmatter/mode`)
   if (path.endsWith("/harness-orchestrator.md")) {
     if (/^steps:/m.test(content.split("---")[1] ?? "")) errors.push(`${relative(root, path)}: orchestrator must not ship a default steps limit`)
-  } else if (!/^steps:\s*[1-9][0-9]*\s*$/m.test(content)) errors.push(`${relative(root, path)}: missing finite steps limit`)
+  } else if (/^steps:/m.test(content)) errors.push(`${relative(root, path)}: specialists must not ship artificial default step limits`)
   if (/^permission:/m.test(content)) errors.push(`${relative(root, path)}: V2 agent permissions must use "permissions" (plural)`)
 }
 
 const manifest = JSON.parse(await readFile(join(root, "package.json"), "utf8"))
 if (manifest.main !== "./index.js") errors.push('package.json: plugin installer entry point must be "./index.js"')
-if (manifest.dependencies?.["@opencode/plugin"] !== "latest") errors.push("package.json: V2 plugin dependency must be @opencode/plugin")
+if (manifest.dependencies?.["@opencode/plugin"] !== "2.0.25") errors.push("package.json: V2 plugin dependency must be pinned to tested @opencode/plugin 2.0.25")
 if (manifest.dependencies?.["@opencode-ai/plugin"] || manifest.peerDependencies?.["@opencode-ai/plugin"]) errors.push("package.json: V1 @opencode-ai/plugin must not be included")
 const readme = await readFile(join(root, "README.md"), "utf8")
 for (const marker of ["opencode plugin add 'github:edugonch/agentic-engineering-tutor-system'", "opencode plugin add 'git+https://github.com/edugonch/agentic-engineering-tutor-system.git#jev-shadow-spike'", "run the plugin command `/harness`", "no manual profile-copy step", "global specialist profiles"]) {

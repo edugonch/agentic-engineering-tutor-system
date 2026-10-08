@@ -6,9 +6,13 @@
 // contract each value participates in.
 
 export const OPERATION_TYPES = Object.freeze([
+  "SUPERVISOR_BIND",
+  "SUPERVISOR_CONTINUE",
+  "SUPERVISOR_SENT",
   "MANDATE_APPROVE", // owner-approved Epic execution mandate (initial authority input)
   "MANDATE_AMEND", // versioned owner-approved policy amendment; budget/scope remain immutable
   "WU_BUDGET_AMEND", // approved WU-only additional allocation and atomic budget-block recovery
+  "WU_CONTRACT_BIND", // bind/normalize a historical WU without rewriting prior events
   "WU_ACTIVATE", // derive + activate a WU authorized by the mandate (JIT)
   "PHASE_START", // enter a budget phase (ACTIVE / WAITING_* / PAUSED)
   "PHASE_END", // leave a budget phase and settle its billable time
@@ -16,6 +20,8 @@ export const OPERATION_TYPES = Object.freeze([
   "DISPATCH_PREPARE", // reserved -> pending_launch (before a session id is known)
   "DISPATCH_LAUNCH_CLAIM", // pending_launch -> pending_launch (durably record a claimed launch attempt before the side effect)
   "DISPATCH_LAUNCH", // pending_launch/reserved -> launched, attach session id
+  "DISPATCH_HANDOFF", // bounded terminal tool evidence, not WU acceptance
+  "DISPATCH_USAGE", // runtime-observed worker envelope, never model-reported elapsed time
   "DISPATCH_FINISH", // launched -> finished, attach result
   "DISPATCH_RECONCILE", // finished -> result_reconciled, settle reservation into consumption
   "DISPATCH_RELEASE", // reserved/pending_launch (never launched) -> released, return reservation
@@ -31,6 +37,7 @@ export const OPERATION_TYPES = Object.freeze([
   "COMPLETE", // record EPIC_EXECUTION_VERIFIED (technical completion, not owner acceptance)
   "BIND_PR", // immutably bind a GitHub PR to the active WU's frozen candidate (repository, pr_number, head/base SHA)
   "RECORD_CI", // record exact-head CI evidence for one check, bound to a candidate (multiple checks per candidate)
+  "MERGE_ABORT", // abandon only a remotely closed, unmerged attempt
   "MERGE_START", // governed merge: evaluate structural gates and mark the merge started (no external side effect)
   "MERGE_EXTERNAL_RECORD", // human policy: record an already-performed external merge (source=HUMAN_EXTERNAL), never executes a merge
   "MERGE_RECORD", // record the remote merge result (merge_commit_sha + merged head) after the side effect
@@ -114,6 +121,7 @@ export const TERMINAL_BLOCKER_CLASSES = new Set([
 // transition after the underlying condition has been repaired. Hard-stop
 // blockers are deliberately excluded and cannot be cleared by this mechanism.
 export const RECOVERABLE_BLOCKER_CLASSES = new Set([
+  "NO_PROGRESS", // requires a changed durable execution evidence fingerprint
   "BLOCKED_TOOLING",
   "BLOCKED_EXTERNAL_FACT",
   "BLOCKED_ARCHITECTURE",

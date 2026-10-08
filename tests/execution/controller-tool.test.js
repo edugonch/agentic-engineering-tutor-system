@@ -1,3 +1,4 @@
+import { seedWuContract } from "./wu-fixture.js"
 import test from "node:test"
 import assert from "node:assert/strict"
 import { mkdtemp, rm, symlink, writeFile } from "node:fs/promises"
@@ -65,8 +66,9 @@ async function seedEpicArtifact(root, { artifactId = "epic-001", status = "APPRO
 }
 
 // Seed an approved Epic and approve a governed mandate from it (replaces legacy init for WU tests).
-async function governed(root, sid, executionId = "E1") {
+async function governed(root, sid, executionId = "E1", contract = CONTRACT) {
   await seedEpicArtifact(root)
+  await seedWuContract(root, "WU-01", "epic-001", 100, contract)
   await runExecutionController(root, { action: "approve_mandate", execution_id: executionId, session_id: sid, epic_artifact_id: "epic-001" })
 }
 
@@ -374,7 +376,7 @@ test("record_review PASS with incomplete verification coverage is rejected", asy
       { id: "lint", program: "node", args: ["-e", "process.exit(0)"] },
     ])
     const unitEvidence = await seedReceipt(root, candidate, { checkId: "unit", status: "PASS" })
-    await governed(root, sid)
+    await governed(root, sid, "E1", candidate.verification_contract)
     await runExecutionController(root, { action: "activate_wu", execution_id: "E1", session_id: sid, wu_id: "WU-01", mandate_id: "E1-MANDATE-001" })
     await runExecutionController(root, { action: "record_candidate", execution_id: "E1", session_id: sid, candidate_id: candidate.candidate_id })
     await assert.rejects(
@@ -420,6 +422,7 @@ test("approve_mandate with an approved Epic binds source authority and derives i
   await withRoot(async (root) => {
     const sid = "ses-1"
     await seedEpicArtifact(root, { status: "APPROVED", maxWus: 1, totalSeconds: 900 })
+    await seedWuContract(root)
     const res = await runExecutionController(root, { action: "approve_mandate", execution_id: "E1", session_id: sid, epic_artifact_id: "epic-001", max_wus: 50, total_seconds: 999999 })
     assert.equal(res.commit_status, "committed")
     assert.equal(res.source_artifact_id, "epic-001")
@@ -499,5 +502,33 @@ test("block contract rejects a missing class, missing reason, and an unknown cla
       runExecutionController(root, { action: "block", execution_id: "E1", session_id: sid, class: "REVIEW_ENVIRONMENT_BLOCKED", reason: "not a blocker class" }),
       /Unknown blocker class/,
     )
+  })
+})
+
+test("F08: same candidate can receive a fresh review without rewriting history", async () => {
+  await withRoot(async root => {
+    const sid = "ses-1", candidate = await seedCandidate(root)
+    await governed(root, sid)
+    await runExecutionController(root, { action: "activate_wu", execution_id: "E1", session_id: sid, wu_id: "WU-01", mandate_id: "E1-MANDATE-001" })
+    const base = { execution_id: "E1", session_id: sid, candidate_id: candidate.candidate_id }
+    await runExecutionController(root, { ...base, action: "record_candidate" })
+    const fail = await seedReceipt(root, candidate, { status: "FAIL" })
+    await runExecutionController(root, { ...base, action: "record_review", verdict: "CHANGES_REQUIRED", verification_evidence_ids: [fail] })
+    const pass = await seedReceipt(root, candidate)
+    const result = await runExecutionController(root, { ...base, action: "record_review", verdict: "PASS", verification_evidence_ids: [pass] })
+    assert.equal(result.reviews[candidate.candidate_id].verdict, "PASS")
+  })
+})
+
+test("F04/F12: original WU allocation is effective and arbitrary verification contracts are rejected", async () => {
+  await withRoot(async root => {
+    const sid = "ses-1"
+    await governed(root, sid)
+    const base = { execution_id: "E1", session_id: sid }
+    const active = await runExecutionController(root, { ...base, action: "activate_wu", wu_id: "WU-01", mandate_id: "E1-MANDATE-001" })
+    assert.equal(active.wu_budget.ceiling_seconds, 100)
+    await assert.rejects(runExecutionController(root, { ...base, action: "reserve", dispatch_id: "too-large", reserved_seconds: 101 }), /BUDGET/)
+    const candidate = await seedCandidateWithContract(root, [{ id: "invented", program: "node", args: ["-e", "process.exit(0)"] }])
+    await assert.rejects(runExecutionController(root, { ...base, action: "record_candidate", candidate_id: candidate.candidate_id }), /differs from the active WU/)
   })
 })
