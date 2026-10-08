@@ -33,7 +33,7 @@ runtime evidence, not from Phase-4 documentation.
 | Owner-approved Epic → execution mandate | Supported | `harness_execution_controller` action `approve_mandate`, `authority_kind: OWNER_APPROVED_EPIC` |
 | Derive + activate one WU under the mandate | Supported | action `activate_wu` (`origin: DERIVED`, `AUTHORIZED_BY_MANDATE`) |
 | Cumulative budget ledger (used/reserved/available), funded reservations | Supported | actions `reserve`/`reconcile`/`release` |
-| Dispatch lifecycle: reserve → prepare → launch → finish → reconcile; release and mark-ambiguous | Supported | actions `prepare_launch`, `record_launch`, `record_finish`, `reconcile`, `release`, `mark_ambiguous` |
+| Dispatch lifecycle: reserve → prepare → launch → finish → reconcile; release, mark-ambiguous, and evidence-backed ambiguous-launch identity recovery | Supported | actions `prepare_launch`, `record_launch`, `record_finish`, `reconcile`, `release`, `mark_ambiguous`, `resolve_ambiguous_launch` |
 | Append-only event log, fencing, CAS, lease, operation identity, restart replay/status/recover | Supported | `.harness/execution/controller/<id>/events.ndjson` |
 | Freeze an immutable content-addressed candidate bound to the active WU | Supported | `harness_freeze_candidate`, action `record_candidate` |
 | Deterministic verification with durable receipts | Supported | `harness_run_verification` (PASS requires full declared check coverage) |
@@ -41,6 +41,7 @@ runtime evidence, not from Phase-4 documentation.
 | Close one WU (PASS review + settled dispatches + current candidate) | Supported | action `complete_wu` |
 | Record a governed typed stop | Supported | action `block` (typed blocker classes) |
 | Read-only recovery/status/verify inspection | Supported | actions `status`, `recover`, `verify` |
+| Owner-directed ambiguous launch identity recovery (no relaunch) | Supported | `resolve_ambiguous_launch` requires exact external session identity + recovery evidence; reservation/budget preserved |
 
 ### 1.3 Supported autonomous happy path (the v1 ceiling)
 
@@ -77,9 +78,11 @@ This exact path was demonstrated at the frozen baseline by E01 / WU-01
 
 ## 3. Known limitations (v1)
 
-1. **No autonomous repair/recovery.** A real operational WU that gets
+1. **No autonomous repair/blocker-recovery loop.** A real operational WU that gets
    `CHANGES_REQUIRED` or hits a blocker stops and returns control to the owner.
-   This is the deliberate product boundary, not a bug to route around.
+   The narrow `resolve_ambiguous_launch` operation is not an autonomous repair
+   loop: it records an exact already-launched session identity after explicit
+   owner/external investigation and never relaunches work.
 2. **Phase-4 recovery liveness debt** is retained exactly as documented; it is
    not solved in v1 and must not be "worked around" by weakening anti-replay
    ownership.
