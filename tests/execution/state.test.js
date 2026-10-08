@@ -65,6 +65,51 @@ test("rejects forward execution after a terminal blocker", () => {
   assert.doesNotThrow(() => applyEvent(state, ev("CHECKPOINT", { note: "audit" }, 2, 3)))
 })
 
+test("AMBIGUOUS dispatch can be recovered only by binding an exact external session", () => {
+  let state = initialState()
+  state = applyEvent(state, ev("MANDATE_APPROVE", { mandate_id: "M1", max_wus: 2, total_seconds: 60 }, 0, 1))
+  state = applyEvent(state, ev("DISPATCH_RESERVE", { dispatch_id: "d1", reserved_seconds: 5 }, 1, 2))
+  state = applyEvent(state, ev("DISPATCH_PREPARE", { dispatch_id: "d1" }, 2, 3))
+  state = applyEvent(state, ev("DISPATCH_MARK_AMBIGUOUS", { dispatch_id: "d1" }, 3, 4))
+
+  const recovered = applyEvent(state, ev("DISPATCH_RESOLVE_AMBIGUOUS_LAUNCH", {
+    dispatch_id: "d1",
+    session_id: "ses-real-1",
+    recovery_evidence: "Recovered from the actual OpenCode child session identity.",
+  }, 4, 5))
+
+  assert.equal(recovered.dispatches.d1.status, "launched")
+  assert.equal(recovered.dispatches.d1.session_id, "ses-real-1")
+  assert.equal(recovered.dispatches.d1.reservation_status, "reserved")
+  assert.equal(recovered.budget.reserved_seconds, 5)
+  assert.equal(recovered.dispatches.d1.ambiguous_launch_recovery.session_id, "ses-real-1")
+})
+
+test("ambiguous-launch recovery fails closed outside AMBIGUOUS and requires evidence", () => {
+  let state = initialState()
+  state = applyEvent(state, ev("MANDATE_APPROVE", { mandate_id: "M1", max_wus: 2, total_seconds: 60 }, 0, 1))
+  state = applyEvent(state, ev("DISPATCH_RESERVE", { dispatch_id: "d1", reserved_seconds: 5 }, 1, 2))
+  assert.throws(
+    () => applyEvent(state, ev("DISPATCH_RESOLVE_AMBIGUOUS_LAUNCH", {
+      dispatch_id: "d1",
+      session_id: "ses-real-1",
+      recovery_evidence: "known",
+    }, 2, 3)),
+    /not ambiguous/,
+  )
+
+  state = applyEvent(state, ev("DISPATCH_PREPARE", { dispatch_id: "d1" }, 2, 3))
+  state = applyEvent(state, ev("DISPATCH_MARK_AMBIGUOUS", { dispatch_id: "d1" }, 3, 4))
+  assert.throws(
+    () => applyEvent(state, ev("DISPATCH_RESOLVE_AMBIGUOUS_LAUNCH", {
+      dispatch_id: "d1",
+      session_id: "ses-real-1",
+      recovery_evidence: "",
+    }, 4, 5)),
+    /recovery_evidence/,
+  )
+})
+
 test("a review cannot accredit a different candidate", () => {
   const events = [
     ev("MANDATE_APPROVE", { mandate_id: "M1", max_wus: 4, total_seconds: 60 }, 0, 1),
