@@ -130,6 +130,53 @@ test("ambiguous path: prepare_launch → mark_ambiguous → recover → verify",
   })
 })
 
+test("resolve_ambiguous_launch binds recovered session without relaunch or budget release", async () => {
+  await withRoot(async (root) => {
+    await runExecutionController(root, { action: "init", execution_id: "E1", session_id: "ses-1", total_seconds: 100 })
+    await runExecutionController(root, { action: "reserve", execution_id: "E1", session_id: "ses-1", dispatch_id: "d1", reserved_seconds: 5 })
+    await runExecutionController(root, { action: "prepare_launch", execution_id: "E1", session_id: "ses-1", dispatch_id: "d1" })
+    await runExecutionController(root, { action: "mark_ambiguous", execution_id: "E1", session_id: "ses-1", dispatch_id: "d1" })
+
+    const recovered = await runExecutionController(root, {
+      action: "resolve_ambiguous_launch",
+      execution_id: "E1",
+      session_id: "ses-1",
+      dispatch_id: "d1",
+      launch_session_id: "ses-real-1",
+      recovery_evidence: "Observed the actual external child session created by the original launch.",
+    })
+    assert.equal(recovered.commit_status, "committed")
+    assert.equal(recovered.dispatches[0].status, "launched")
+    assert.equal(recovered.dispatches[0].session_id, "ses-real-1")
+    assert.equal(recovered.budget.reserved_seconds, 5)
+
+    const replay = await runExecutionController(root, {
+      action: "resolve_ambiguous_launch",
+      execution_id: "E1",
+      session_id: "ses-1",
+      dispatch_id: "d1",
+      launch_session_id: "ses-real-1",
+      recovery_evidence: "Observed the actual external child session created by the original launch.",
+    })
+    assert.equal(replay.commit_status, "replayed")
+
+    await assert.rejects(
+      runExecutionController(root, {
+        action: "resolve_ambiguous_launch",
+        execution_id: "E1",
+        session_id: "ses-1",
+        dispatch_id: "d1",
+        launch_session_id: "ses-different",
+        recovery_evidence: "different claim",
+      }),
+      /not ambiguous/,
+    )
+
+    const v = await runExecutionController(root, { action: "verify", execution_id: "E1" })
+    assert.equal(v.passed, true)
+  })
+})
+
 test("a repeated reserve with the same dispatch_id is a replay, not a double reservation", async () => {
   await withRoot(async (root) => {
     await runExecutionController(root, { action: "init", execution_id: "E1", session_id: "ses-1", total_seconds: 100 })
