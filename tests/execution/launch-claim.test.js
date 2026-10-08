@@ -110,6 +110,31 @@ test("claimed PENDING_LAUNCH cannot be released; mark_ambiguous is the path", ()
   assert.equal(s2.dispatches.d1.status, DISPATCH_STATUS.AMBIGUOUS)
 })
 
+test("evidence-backed ambiguous recovery preserves the original launch claim provenance", () => {
+  const ev = makeBuilder()
+  const events = [
+    ev("MANDATE_APPROVE", MANDATE),
+    ...reservePrepare(ev, { claim: true }),
+    ev("DISPATCH_LAUNCH_CLAIM", { dispatch_id: "d1", call_id: "call-1" }),
+    ev("DISPATCH_MARK_AMBIGUOUS", { dispatch_id: "d1" }),
+  ]
+  const ambiguous = project(events)
+  assert.equal(ambiguous.dispatches.d1.launch_call_id, "call-1")
+
+  const resolved = applyEvent(
+    ambiguous,
+    nextEvent(ambiguous, "DISPATCH_RESOLVE_AMBIGUOUS_LAUNCH", {
+      dispatch_id: "d1",
+      session_id: "ses-recovered",
+      resolution_evidence: "owner matched the existing OpenCode session",
+    }),
+  )
+
+  assert.equal(resolved.dispatches.d1.status, DISPATCH_STATUS.LAUNCHED)
+  assert.equal(resolved.dispatches.d1.session_id, "ses-recovered")
+  assert.equal(resolved.dispatches.d1.launch_call_id, "call-1")
+})
+
 test("unclaimed PENDING_LAUNCH (guard rejection before subagent) is releasable", () => {
   const ev = makeBuilder()
   const events = [ev("MANDATE_APPROVE", MANDATE), ...reservePrepare(ev, { claim: true })]

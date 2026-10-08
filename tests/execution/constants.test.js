@@ -45,21 +45,28 @@ test("the launch-boundary names carry distinct meanings", () => {
 })
 
 test("TERMINAL_DISPATCH_STATUSES are exactly the absorbing statuses", () => {
-  // AMBIGUOUS is terminal for any auto-launch/retry; RESULT_RECONCILED and
-  // RELEASED are absorbing too. Pre-terminal statuses must NOT be terminal.
+  // RESULT_RECONCILED and RELEASED are absorbing. AMBIGUOUS remains a hard
+  // stop for automatic execution, but it is not absorbing: explicit
+  // evidence-backed recovery may bind the already-launched session identity.
   assert.deepEqual(
     [...TERMINAL_DISPATCH_STATUSES].sort(),
-    [DISPATCH_STATUS.RESULT_RECONCILED, DISPATCH_STATUS.RELEASED, DISPATCH_STATUS.AMBIGUOUS].sort(),
+    [DISPATCH_STATUS.RESULT_RECONCILED, DISPATCH_STATUS.RELEASED].sort(),
   )
-  for (const preTerminal of [DISPATCH_STATUS.RESERVED, DISPATCH_STATUS.PENDING_LAUNCH, DISPATCH_STATUS.LAUNCHED, DISPATCH_STATUS.FINISHED]) {
-    assert.equal(TERMINAL_DISPATCH_STATUSES.has(preTerminal), false)
+  for (const nonTerminal of [
+    DISPATCH_STATUS.RESERVED,
+    DISPATCH_STATUS.PENDING_LAUNCH,
+    DISPATCH_STATUS.LAUNCHED,
+    DISPATCH_STATUS.FINISHED,
+    DISPATCH_STATUS.AMBIGUOUS,
+  ]) {
+    assert.equal(TERMINAL_DISPATCH_STATUSES.has(nonTerminal), false)
   }
-  assert.equal(TERMINAL_DISPATCH_STATUSES.has(DISPATCH_STATUS.AMBIGUOUS), true)
 })
 
 test("OPERATION_TYPES includes the Phase 2 dispatch operations and stays unique", () => {
   assert.ok(OPERATION_TYPES.includes("DISPATCH_RELEASE"))
   assert.ok(OPERATION_TYPES.includes("DISPATCH_MARK_AMBIGUOUS"))
+  assert.ok(OPERATION_TYPES.includes("DISPATCH_RESOLVE_AMBIGUOUS_LAUNCH"))
   assert.ok(OPERATION_TYPES.includes("DISPATCH_RECONCILE"))
   // Typed vocab must not contain duplicate verbs.
   assert.equal(new Set(OPERATION_TYPES).size, OPERATION_TYPES.length)

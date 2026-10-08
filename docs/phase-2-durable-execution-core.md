@@ -376,3 +376,36 @@ capabilities, and any change to Phases 0–1 without a demonstrated regression.
    Keeps `LAUNCHED` meaning "identity known" unambiguous.
 3. **Runtime instrument → new `harness_execution_controller` tool.** The
    Phase 0 `harness_continuation_probe` stays frozen.
+
+## Post-V1 pilot refinement — evidence-backed ambiguous launch identity recovery
+
+A real LLM Learning pilot exposed one missing recovery transition: an external
+OpenCode session had been created successfully, the durable dispatch had already
+been conservatively marked `AMBIGUOUS`, and subsequent investigation established
+the exact external session identity. The original Phase 2 machine correctly
+forbade relaunch and release, but provided no governed way to record the newly
+known identity.
+
+The refinement is deliberately narrower than Phase-4 autonomous recovery:
+
+- `recover()` remains read-only classification.
+- `DISPATCH_LAUNCH` still accepts only the normal pre-launch states and never
+  accepts `AMBIGUOUS`.
+- `DISPATCH_RESOLVE_AMBIGUOUS_LAUNCH` is the only
+  `AMBIGUOUS → LAUNCHED` transition.
+- It requires an explicit non-empty external `session_id` and
+  `resolution_evidence`.
+- It records an already-happened external side effect; it performs no launch.
+- The existing reservation remains `RESERVED`; `used_seconds` and
+  `reserved_seconds` do not change.
+- The transition uses the ordinary append-only event log, operation identity,
+  CAS revision, lease, and fencing-token path.
+- A retry of the same operation is idempotent; conflicting evidence/session
+  payload under the same operation identity is rejected.
+- After resolution, ordinary `FINISH → RECONCILE` semantics apply.
+
+This does not reintroduce Phase-4 repair loops, blocker authority reset,
+`transfer_controller`, automatic session discovery, automatic relaunch, or
+automatic release. Without exact externally established identity, an
+`AMBIGUOUS` dispatch remains stopped for investigation.
+

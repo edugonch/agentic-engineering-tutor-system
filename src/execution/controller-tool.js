@@ -54,6 +54,8 @@ async function summary(controller) {
       reserved_seconds: d.reserved_seconds,
       reservation_status: d.reservation_status,
       actual_consumption: d.actual_consumption,
+      launch_call_id: d.launch_call_id ?? null,
+      ambiguity_resolution: d.ambiguity_resolution ?? null,
     })),
     fencing_token: lease?.fencing_token ?? null,
     blocker: state.blocker,
@@ -339,6 +341,22 @@ export async function runExecutionController(projectRoot, input, candidateRegist
     const launchSessionId = String(input.launch_session_id ?? "")
     if (!launchSessionId) throw new Error("record_launch requires launch_session_id (the external identity persisted at launch).")
     const res = await commitAction(controller, holder, `${executionId}:launch:${dispatchId}`, "DISPATCH_LAUNCH", { dispatch_id: dispatchId, session_id: launchSessionId })
+    return { action, commit_status: res.status, dispatch_id: dispatchId, ...(await summary(controller)) }
+  }
+
+  if (action === "resolve_ambiguous_launch") {
+    const dispatchId = requireDispatchId(input)
+    const launchSessionId = String(input.launch_session_id ?? "").trim()
+    const resolutionEvidence = String(input.resolution_evidence ?? "").trim()
+    if (!launchSessionId) throw new Error("resolve_ambiguous_launch requires launch_session_id (the externally established session identity).")
+    if (!resolutionEvidence) throw new Error("resolve_ambiguous_launch requires resolution_evidence.")
+    const res = await commitAction(
+      controller,
+      holder,
+      `${executionId}:resolve-ambiguous-launch:${dispatchId}`,
+      "DISPATCH_RESOLVE_AMBIGUOUS_LAUNCH",
+      { dispatch_id: dispatchId, session_id: launchSessionId, resolution_evidence: resolutionEvidence },
+    )
     return { action, commit_status: res.status, dispatch_id: dispatchId, ...(await summary(controller)) }
   }
 

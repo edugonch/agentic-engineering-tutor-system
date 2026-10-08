@@ -97,9 +97,12 @@ reserved → pending_launch → launched → finished
 - `operation_id` identifies the logical transition; `dispatch_id` identifies the
   concrete attempt; `session_id` is attached at launch.
 - The window between session creation and `session_id` persistence is an
-  **ambiguous-launch** hazard. Recovery therefore reconciles before relaunching:
-  `reconcileDispatch` reports status and a conservative `UNRESOLVED`/`COMPLETED`
-  verdict and **never** auto-relaunches.
+  **ambiguous-launch** hazard. Recovery never auto-relaunches or auto-releases
+  that attempt. If later investigation establishes the exact external session
+  identity, the dedicated `DISPATCH_RESOLVE_AMBIGUOUS_LAUNCH` transition
+  records that already-happened launch with explicit evidence and preserves the
+  reservation/budget; normal `DISPATCH_LAUNCH` remains invalid from
+  `AMBIGUOUS`.
 
 ## 7. Budget
 

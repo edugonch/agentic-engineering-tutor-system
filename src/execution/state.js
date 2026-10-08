@@ -437,6 +437,34 @@ export function applyEvent(previous, event) {
       break
     }
 
+    case "DISPATCH_RESOLVE_AMBIGUOUS_LAUNCH": {
+      const d = state.dispatches[body.dispatch_id]
+      if (!d) throw new Error(`Cannot resolve unknown dispatch ${body.dispatch_id} ambiguous launch.`)
+      if (d.status !== DISPATCH_STATUS.AMBIGUOUS) {
+        throw new Error(`Cannot resolve ambiguous launch for dispatch ${body.dispatch_id}: status ${d.status} is not ambiguous.`)
+      }
+      if (!body.session_id || String(body.session_id).trim() === "") {
+        throw new Error("DISPATCH_RESOLVE_AMBIGUOUS_LAUNCH requires session_id.")
+      }
+      if (!body.resolution_evidence || String(body.resolution_evidence).trim() === "") {
+        throw new Error("DISPATCH_RESOLVE_AMBIGUOUS_LAUNCH requires resolution_evidence.")
+      }
+      if (d.session_id && d.session_id !== body.session_id) {
+        throw new Error(`Cannot resolve dispatch ${body.dispatch_id}: existing session ${d.session_id} conflicts with ${body.session_id}.`)
+      }
+      d.status = DISPATCH_STATUS.LAUNCHED
+      d.session_id = body.session_id
+      d.ambiguity_resolution = {
+        evidence: body.resolution_evidence,
+        resolved_at: event.timestamp ?? null,
+        operation_id: event.operation_id,
+      }
+      // This is recovery of an already-happened external side effect, not a
+      // launch. The reservation remains held and budget consumption is
+      // unchanged until the ordinary finish/reconcile path settles it.
+      break
+    }
+
     case "FREEZE_CANDIDATE": {
       if (!body.candidate_id) throw new Error("FREEZE_CANDIDATE requires candidate_id.")
       if (!body.manifest_hash || !body.tree_hash) throw new Error("FREEZE_CANDIDATE requires manifest_hash and tree_hash.")
