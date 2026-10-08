@@ -1,3 +1,4 @@
+import { wuBudgetUsage } from "./wu-budget.js"
 // Durable execution controller. This is the Phase 0 seed of the control plane,
 // extended in Phase 2 into a recoverable execution machine.
 //
@@ -140,6 +141,22 @@ export async function createExecutionController({ root, dir, now = () => Date.no
         const { available_seconds } = deriveBudget(state.budget)
         if (requested > 0 && requested > available_seconds) {
           throw new Error(`BLOCKED_BUDGET: requested reservation ${requested} exceeds available ${available_seconds}.`)
+        }
+      }
+
+      // Admission only: historical reservations still replay unchanged.
+      // An amendment adds a WU ceiling without altering Epic accounting.
+      const wuId = state.dispatches[operation.body?.dispatch_id]?.wu_id ?? state.wu?.wu_id
+      const usage = wuId ? wuBudgetUsage(state, wuId) : null
+      if (usage?.ceiling_seconds !== null && usage?.ceiling_seconds !== undefined) {
+        if (operation.operation_type === "DISPATCH_RESERVE" && (operation.body?.reserved_seconds ?? 0) > usage.available_seconds) {
+          throw new Error("WU_BUDGET_EXHAUSTED: reservation exceeds the amended WU allocation")
+        }
+        if (["DISPATCH_PREPARE", "DISPATCH_LAUNCH_CLAIM", "DISPATCH_LAUNCH"].includes(operation.operation_type) && usage.available_seconds < 0) {
+          throw new Error("WU_BUDGET_EXHAUSTED: amended WU allocation overdrawn")
+        }
+        if (operation.operation_type === "PHASE_START" && operation.body?.phase === "ACTIVE" && usage.available_seconds <= 0) {
+          throw new Error("WU_BUDGET_EXHAUSTED: no allocation for a new billable phase")
         }
       }
 

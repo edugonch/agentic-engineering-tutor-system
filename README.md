@@ -322,3 +322,35 @@ Validation covers managed profile upgrade, a merged legacy project profile,
 custom limits, specialist isolation, and more than twelve simulated model/tool
 steps followed by a durable controller checkpoint. A real provider-backed run
 past step 12 remains a separate installed-runtime validation.
+
+### Applying an approved WU budget extension
+
+`BUDGET_EXHAUSTED` stops execution until new budget authority exists. Generic
+`clear_blocker` cannot remove it. Use the dedicated controller action
+`amend_wu_budget` with `execution_id` and `decision_artifact_id` referencing an
+immutable local APPROVED decision. Its content must contain exactly one line:
+
+```text
+wu_budget_amendment: {"execution_id":"alfran-epic03-continuation","mandate_id":"<actual mandate id>","wu_id":"WU063","blocked_at_revision":20,"expected_used_seconds":6000,"additional_seconds":8000,"epic_total_seconds":86400}
+```
+
+These are illustrative values: derive the mandate and blocker revision from
+`status` and the amount from explicit owner approval. The blocker revision is
+`blocker.at_revision`, not the current execution revision. For an already approved
+prose decision, record a new versioned decision with the structured line and an
+exact `source_refs` link to the original approval. This records existing authority;
+it does not require asking for the same approval again or replacing the original.
+
+The controller verifies the archived decision hash, execution, mandate, active
+WU, exact blocker, consumed baseline and remaining Epic capacity. All WU dispatches
+must be settled. One event records the new cumulative WU ceiling and clears that
+budget blocker. In the example, 6000 consumed plus 8000 newly authorized means a
+14000-second ceiling. No recorded charges, reservations, dispatch history, Epic
+total, scope or review/merge requirements are reset. Replays are idempotent and
+cannot clear a later blocker. `status.wu_budget` exposes effective amended capacity;
+new reservations are checked against both it and the Epic ceiling. Billable phases
+also contribute to WU usage; actual overruns remain auditable and block new work.
+Unamended WU contract limits remain governed by their existing artifact checks.
+
+Run `verify` after applying the amendment and continue the existing mandate.
+This action cannot extend an exhausted Epic or bypass permission/security stops.
