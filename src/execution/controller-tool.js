@@ -23,7 +23,7 @@ import { project, deriveBudget } from "./state.js"
 import { createExecutionController } from "./execution.js"
 import { createCandidateRegistry } from "./candidate-registry.js"
 import { readVerificationReceipt } from "./verification-results.js"
-import { findApprovedEpic, findApprovedWuBudgetAmendment, verifyDeclaredWorkUnits } from "../project-knowledge.js"
+import { findApprovedEpic, findApprovedWuBudgetAmendment, findApprovedAuthorityResolution, verifyDeclaredWorkUnits } from "../project-knowledge.js"
 import { DISPATCH_STATUS, RESERVATION_STATUS, MANDATE_AUTHORITY, RECOVERABLE_BLOCKER_CLASSES } from "./constants.js"
 
 function sanitizeId(raw, label) {
@@ -60,6 +60,7 @@ async function summary(controller) {
     fencing_token: lease?.fencing_token ?? null,
     blocker: state.blocker,
     last_blocker_resolution: state.last_blocker_resolution ?? null,
+    authority_resolutions: state.authority_resolutions ?? {},
     completed: state.completed,
     mandate: state.mandate,
     wu: state.wu,
@@ -316,6 +317,16 @@ export async function runExecutionController(projectRoot, input, candidateRegist
     }
   }
 
+  if (action === "resolve_authority_blocker") {
+    const authority = await findApprovedAuthorityResolution(projectRoot, String(input.decision_artifact_id ?? ""))
+    if (authority.resolution.execution_id !== executionId) throw new Error("Authority resolution execution_id mismatch")
+    const body = { ...authority.resolution, decision_content: authority.decision_content,
+      source_artifact_id: authority.source_artifact_id, source_record_key: authority.source_record_key, source_hash: authority.source_hash }
+    const res = await commitAction(controller, holder,
+      `${executionId}:authority-resolution:${authority.source_record_key}`, "AUTHORITY_RESOLVE", body)
+    return { action, commit_status: res.status, authority_resolution_receipt: body, ...(await summary(controller)) }
+  }
+
   if (action === "amend_wu_budget") {
     const authority = await findApprovedWuBudgetAmendment(projectRoot, String(input.decision_artifact_id ?? ""))
     if (authority.amendment.execution_id !== executionId) throw new Error("WU budget amendment execution_id mismatch")
@@ -520,6 +531,7 @@ export async function runExecutionController(projectRoot, input, candidateRegist
       throw new Error("clear_blocker requires an active blocker.")
     }
     if (!RECOVERABLE_BLOCKER_CLASSES.has(blocker.class)) {
+      if (blocker.class === "BLOCKED_AUTHORITY") throw new Error("clear_blocker cannot clear non-recoverable blocker BLOCKED_AUTHORITY. Use resolve_authority_blocker with the exact owner-approved decision; no renewed approval is needed when already granted.")
       throw new Error(`clear_blocker cannot clear non-recoverable blocker ${blocker.class}.${blocker.class === "BUDGET_EXHAUSTED" ? " For an owner-approved WU allocation within the existing Epic total, use amend_wu_budget with decision_artifact_id." : ""}`)
     }
     const operationId = `${executionId}:clear-blocker:${blocker.at_revision}`

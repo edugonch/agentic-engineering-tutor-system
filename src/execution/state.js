@@ -567,6 +567,26 @@ export function applyEvent(previous, event) {
       break
     }
 
+    case "AUTHORITY_RESOLVE": {
+      if (state.completed || !state.wu || state.wu.completed) throw new Error("AUTHORITY_RESOLVE requires an active incomplete WU")
+      if (state.mandate?.authority_kind !== MANDATE_AUTHORITY.OWNER_APPROVED_EPIC || body.mandate_id !== state.mandate.mandate_id || body.wu_id !== state.wu.wu_id || `${body.execution_id}:exec` !== state.execution_id) {
+        throw new Error("AUTHORITY_RESOLVE must match the execution, mandate and active WU")
+      }
+      if (state.blocker?.class !== "BLOCKED_AUTHORITY" || body.blocked_at_revision !== state.blocker.at_revision) throw new Error("AUTHORITY_RESOLVE must target the exact active BLOCKED_AUTHORITY blocker")
+      if (!body.source_artifact_id || !body.source_record_key || !/^[a-f0-9]{64}$/.test(body.source_hash ?? "") || typeof body.decision_content !== "string" || !body.decision_content.trim() || typeof body.resolution !== "string" || !body.resolution.trim()) {
+        throw new Error("AUTHORITY_RESOLVE requires approved decision provenance, content and resolution")
+      }
+      state.authority_resolutions ??= {}
+      state.authority_resolutions[body.wu_id] ??= []
+      const receipt = { ...body, blocker_reason: state.blocker.reason, at_revision: state.revision }
+      state.authority_resolutions[body.wu_id].push(receipt)
+      state.last_blocker_resolution = { class: state.blocker.class, blocked_at_revision: state.blocker.at_revision,
+        resolution: body.resolution, source_artifact_id: body.source_artifact_id, source_record_key: body.source_record_key,
+        source_hash: body.source_hash, at_revision: state.revision }
+      state.blocker = null
+      break
+    }
+
     case "CLEAR_BLOCKER": {
       if (!state.blocker) throw new Error("CLEAR_BLOCKER requires an active blocker.")
       if (!RECOVERABLE_BLOCKER_CLASSES.has(state.blocker.class)) {

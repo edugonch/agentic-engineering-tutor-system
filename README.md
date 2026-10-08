@@ -354,3 +354,31 @@ Unamended WU contract limits remain governed by their existing artifact checks.
 
 Run `verify` after applying the amendment and continue the existing mandate.
 This action cannot extend an exhausted Epic or bypass permission/security stops.
+
+### Applying an owner decision to an authority stop
+
+A `BLOCKED_AUTHORITY` stop remains in force until the owner resolves its question.
+Once that explicit decision exists, use `resolve_authority_blocker` on
+`harness_execution_controller` with `execution_id` and `decision_artifact_id`.
+Generic `clear_blocker` does not apply new authority. The local APPROVED decision
+must contain exactly one structured line (fill values from actual approval/status):
+
+```text
+authority_resolution: {"execution_id":"alfran-epic03-continuation","mandate_id":"<actual mandate>","wu_id":"WU063","blocked_at_revision":46,"resolution":"Owner authorizes transparent retrospective validation; full GREEN and fresh independent review remain required; no budget extension."}
+```
+
+For an existing prose approval, record a new versioned APPROVED decision linked
+by exact `source_refs` to the original, copying its complete conditions and adding
+the structured line. Do not request the same approval again or replace history.
+The controller checks archive integrity, execution, mandate, active WU and exact
+blocker revision. One event clears that authority stop and retains full approved
+decision content in `status.authority_resolutions[wu_id]`, including after restart.
+Replaying it cannot remove a later stop. No budget, scope, permission/security,
+candidate, verification, review, merge or completion state changes are implied.
+
+For a missed historical RED step, the owner may explicitly authorize retrospective
+validation without fabricating TDD history. Pass the recorded conditions and
+transparent deviation statement to builder and fresh reviewer. Correct failing
+tests and demonstrate the authorized evidence within remaining budget. Run `verify`
+after resolution and continue the existing mandate; no repeated owner approval is
+needed for the same resolved question. New evidence deficiencies still matter.

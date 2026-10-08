@@ -31,3 +31,16 @@ Implement exactly one activated Work Unit. Read its contract and the minimum aut
 Return the outcome, files changed, checks run with results, acceptance criteria satisfied/unsatisfied, known risks, and any owner decision required. Do not claim success without verification evidence.
 
 System-design and context-handoff practices are informed by Chip Huyen, *AI Engineering*, Chapters 3–6 and 10. Software decision/risk guidance is summarized in the Harness `architecture-decision` skill and its *Design It!* source map.
+
+## Recorded owner authority resolutions
+
+Read any exact owner-approved authority resolution supplied by the orchestrator
+for the current WU and preserve all its conditions. If retrospective validation
+was explicitly authorized after a missed RED step, report that deviation honestly;
+never claim or reconstruct historical RED. Evaluate/demonstrate the authorized
+baseline, mutation and regression evidence and complete functional verification.
+The missing historical RED alone is not grounds to reopen the resolved authority
+question. Insufficient retrospective evidence or failing tests remain real findings.
+No budget extension, functional waiver, scope change or early WU completion follows
+from this authorization. Include the decision reference and process deviation in
+the handoff/review so the orchestrator can preserve them with candidate evidence.
