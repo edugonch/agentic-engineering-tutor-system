@@ -1,3 +1,4 @@
+import { createSessionRecovery } from "./src/execution/session-recovery.js"
 import { createOrchestratorOwnership } from "./src/orchestrator-ownership.js"
 import { Plugin } from "@opencode/plugin"
 import { fileURLToPath } from "node:url"
@@ -67,6 +68,8 @@ export default Plugin.define({
       if (!projectRoot) throw new Error("OpenCode did not provide this plugin location's canonical project root.")
       return projectRoot
     }
+
+    const sessionRecovery = createSessionRecovery(ctx, requireProjectRoot())
 
     const candidateRegistry = createCandidateRegistry({ dir: join(requireProjectRoot(), ".harness", "execution") })
 
@@ -145,6 +148,7 @@ export default Plugin.define({
       await ownership.onPrompt(event)
       if (!continuation.isInternalPrompt(event.sessionID)) {
         guard.reset(event.sessionID)
+        sessionRecovery.reset()
       }
 
       // Shadow-mode Jev: one best-effort estimate per admitted user prompt.
@@ -202,7 +206,24 @@ export default Plugin.define({
               call_id: callId,
               session_id: event.sessionID,
             })
+            sessionRecovery.track({ ...binding, call_id: callId, session_id: event.sessionID })
           }
+        }
+      }
+    })
+
+    await ctx.tool.hook("execute.after", async (event) => {
+      const result = await sessionRecovery.afterTool(event)
+      if (result && event.status === "completed") {
+        // Preserve the original tool result and its session metadata.
+        const notice = `Harness launch tracking: ${JSON.stringify(result)}`
+        const content = event.result.content
+        event.result = {
+          ...event.result,
+          content: Array.isArray(content)
+            ? [...content, { type: "text", text: notice }]
+            : [content ?? "", notice].filter(Boolean).join("\n\n"),
+          metadata: { ...event.result.metadata, harness_recovery: result },
         }
       }
     })
@@ -223,6 +244,17 @@ export default Plugin.define({
     })
 
     await ctx.tool.transform((editor) => {
+      editor.add({
+        name: "harness_recover_dispatch_session",
+        description: "Recover one claimed dispatch using the exact OpenCode parent tool call and verified child identity. Persists identity or ambiguity, blocker and checkpoint in one bounded operation. Never launches, finishes, reconciles or releases budget. Missing context (including compaction) remains unresolved. Do not repeat an unresolved recovery without new evidence; unchanged attempts are cached for this turn.",
+        input: objectInput({
+          execution_id: { type: "string", minLength: 1 },
+          dispatch_id: { type: "string", minLength: 1 },
+        }, ["execution_id", "dispatch_id"]),
+        execute: async (input, context) => json(await sessionRecovery.recover({
+          ...input, session_id: context?.sessionID,
+        })),
+      })
       editor.add({
         name: "harness_initialize_project",
         description: "Create missing Harness governance, OpenCode agents, and skills in the current canonical project. Call only after the owner has reviewed and explicitly approved the project summary. Never overwrite existing files.",

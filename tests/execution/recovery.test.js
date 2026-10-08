@@ -119,11 +119,12 @@ test("recover() classifies dispatches into canonical categories without mutating
       ["launch-d3", "DISPATCH_LAUNCH", { dispatch_id: "d3", session_id: "ses-3" }], // launched
       ...dispatchToFinished("d4", 5), // finished
       ["res-d5", "DISPATCH_RESERVE", { dispatch_id: "d5", reserved_seconds: 5 }],
-      ["amb-d5", "DISPATCH_MARK_AMBIGUOUS", { dispatch_id: "d5" }], // ambiguous
       ...dispatchToFinished("d6", 5),
       ["rec-d6", "DISPATCH_RECONCILE", { dispatch_id: "d6", actual_consumption: 5 }], // reconciled
       ["res-d7", "DISPATCH_RESERVE", { dispatch_id: "d7", reserved_seconds: 5 }],
       ["rel-d7", "DISPATCH_RELEASE", { dispatch_id: "d7" }], // released
+      // Ambiguity prevents new dispatch admission, not historical classification.
+      ["amb-d5", "DISPATCH_MARK_AMBIGUOUS", { dispatch_id: "d5" }], // ambiguous
     ])
 
     const before = await controller.snapshot()

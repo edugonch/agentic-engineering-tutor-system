@@ -359,6 +359,12 @@ export async function runExecutionController(projectRoot, input, candidateRegist
     const dispatchId = requireDispatchId(input)
     const launchSessionId = String(input.launch_session_id ?? "")
     if (!launchSessionId) throw new Error("record_launch requires launch_session_id (the external identity persisted at launch).")
+    // Automatic runtime capture may have already bound this exact identity.
+    const existing = (await controller.snapshot()).state.dispatches[dispatchId]
+    if (existing?.session_id) {
+      if (existing.session_id !== launchSessionId) throw new Error("record_launch conflicts with the recorded child session identity.")
+      return { action, commit_status: "already_recorded", dispatch_id: dispatchId, ...(await summary(controller)) }
+    }
     const res = await commitAction(controller, holder, `${executionId}:launch:${dispatchId}`, "DISPATCH_LAUNCH", { dispatch_id: dispatchId, session_id: launchSessionId })
     return { action, commit_status: res.status, dispatch_id: dispatchId, ...(await summary(controller)) }
   }

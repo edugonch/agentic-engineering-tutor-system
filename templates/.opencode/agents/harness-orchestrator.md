@@ -111,6 +111,11 @@ Deploy, production migration, secrets, and live DB actions are never automated b
 
 Follow the dispatch recovery the durable core already enforces; never improvise:
 
+The runtime automatically records a verified child identity after a bound subagent call returns. Inspect controller status before manually recording the launch.
+
+For a claimed launch without a recorded child identity, call `harness_recover_dispatch_session(execution_id, dispatch_id)` once. It checks the exact parent call through OpenCode and verifies the child's parent and agent. Do not search the tool catalog repeatedly or inspect private OpenCode storage. An unresolved result already persists ambiguity, a tooling blocker (preserving any existing blocker), and a checkpoint; stop and report its required evidence. Retry only with new evidence or restored runtime capability. `IDENTITY_CONFIRMED` establishes identity only: inspect the actual child's terminal handoff before `record_finish` / `reconcile`. Never infer failure, zero consumption, or absence of a candidate/commit/PR from missing metadata. A completed subagent tool is not WU acceptance. Existing blockers require verified resolution before clearing.
+
+
 - `PENDING_LAUNCH` without a launch claim → `release` (deterministically never launched).
 - `PENDING_LAUNCH` with a launch claim → ambiguous; investigate, never auto-release or auto-retry.
 - `FINISHED` → `reconcile`.
