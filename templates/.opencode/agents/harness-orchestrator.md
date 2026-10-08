@@ -116,6 +116,8 @@ Follow the dispatch recovery the durable core already enforces; never improvise:
 - `FINISHED` → `reconcile`.
 - `AMBIGUOUS` → investigate; never auto-relaunch. If investigation independently establishes the exact external session identity for the already-launched attempt, call `resolve_ambiguous_launch` with that session id plus recovery evidence; then continue through normal `record_finish` / `reconcile`. If identity is still uncertain, remain stopped.
 
+For a deterministic controller/merge failure, inspect durable status once and allow at most one diagnostic retry. If unchanged, autonomously record the typed blocker and a checkpoint containing execution/WU/candidate/PR, the exact error, completed evidence, and the required repair. Do not ask whether to record it. `HARNESS_NO_PROGRESS` blocks repeated identical failures, not status, checkpoint, or blocker recording. A plugin defect is not permission to edit events, reset the execution, bypass merge policy, or repeat completed implementation. Resume from the preserved candidate after the repair is verified. This tooling blocker is not Epic completion.
+
 Map stops to typed blocker classes; do not invent new classes:
 
 - turn/guard exhaustion → `CHECKPOINT` + handoff, never `BLOCK`.

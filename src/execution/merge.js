@@ -65,6 +65,7 @@ export async function runMergeCandidate(projectRoot, { candidate_id, adapter, se
   }
 
   // Already verified → idempotent no-op.
+  if (state.merge && state.merge.candidate_id !== candidate_id) throw new Error("merge blocked: merge belongs to a different candidate.")
   if (state.merge?.status === "VERIFIED") return { status: "already_verified", execution_id }
 
   // A fresh start must pass the durable gate.
@@ -94,7 +95,7 @@ export async function runMergeCandidate(projectRoot, { candidate_id, adapter, se
   // (In a fresh run the gate was already checked above; in recovery the merge is
   // already STARTED or RECORDED, so this is a no-op.)
   if (!state.merge) {
-    await commitMerge(controller, session_id, `${execution_id}:merge-start`, "MERGE_START", {})
+    await commitMerge(controller, session_id, `${execution_id}:${candidate_id}:merge-start`, "MERGE_START", {})
   }
 
   // 4. Recovery: already merged remotely.
@@ -107,16 +108,16 @@ export async function runMergeCandidate(projectRoot, { candidate_id, adapter, se
       if (state.merge.merge_commit_sha !== pr.merge_commit_sha) {
         throw new Error(`merge verify failed: remote merge commit ${pr.merge_commit_sha} differs from recorded ${state.merge.merge_commit_sha}.`)
       }
-      await commitMerge(controller, session_id, `${execution_id}:merge-verify`, "MERGE_VERIFY", {})
+      await commitMerge(controller, session_id, `${execution_id}:${candidate_id}:merge-verify`, "MERGE_VERIFY", {})
       return { status: "recovered_existing_merge", execution_id, merge_commit_sha: pr.merge_commit_sha }
     }
     // STARTED (or a fresh run that just committed MERGE_START above): record the
     // existing remote merge, then verify.
-    await commitMerge(controller, session_id, `${execution_id}:merge-record:${pr.merge_commit_sha}`, "MERGE_RECORD", {
+    await commitMerge(controller, session_id, `${execution_id}:${candidate_id}:merge-record:${pr.merge_commit_sha}`, "MERGE_RECORD", {
       merge_commit_sha: pr.merge_commit_sha,
       merged_head_sha: binding.head_sha,
     })
-    await commitMerge(controller, session_id, `${execution_id}:merge-verify`, "MERGE_VERIFY", {})
+    await commitMerge(controller, session_id, `${execution_id}:${candidate_id}:merge-verify`, "MERGE_VERIFY", {})
     return { status: "recovered_existing_merge", execution_id, merge_commit_sha: pr.merge_commit_sha }
   }
 
@@ -142,7 +143,7 @@ export async function runMergeCandidate(projectRoot, { candidate_id, adapter, se
   if (!merged.merge_commit_sha) throw new Error("merge failed: no merge_commit_sha returned.")
 
   // 7. MERGE_RECORD (durable).
-  await commitMerge(controller, session_id, `${execution_id}:merge-record:${merged.merge_commit_sha}`, "MERGE_RECORD", {
+  await commitMerge(controller, session_id, `${execution_id}:${candidate_id}:merge-record:${merged.merge_commit_sha}`, "MERGE_RECORD", {
     merge_commit_sha: merged.merge_commit_sha,
     merged_head_sha: binding.head_sha,
   })
@@ -155,7 +156,7 @@ export async function runMergeCandidate(projectRoot, { candidate_id, adapter, se
   if (after.merge_commit_sha !== merged.merge_commit_sha) throw new Error(`merge verify failed: remote merge commit ${after.merge_commit_sha} differs from recorded ${merged.merge_commit_sha}.`)
 
   // 9. MERGE_VERIFY (durable).
-  await commitMerge(controller, session_id, `${execution_id}:merge-verify`, "MERGE_VERIFY", {})
+  await commitMerge(controller, session_id, `${execution_id}:${candidate_id}:merge-verify`, "MERGE_VERIFY", {})
 
   return { status: "merged", execution_id, merge_commit_sha: merged.merge_commit_sha }
 }
@@ -178,6 +179,7 @@ export async function runVerifyExternalMerge(projectRoot, { candidate_id, adapte
   }
 
   // Already verified → idempotent no-op.
+  if (state.merge && state.merge.candidate_id !== candidate_id) throw new Error("merge blocked: merge belongs to a different candidate.")
   if (state.merge?.status === "VERIFIED") return { status: "already_verified", execution_id }
 
   // A fresh start must pass the human gate.
@@ -214,17 +216,17 @@ export async function runVerifyExternalMerge(projectRoot, { candidate_id, adapte
     if (state.merge.merge_commit_sha !== pr.merge_commit_sha) {
       throw new Error(`external merge verify failed: remote merge commit ${pr.merge_commit_sha} differs from recorded ${state.merge.merge_commit_sha}.`)
     }
-    await commitMerge(controller, session_id, `${execution_id}:merge-verify`, "MERGE_VERIFY", {})
+    await commitMerge(controller, session_id, `${execution_id}:${candidate_id}:merge-verify`, "MERGE_VERIFY", {})
     return { status: "verified_external_merge", execution_id, merge_commit_sha: pr.merge_commit_sha }
   }
 
   // 5. null → MERGE_EXTERNAL_RECORD → MERGE_VERIFY (never STARTED, never merge()).
-  await commitMerge(controller, session_id, `${execution_id}:merge-external-record:${pr.merge_commit_sha}`, "MERGE_EXTERNAL_RECORD", {
+  await commitMerge(controller, session_id, `${execution_id}:${candidate_id}:merge-external-record:${pr.merge_commit_sha}`, "MERGE_EXTERNAL_RECORD", {
     merge_commit_sha: pr.merge_commit_sha,
     merged_head_sha: binding.head_sha,
     observed_base_sha: pr.base_sha ?? null,
   })
-  await commitMerge(controller, session_id, `${execution_id}:merge-verify`, "MERGE_VERIFY", {})
+  await commitMerge(controller, session_id, `${execution_id}:${candidate_id}:merge-verify`, "MERGE_VERIFY", {})
 
   return { status: "verified_external_merge", execution_id, merge_commit_sha: pr.merge_commit_sha }
 }

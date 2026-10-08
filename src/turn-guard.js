@@ -23,6 +23,7 @@ export const GUARD_ERROR_CODES = Object.freeze({
   TOOL_CALL_LIMIT_EXCEEDED: "HARNESS_TOOL_CALL_LIMIT_EXCEEDED",
   DELEGATION_LIMIT_EXCEEDED: "HARNESS_DELEGATION_LIMIT_EXCEEDED",
   REPEATED_MUTATION: "HARNESS_REPEATED_MUTATION",
+  NO_PROGRESS: "HARNESS_NO_PROGRESS",
 })
 
 function guardError(code, message) {
@@ -68,6 +69,7 @@ function stableStringify(value) {
 
 export function createTurnGuard(settings = readGuardSettings()) {
   const turns = new Map()
+  const failures = new Map()
 
   function stateFor(sessionID) {
     const key = sessionID || "unknown-session"
@@ -104,7 +106,35 @@ export function createTurnGuard(settings = readGuardSettings()) {
         state.identicalCount = 0
       }
     },
+    // Wrap the actual Harness call: reads/checkpoints do not erase failures.
+    // Two identical failures permit diagnosis; the third attempt is refused.
+    // This cannot interrupt reasoning inside an outstanding provider request.
+    async runHarness(sessionID, tool, args, run) {
+      const key = sessionID || "unknown-session"
+      const signature = `${tool}:${stableStringify(args)}`
+      const prior = failures.get(key)?.get(signature)
+      if (prior?.count >= 2) {
+        throw guardError(GUARD_ERROR_CODES.NO_PROGRESS, "Harness repeated failure without progress. Record BLOCKED_TOOLING/checkpoint with the original error and required recovery; do not retry unchanged input or ask permission to record the blocker.")
+      }
+      try {
+        const result = await run()
+        const auditOnly = ["status", "verify", "recover", "checkpoint", "block"].includes(args?.action)
+        if ((!auditOnly && result?.commit_status === "committed") ||
+            ["merged", "recovered_existing_merge", "verified_external_merge"].includes(result?.status)) {
+          failures.delete(key)
+        }
+        return result
+      } catch (error) {
+        const byAction = failures.get(key) ?? new Map()
+        const message = String(error?.message ?? error)
+        byAction.set(signature, { message, count: prior?.message === message ? prior.count + 1 : 1 })
+        failures.set(key, byAction)
+        throw error
+      }
+    },
     reset(sessionID) {
+      if (sessionID) failures.delete(sessionID)
+      else failures.clear()
       if (sessionID) turns.delete(sessionID)
       else turns.clear()
     },

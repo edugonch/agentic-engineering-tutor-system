@@ -135,3 +135,30 @@ test("resets only the selected session", () => {
     /exceeded 1 tool calls/,
   )
 })
+
+test('Harness no-progress guard survives status/checkpoint and permits blocker recording', async () => {
+  const guard = createTurnGuard()
+  let calls = 0
+  const args = { action: 'bind_pr', candidate_id: 'c2' }
+  const fail = () => { calls++; throw new Error('already bound') }
+  for (let n = 0; n < 2; n++) {
+    await assert.rejects(guard.runHarness('s', 'harness_execution_controller', args, fail), /already bound/)
+    await guard.runHarness('s', 'harness_execution_controller', { action: 'status' }, async () => ({}))
+    await guard.runHarness('s', 'harness_execution_controller', { action: 'checkpoint' }, async () => ({ commit_status: 'committed' }))
+  }
+  await assert.rejects(guard.runHarness('s', 'harness_execution_controller', args, fail), { code: 'HARNESS_NO_PROGRESS' })
+  assert.equal(calls, 2)
+  await guard.runHarness('s', 'harness_execution_controller', { action: 'block' }, async () => ({ commit_status: 'committed' }))
+  await guard.runHarness('s', 'harness_execution_controller', { action: 'clear_blocker' }, async () => ({ commit_status: 'committed' }))
+  await assert.rejects(guard.runHarness('s', 'harness_execution_controller', args, fail), /already bound/)
+})
+
+test('Harness no-progress guard isolates sessions and does not trip on successful retries', async () => {
+  const guard = createTurnGuard()
+  for (let n = 0; n < 8; n++) await guard.runHarness('s', 'harness_merge_candidate', { candidate_id: 'c1' }, async () => ({ status: 'already_verified' }))
+  const fail = async () => { throw new Error('drift') }
+  for (let n = 0; n < 2; n++) await assert.rejects(guard.runHarness('s', 'harness_merge_candidate', { candidate_id: 'c2' }, fail))
+  await assert.rejects(guard.runHarness('other', 'harness_merge_candidate', { candidate_id: 'c2' }, fail), /drift/)
+  guard.reset('s')
+  await assert.rejects(guard.runHarness('s', 'harness_merge_candidate', { candidate_id: 'c2' }, fail), /drift/)
+})
