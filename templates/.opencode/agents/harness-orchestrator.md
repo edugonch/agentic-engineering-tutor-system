@@ -114,7 +114,7 @@ Follow the dispatch recovery the durable core already enforces; never improvise:
 - `PENDING_LAUNCH` without a launch claim → `release` (deterministically never launched).
 - `PENDING_LAUNCH` with a launch claim → ambiguous; investigate, never auto-release or auto-retry.
 - `FINISHED` → `reconcile`.
-- `AMBIGUOUS` → investigate; never auto-relaunch.
+- `AMBIGUOUS` → investigate; never auto-relaunch or auto-release. If owner/external investigation establishes the exact already-launched external session identity, use `resolve_ambiguous_launch` with that `launch_session_id` and explicit `resolution_evidence`. This records an already-happened launch fact; it must not create a new launch. If exact identity is not established, stop and return control to the owner.
 
 Map stops to typed blocker classes; do not invent new classes:
 
