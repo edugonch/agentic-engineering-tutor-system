@@ -30,7 +30,7 @@ liveness defect; it is not part of v1. See
 This is an early implementation, not a production automation system. Version 0.1 provides:
 
 - OpenCode plugin tools to initialize new or imported projects, inventory existing projects and knowledge archives, preserve local/external research snapshots with provenance, search/read project knowledge selectively, record linked research/spec/story artifacts, validate Epic/WU contracts, and search the packaged reference library.
-- Automatic global provisioning of the four specialist profiles (`harness-builder`, `harness-researcher`, `harness-reviewer`, `harness-designer`) when the plugin loads after install/update. Managed profiles are refreshed on plugin updates only when unchanged; user-owned or customized profiles are preserved. Provisioning changes OpenCode's global `agents/` directory, not project files.
+- Automatic global provisioning of the primary `harness-orchestrator` and the four specialist profiles (`harness-builder`, `harness-researcher`, `harness-reviewer`, `harness-designer`) when the plugin loads after install/update. Managed profiles are refreshed on plugin updates only when unchanged; user-owned or customized profiles are preserved. Provisioning changes OpenCode's global `agents/` directory, not project files.
 - A read-only runtime preflight that checks `harness-builder` and `harness-reviewer` are loaded as subagents before activation. The plugin also hard-gates approved activation records and denies actual launches of those Harness roles through OpenCode's permission hook when readiness is missing or unknown.
 - OpenCode-native orchestrator, builder, researcher, designer, and reviewer profiles, installed into the target project on explicit initialization. The designer is selected only for user-facing UI work within an activated WU.
 - OpenCode-native skills for new-project intake, existing-project import, architecture decisions, story/Epic design, bounded research, and WU authoring.
@@ -66,7 +66,7 @@ Confirm the package appears with `opencode plugin list`. If it does not, inspect
 2. The orchestrator conducts adaptive intake about the problem, intended outcome, MVP, constraints, users, and success evidence.
 3. Review the proposed project story and charter. The plugin must not initialize files until you approve the summary.
 4. After approval, the orchestrator calls `harness_initialize_project` with `project_type: new` and `owner_confirmed: true`. The default `initialization_scope: full` creates the complete project-local scaffold, only where files are missing. If the owner authorized project governance but not project-local supporting files, use `initialization_scope: governance_only`; the plugin's global specialists remain available independently.
-5. Restart OpenCode or start a new session, select `harness-orchestrator`, and review the generated governance. Before asking to activate a WU, run `harness_check_agent_readiness`. If a required specialist is still absent or the runtime inventory is unknown, keep the WU unactivated and report the provisioning error. Recheck immediately before delegation.
+5. Reload OpenCode after updating the plugin. `/harness` selects the real primary `harness-orchestrator` before submitting intake; `/harness resume <execution or Epic>` resumes existing work without repeating intake. Review the generated governance. Before asking to activate a WU, run `harness_check_agent_readiness`. If a required specialist is still absent or the runtime inventory is unknown, keep the WU unactivated and report the provisioning error. Recheck immediately before delegation.
 6. Define a finite first Epic with an owner-approved WU count and terminal demo/acceptance condition.
 
 ## Bring an existing project under governance
@@ -195,3 +195,38 @@ The Jev integration uses the OpenCode V2 `prompt` admission hook, keyed by `mess
 ## Compatibility
 
 This initial implementation targets OpenCode V2. OpenCode documents V1 and V2 as separate plugin APIs; V1 plugin implementations do not run in V2. Verify the installed OpenCode release against the official [V2 plugin](https://opencode.ai/v2/docs/build/plugins), [agent](https://opencode.ai/v2/docs/agents), [skill](https://opencode.ai/v2/docs/skills), and [configuration](https://opencode.ai/v2/docs/config) references before production use.
+
+
+### Primary orchestrator ownership
+
+`/harness` verifies the loaded primary profile, switches the existing root session
+with OpenCode V2 `session.switchAgent`, confirms the selected agent, and then
+submits intake with the existing attachments. `/harness resume <execution/Epic>`
+uses a continuation prompt instead. Ownership is persisted in plugin storage;
+subsequent user prompts restore the orchestrator in that owned root session.
+Other sessions and the user's model selection are unchanged.
+
+A direct `harness_*` tool or Harness specialist launch from generic `build`
+transfers the root session, then rejects the original call with
+`HARNESS_HANDOFF_REQUIRED`. OpenCode must issue a subsequent provider turn under
+the orchestrator before it can decide the next operation. Already emitted calls
+retain their originating runtime agent identity and cannot impersonate the newly
+selected agent. Pending shell/edit calls from the previous agent are also blocked
+after takeover. Actions that already started before takeover cannot be undone.
+
+The orchestrator owns governance mutations, integration, and closure. Child
+specialists under the orchestrator retain read tools; builder/designer can freeze
+candidates, and builder/designer/reviewer can run declared verification. They
+cannot activate/close WUs, change mandates, record governance, or perform merges.
+The root runtime session ID supplies the controller lease holder; an input cannot
+impersonate a different holder. Missing identity/profile/switch support fails
+closed. Custom profiles are preserved, and a disabled or non-primary orchestrator
+must be repaired before takeover can succeed.
+
+Compatibility reference: published `@opencode/plugin` 2.0.24 type declarations
+(`promise/tool.d.ts`: immutable origin `agent` on execute.before) and official V2
+session API. Unit tests use a simulated runtime and do not establish live behavior
+of a busy OpenCode session. Before rollout, check the installed plugin in a real
+runtime: idle and busy build sessions, old pending calls, next-turn agent identity,
+specialist delegation/verification, and restart recovery. No full Epic scheduler
+or provider-request interruption is introduced by this routing correction.
