@@ -348,6 +348,27 @@ export async function runExecutionController(projectRoot, input, candidateRegist
     return { action, commit_status: res.status, dispatch_id: dispatchId, ...(await summary(controller)) }
   }
 
+  if (action === "resolve_ambiguous_launch") {
+    const dispatchId = requireDispatchId(input)
+    const launchSessionId = String(input.launch_session_id ?? "")
+    if (!launchSessionId) throw new Error("resolve_ambiguous_launch requires launch_session_id (the independently recovered external session identity).")
+    const recoveryEvidence = String(input.recovery_evidence ?? "")
+    if (!recoveryEvidence.trim()) throw new Error("resolve_ambiguous_launch requires recovery_evidence describing how the exact session identity was established.")
+    const operationId = `${executionId}:resolve-ambiguous-launch:${dispatchId}:${launchSessionId}`
+    const res = await commitAction(controller, holder, operationId, "DISPATCH_RESOLVE_AMBIGUOUS_LAUNCH", {
+      dispatch_id: dispatchId,
+      session_id: launchSessionId,
+      recovery_evidence: recoveryEvidence,
+    })
+    return {
+      action,
+      commit_status: res.status,
+      dispatch_id: dispatchId,
+      launch_session_id: launchSessionId,
+      ...(await summary(controller)),
+    }
+  }
+
   if (action === "record_finish") {
     const dispatchId = requireDispatchId(input)
     const result = input.result ?? null
