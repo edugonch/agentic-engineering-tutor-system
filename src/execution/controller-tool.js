@@ -16,6 +16,7 @@
 // AMBIGUOUS hazard: recovery marks AMBIGUOUS and never auto-launches.
 
 import { join } from "node:path"
+import { stableHash } from "./serialize.js"
 import { readLog, validateLog } from "./event-log.js"
 import { project, deriveBudget } from "./state.js"
 import { createExecutionController } from "./execution.js"
@@ -64,6 +65,8 @@ async function summary(controller) {
     candidates: state.candidates,
     reviews: state.reviews,
     pr_binding: state.pr_binding ?? null,
+    pr_bindings: state.pr_bindings ?? {},
+    merges: state.merges ?? {},
     ci_evidence: state.ci_evidence ?? {},
     merge: state.merge ?? null,
     checkpoint: state.checkpoint,
@@ -117,6 +120,24 @@ async function verify(controller) {
 
 // A single mutating action routed through commit() with a freshly-acquired
 // lease and a freshly-read revision (compare-and-swap still guards races).
+// Observations can recur after a change (CI SUCCESS -> FAILURE -> SUCCESS,
+// or a new blocker after clearing one). Reuse only the latest applicable event;
+// select and commit under the same lease/revision so concurrent changes fail CAS.
+async function commitObservation(controller, holder, prefix, type, body, matches, active = () => true) {
+  const lease = await controller.acquire(holder)
+  const snap = await controller.snapshot()
+  if (type === "BLOCK" && snap.state.blocker &&
+      (snap.state.blocker.class !== body.class || snap.state.blocker.reason !== body.reason)) {
+    throw new Error("BLOCK: an active blocker cannot be replaced; resolve it through clear_blocker when permitted.")
+  }
+  const prior = snap.events.findLast(event => event.operation_type === type && matches(event.body))
+  const replay = prior && active(snap.state) && stableHash(prior.body) === stableHash(body)
+  const operation_id = replay ? prior.operation_id : `${prefix}:${snap.state.revision}:${stableHash(body)}`
+  return controller.commit({ operation_id, operation_type: type, body }, {
+    holder_session_id: holder, expected_revision: snap.state.revision, lease_fencing_token: lease.fencing_token,
+  })
+}
+
 async function commitAction(controller, holder, operation_id, operation_type, body) {
   const lease = await controller.acquire(holder)
   const snap = await controller.snapshot()
@@ -444,7 +465,7 @@ export async function runExecutionController(projectRoot, input, candidateRegist
     if (!cls) throw new Error("block requires class (a BLOCKER_CLASSES value).")
     const reason = String(input.reason ?? "")
     if (!reason) throw new Error("block requires reason (a human-readable explanation of the stop).")
-    const res = await commitAction(controller, holder, `${executionId}:block`, "BLOCK", { class: cls, reason })
+    const res = await commitObservation(controller, holder, `${executionId}:block`, "BLOCK", { class: cls, reason }, () => true, state => Boolean(state.blocker))
     return { action, commit_status: res.status, ...(await summary(controller)) }
   }
 
@@ -509,7 +530,7 @@ export async function runExecutionController(projectRoot, input, candidateRegist
   }
 
   if (action === "bind_pr") {
-    const res = await commitAction(controller, holder, `${executionId}:bind-pr:${input.pr_number}`, "BIND_PR", {
+    const res = await commitAction(controller, holder, `${executionId}:bind-pr:${stableHash({ candidate_id: input.candidate_id, repository: input.repository, pr_number: input.pr_number })}`, "BIND_PR", {
       repository: String(input.repository ?? ""),
       pr_number: Number(input.pr_number),
       candidate_id: String(input.candidate_id ?? ""),
@@ -521,13 +542,13 @@ export async function runExecutionController(projectRoot, input, candidateRegist
   }
 
   if (action === "record_ci") {
-    const res = await commitAction(controller, holder, `${executionId}:record-ci:${input.check_identity}`, "RECORD_CI", {
+    const res = await commitObservation(controller, holder, `${executionId}:record-ci`, "RECORD_CI", {
       candidate_id: String(input.candidate_id ?? ""),
       head_sha: String(input.head_sha ?? ""),
       check_identity: String(input.check_identity ?? ""),
       conclusion: String(input.conclusion ?? ""),
       evidence_ref: input.evidence_ref ?? null,
-    })
+    }, body => body.candidate_id === String(input.candidate_id ?? "") && body.check_identity === String(input.check_identity ?? ""))
     return { action, commit_status: res.status, ...(await summary(controller)) }
   }
 

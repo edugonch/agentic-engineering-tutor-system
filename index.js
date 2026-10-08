@@ -470,7 +470,8 @@ export default Plugin.define({
               throw new Error(`A launch binding is already pending for ${agent}; consume or release it before preparing another launch.`)
             }
           }
-          const result = await runExecutionController(requireProjectRoot(), input, candidateRegistry)
+          const result = await guard.runHarness(context?.sessionID ?? input.session_id, "harness_execution_controller", input,
+            () => runExecutionController(requireProjectRoot(), input, candidateRegistry))
           // Wave B: after a successful prepare_launch with a named launch_agent,
           // register the ephemeral launch binding so the runtime can claim the
           // exact dispatch at the execute.before boundary of the next subagent.
@@ -495,11 +496,12 @@ export default Plugin.define({
         }, ["candidate_id"]),
         execute: async (input, context) => {
           const adapter = createGitHubAdapter({ token: process.env.HARNESS_GITHUB_TOKEN ?? "" })
-          const result = await runMergeCandidate(requireProjectRoot(), {
-            candidate_id: String(input.candidate_id ?? ""),
-            adapter,
-            session_id: context?.sessionID,
-          })
+          const result = await guard.runHarness(context?.sessionID, "harness_merge_candidate", input,
+            () => runMergeCandidate(requireProjectRoot(), {
+              candidate_id: String(input.candidate_id ?? ""),
+              adapter,
+              session_id: context?.sessionID,
+            }))
           return json(result)
         },
       })
@@ -512,11 +514,12 @@ export default Plugin.define({
         }, ["candidate_id"]),
         execute: async (input, context) => {
           const adapter = createGitHubAdapter({ token: process.env.HARNESS_GITHUB_TOKEN ?? "" })
-          const result = await runVerifyExternalMerge(requireProjectRoot(), {
-            candidate_id: String(input.candidate_id ?? ""),
-            adapter,
-            session_id: context?.sessionID,
-          })
+          const result = await guard.runHarness(context?.sessionID, "harness_verify_external_merge", input,
+            () => runVerifyExternalMerge(requireProjectRoot(), {
+              candidate_id: String(input.candidate_id ?? ""),
+              adapter,
+              session_id: context?.sessionID,
+            }))
           return json(result)
         },
       })

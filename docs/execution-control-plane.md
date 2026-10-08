@@ -165,3 +165,52 @@ and a second test introduces `permission.rejected` expecting
 `state = BLOCKED_PERMISSION`, additional dispatches = 0, alternative execution
 attempts = 0, budget and checkpoint preserved. Any failure or unproven property
 is `PHASE_0 = FAIL`.
+
+## Multiple WUs and recovery of existing integrations
+
+Bindings and merge receipts are indexed by candidate (`pr_bindings`, `merges`);
+`pr_binding` and `merge` remain the selected integration for compatibility.
+Selecting a fresh PASS-reviewed candidate preserves the earlier binding/merge.
+A successor may be selected after its predecessor WU completed and any merge was
+verified. A replacement within the same WU is allowed only before a merge starts.
+An in-progress merge cannot be discarded by binding another candidate.
+
+The indexes rebuild by replaying existing events, including logs with the old
+execution-wide merge operation IDs. No log rewrite, reset, unbind command, or
+manual state-file edit is needed. New merge operations include candidate identity.
+CI observations are scoped to candidate/check and may advance from PENDING to
+SUCCESS (or a new run); only the latest identical observation is replayed. Blocker
+retries replay within the active episode; clearing one permits a new episode,
+including the same reason. An active blocker cannot be replaced or downgraded.
+
+For an existing execution stuck at the second PR:
+
+1. Install the corrected plugin revision through the normal plugin installer or,
+   once merged into the configured branch, the normal plugin update workflow.
+   Reload/restart the OpenCode server so the new code is actually loaded.
+2. Run controller `status` and `verify`. Confirm the existing execution, active WU,
+   recorded candidate/PASS review, previous verified merge, and external PR/head.
+3. If a recoverable tooling blocker is active, clear it with evidence that the
+   corrected plugin is loaded. Never clear terminal blockers or change policy.
+4. Retry `bind_pr` for the existing new candidate and exact PR/head/base. Record
+   its actual CI evidence, use the mandate's merge/verification tool, then
+   `complete_wu`. Continue only through the approved WU sequence.
+
+Do not recreate the WU, candidate, or PR just to bypass stale integration state.
+The regression fixture covers a completed predecessor and an already activated
+successor with legacy operation IDs, asserting the event-log prefix is unchanged.
+It does not claim access to a user's live OpenCode process or repository state.
+
+### Repeated tooling failures
+
+The controller and both merge tools now use a per-session runtime failure guard.
+Two identical errors for identical tool input are allowed for diagnosis; a third
+attempt raises `HARNESS_NO_PROGRESS`. Status reads, checkpoints, and blocker
+recording remain available and do not erase the failure count. A successful
+non-audit durable mutation, successful merge, or new user turn resets it.
+This guard is ephemeral and cannot interrupt reasoning within a provider request,
+recognize every equivalent paraphrase, or implement the full Epic continuation
+loop. The orchestrator template requires prompt blocker/checkpoint recording
+without asking permission already granted by the mandate. Existing customized
+or project-local agent profiles are not overwritten by this runtime correction;
+compare them with the packaged template when updating those profiles.

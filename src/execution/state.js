@@ -100,6 +100,9 @@ export function initialState() {
     dispatches: {}, // dispatch_id -> { status, session_id, operation_id, result, reconciled }
     candidates: {}, // candidate_id -> { manifest_hash, tree_hash, manifest }
     reviews: {}, // candidate_id -> { verdict, candidate_hashes, reviewer }
+    pr_bindings: {}, // immutable bindings indexed by candidate; rebuilt from legacy events
+    merges: {}, // merge history indexed by candidate
+    completed_wus: {}, // WU completion receipts
     pr_binding: null, // { repository, pr_number, candidate_id, head_sha, base_branch, base_sha, at_revision }
     ci_evidence: {}, // candidate_id -> check_identity -> { head_sha, conclusion, evidence_ref, observed_at }
     merge: null, // { status, candidate_id, repository, pr_number, expected_head_sha, expected_base_sha, started_at_revision, merge_commit_sha, merged_head_sha, verified_at_revision }
@@ -584,7 +587,19 @@ export function applyEvent(previous, event) {
           existing.base_branch === binding.base_branch &&
           existing.base_sha === binding.base_sha
         if (!same) {
-          throw new Error(`BIND_PR: already bound to repository ${existing.repository} PR #${existing.pr_number} head ${existing.head_sha}; rebinding a different PR/head requires a new candidate and review.`)
+          const previousCandidate = state.candidates[existing.candidate_id]
+          const priorComplete = state.completed_wus?.[previousCandidate?.wu_id]
+          const sameWuReplacement = previousCandidate?.wu_id === candidate.wu_id && !state.merge
+          const completedPredecessor = priorComplete && (!state.merge ||
+            (state.merge.status === "VERIFIED" && state.merge.candidate_id === existing.candidate_id))
+          if (existing.candidate_id === binding.candidate_id || state.pr_bindings?.[binding.candidate_id] ||
+              !state.wu || state.wu.completed || state.reviews[binding.candidate_id]?.verdict !== "PASS" ||
+              (!sameWuReplacement && !completedPredecessor)) {
+            throw new Error(`BIND_PR: already bound to repository ${existing.repository} PR #${existing.pr_number} head ${existing.head_sha}; replacement requires a new reviewed candidate and a settled predecessor (no merge in progress).`)
+          }
+          // Archive is retained below/on earlier events. Selecting a new candidate
+          // must never inherit the previous candidate's verified merge.
+          state.merge = null
         }
       }
       state.pr_binding = binding
@@ -725,6 +740,8 @@ export function applyEvent(previous, event) {
       }
       state.wu.completed = true
       state.wu.completion = { candidate_id: candidateId, at_revision: state.revision }
+      state.completed_wus ??= {}
+      state.completed_wus[state.wu.wu_id] = structuredClone(state.wu.completion)
       break
     }
 
@@ -750,6 +767,13 @@ export function applyEvent(previous, event) {
     default:
       throw new Error(`Unhandled operation type: ${event.operation_type}.`)
   }
+
+  // Derived indexes also rebuild when replaying pre-index event logs. Never
+  // rewrite events or discard the active aliases used by older clients.
+  state.pr_bindings ??= {}
+  state.merges ??= {}
+  if (state.pr_binding) state.pr_bindings[state.pr_binding.candidate_id] = structuredClone(state.pr_binding)
+  if (state.merge) state.merges[state.merge.candidate_id] = structuredClone(state.merge)
 
   assertBudgetInvariants(state.budget)
 
