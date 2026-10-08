@@ -109,11 +109,19 @@ Domain notes:
 - A restart replays durable records; use `status`/`recover` to resume safely.
 - Unknown launch outcomes are marked ambiguous and are never assumed
   never-launched.
+- An `AMBIGUOUS` dispatch is never auto-relaunched or auto-released. If
+  owner/external investigation later establishes the exact already-launched
+  session identity, `resolve_ambiguous_launch` may bind that identity with
+  explicit recovery evidence while preserving the reservation and budget.
 
 ## 7. What happens on `CHANGES_REQUIRED` or `BLOCKED`
 
 **Harness v1 stops. Control returns to the owner.** There is no autonomous repair
-or recovery in v1.
+or blocker-recovery loop in v1. The one narrow exception is evidence-backed
+launch-identity recovery: after owner/external investigation establishes the
+exact session for an already-launched `AMBIGUOUS` dispatch, the controller may
+record that fact through `resolve_ambiguous_launch`; it does not relaunch work,
+change scope, or authorize a repair cycle.
 
 - `CHANGES_REQUIRED`: the reviewer verdict and findings are recorded immutably.
   The orchestrator reports the WU, candidate, findings and budget, then stops.
@@ -132,7 +140,7 @@ Return control to the owner — and take no further autonomous action — whenev
 1. a reviewer returns anything other than PASS;
 2. any blocker/terminal stop is recorded;
 3. the budget is exhausted or a required next execution cannot be funded;
-4. a launch outcome is ambiguous or unknown;
+4. a launch outcome is ambiguous or unknown and exact external session identity has not yet been established;
 5. scope, a verification contract, or a mandate would need to change;
 6. a required check is missing;
 7. readiness is missing/unknown;
