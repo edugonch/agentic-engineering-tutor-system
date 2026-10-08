@@ -19,6 +19,7 @@ export const OPERATION_TYPES = Object.freeze([
   "DISPATCH_RECONCILE", // finished -> result_reconciled, settle reservation into consumption
   "DISPATCH_RELEASE", // reserved/pending_launch (never launched) -> released, return reservation
   "DISPATCH_MARK_AMBIGUOUS", // reserved/pending_launch -> ambiguous (identity unknown); reservation stays held
+  "DISPATCH_RESOLVE_AMBIGUOUS_LAUNCH", // ambiguous -> launched after exact external session identity is independently recovered
   "FREEZE_CANDIDATE", // pin an immutable candidate (manifest hash + tree hash), bound to the active WU
   "RECORD_REVIEW", // bind a review verdict to one exact candidate's hashes
   "WU_COMPLETE", // close one WU: candidate + PASS review + settled dispatches (distinct from EPIC COMPLETE)
