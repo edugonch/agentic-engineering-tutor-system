@@ -69,6 +69,8 @@ const checks = [
   "src/execution/continuation-driver.js",
   "src/execution/controller-tool.js",
   "src/execution/session-recovery.js",
+  "src/execution/dispatch-handoff.js",
+  "tests/execution/dispatch-handoff.test.js",
   "tests/execution/session-recovery.test.js",
   "src/execution/verification-workspace.js",
   "src/execution/verification.js",

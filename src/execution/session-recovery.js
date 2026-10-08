@@ -131,7 +131,7 @@ export function createSessionRecovery(ctx, projectRoot) {
       // accepted WU output, consumption, or absence of a candidate/commit/PR.
       const result = { status: "IDENTITY_CONFIRMED", child_session_id: childID, evidence: proof,
         observed_tool_status: evidence.metadata?.status ?? null,
-        next_action: "Inspect the exact child's handoff and terminal evidence before record_finish/reconcile. Clear any tooling blocker only after verifying its resolution." }
+        next_action: "Call harness_read_dispatch_handoff with this execution_id and dispatch_id to read the exact child's handoff and terminal evidence. Then verify its outcome before record_finish/reconcile; clear only a tooling blocker whose cause is resolved." }
       await checkpoint(result)
       return { ...base, ...result, revision: snap.state.revision, dispatch_status: dispatch.status, reservation_status: dispatch.reservation_status }
     })
