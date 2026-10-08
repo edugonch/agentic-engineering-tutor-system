@@ -230,3 +230,50 @@ of a busy OpenCode session. Before rollout, check the installed plugin in a real
 runtime: idle and busy build sessions, old pending calls, next-turn agent identity,
 specialist delegation/verification, and restart recovery. No full Epic scheduler
 or provider-request interruption is introduced by this routing correction.
+
+### Recovering a claimed subagent launch
+
+The runtime records a prepared dispatch's launch claim before `subagent` runs.
+The `execute.after` hook now verifies the returned child with OpenCode
+`session.get` and records its identity automatically. It preserves the original
+subagent result. A later manual `record_launch` for the same child is a no-op;
+a different identity is rejected.
+
+For an interrupted launch, the primary orchestrator calls:
+
+```text
+harness_recover_dispatch_session(execution_id, dispatch_id)
+```
+
+The tool reads the original parent's `session.context`, finds exactly the claimed
+`subagent` call, and validates its structured `metadata.sessionID`, agent and
+child-parent relationship. It never searches arbitrary text for session IDs.
+Each runtime read has a five-second timeout. It does not poll running children.
+An unresolved result durably marks ambiguity, preserves any existing blocker
+(or creates `BLOCKED_TOOLING`), and records a checkpoint in the same tool call.
+Repeated unresolved requests against unchanged controller state are cached for
+the current prompt. A new user prompt permits a fresh investigation.
+
+Controller admission rejects new reservations, preparations and launch claims
+for the same WU while another dispatch has an unresolved launch identity.
+Historical event replay and identical operation replay remain supported.
+Recovery never finishes or reconciles the child, releases its reservation,
+clears existing blockers, or declares the WU complete. `IDENTITY_CONFIRMED` is
+only a session association: inspect the child's actual terminal handoff before
+recording its result and consumption.
+
+OpenCode's plugin `session.context` exposes messages after the last compaction.
+If the original call is absent, the child cannot be identified by this adapter;
+it remains blocked with its reservation intact. A crash between child creation
+and OpenCode persisting progress metadata can also remain unresolved. This
+change does not promise recovery without evidence or automatic full-Epic
+continuation after step exhaustion; `steps: 12` remains unchanged.
+
+Contract audit: `@opencode/plugin` and `@opencode/schema` 2.0.25, plus OpenCode
+V2 `packages/core/src/tool/plugin/subagent.ts` (blob
+`91512015ec87417813bf21a2cf7ddb2ecc8f5d54`). Tests exercise the real durable
+controller with simulated runtime responses. Before declaring live validation,
+verify in an installed OpenCode runtime: normal foreground launch, interrupted
+launch recovered from progress metadata after restart, and missing/compacted
+call producing a durable blocker/checkpoint. An authenticated OpenCode runtime
+was not available in the development environment.

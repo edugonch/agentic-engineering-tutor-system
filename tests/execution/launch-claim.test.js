@@ -157,9 +157,10 @@ const STEPS = [
   ["mandate", "MANDATE_APPROVE", { mandate_id: "M1", max_wus: 4, total_seconds: 100 }],
   ["res-d1", "DISPATCH_RESERVE", { dispatch_id: "d1", reserved_seconds: 5 }],
   ["prep-d1", "DISPATCH_PREPARE", { dispatch_id: "d1", prepared_by_session_id: "A", expected_agent: "harness-reviewer", claim_required: true }],
-  ["claim-d1", "DISPATCH_LAUNCH_CLAIM", { dispatch_id: "d1", call_id: "call-1" }],
   ["res-d2", "DISPATCH_RESERVE", { dispatch_id: "d2", reserved_seconds: 5 }],
   ["prep-d2", "DISPATCH_PREPARE", { dispatch_id: "d2" }],
+  // New work must be prepared before another launch becomes ambiguous.
+  ["claim-d1", "DISPATCH_LAUNCH_CLAIM", { dispatch_id: "d1", call_id: "call-1" }],
 ]
 
 test("recover classifies claimed pending as AMBIGUOUS and unclaimed as NEVER_LAUNCHED, without mutating", async () => {

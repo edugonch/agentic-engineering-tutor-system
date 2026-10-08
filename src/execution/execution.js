@@ -121,6 +121,17 @@ export async function createExecutionController({ root, dir, now = () => Date.no
         return { status: "replayed", revision: state.revision, state, result: existing.result ?? null }
       }
 
+      // Admission only: preserve replay of historical logs. Never create or
+      // launch replacement work while this WU has an unresolved launch identity.
+      if (["DISPATCH_RESERVE", "DISPATCH_PREPARE", "DISPATCH_LAUNCH_CLAIM"].includes(operation.operation_type)) {
+        const target = state.dispatches[operation.body?.dispatch_id]
+        const wu = target?.wu_id ?? state.wu?.wu_id ?? null
+        const ambiguous = Object.entries(state.dispatches).find(([dispatchID, d]) =>
+          dispatchID !== operation.body?.dispatch_id && (d.wu_id ?? null) === wu &&
+          (d.status === "ambiguous" || (d.status === "pending_launch" && d.launch_call_id)))
+        if (ambiguous) throw new Error(`HARNESS_UNRESOLVED_LAUNCH: recover dispatch ${ambiguous[0]} before authorizing more work for this WU.`)
+      }
+
       // Budget authorization ceiling: the ledger may describe debt (over-budget
       // history is reconstructible), but the controller may not authorize new
       // debt. Only new reservations are gated; reconcile/phase billing are not.
