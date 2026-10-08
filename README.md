@@ -22,7 +22,10 @@ owner-approved Epic → derived/authorized WU → real builder → frozen candid
 
 On `CHANGES_REQUIRED` or a blocker, control returns to the owner. Phase-4
 autonomous bounded repair/recovery is EXPERIMENTAL / NOT RELEASED and has a known
-liveness defect; it is not part of v1. See
+liveness defect; it is not part of v1. V1 does support one narrow owner-directed
+crash-recovery operation: when investigation establishes the exact session for an
+already-launched `AMBIGUOUS` dispatch, `resolve_ambiguous_launch` durably binds
+that identity without relaunching or changing budget. See
 [`docs/phase-4-final-status.md`](docs/phase-4-final-status.md).
 
 ## Current scope
