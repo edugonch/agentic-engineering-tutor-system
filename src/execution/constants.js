@@ -60,14 +60,14 @@ export const DISPATCH_STATUS = Object.freeze({
 // distinct so no two states can silently alias:
 //   PENDING_LAUNCH   = we are before/during the launch boundary.
 //   LAUNCHED         = launch confirmed AND external identity known.
-//   AMBIGUOUS        = the side effect may have occurred, but we do not have
-//                      enough identity; never auto-launch/retry from here.
+//   AMBIGUOUS        = the side effect may have occurred, but identity is not
+//                      yet durably known; never auto-launch/retry. It may move
+//                      to LAUNCHED only through explicit evidence-backed recovery.
 //   FINISHED         = the identified execution terminated (result attached).
 //   RESULT_RECONCILED = the result has been durably incorporated.
 export const TERMINAL_DISPATCH_STATUSES = new Set([
   DISPATCH_STATUS.RESULT_RECONCILED,
   DISPATCH_STATUS.RELEASED,
-  DISPATCH_STATUS.AMBIGUOUS,
 ])
 
 // Reservation sub-state, independent of the dispatch lifecycle. A dispatch may
