@@ -126,7 +126,7 @@ The orchestrator can delegate only to its named Harness specialists, each of whi
 
 ## Cost and loop controls
 
-OpenCode provides a `steps` limit per agent. The orchestrator's permissions allow only the named Harness subagents; each specialist is denied subagent use. The plugin adds an optional maximum number of tool calls per session run, a delegation ceiling, a repeated mutation/delegation-call detector, an optional pre-request output-token cap, and a retry ceiling.
+OpenCode supports an optional `steps` limit per agent. The Harness orchestrator has no default step limit; specialist profiles retain their existing limits. The orchestrator's permissions allow only the named Harness subagents; each specialist is denied subagent use. The plugin adds an optional maximum number of tool calls per session run, a delegation ceiling, a repeated mutation/delegation-call detector, an optional pre-request output-token cap, and a retry ceiling.
 
 These controls reduce runaway work; they do **not** guarantee a maximum token or dollar cost. V2's request hook can cap agent-loop output tokens, but this plugin cannot reliably account for provider-specific input usage and total USD across agents and auxiliary requests. Set provider-side spending limits as a second control. See [`docs/architecture.md`](docs/architecture.md).
 
@@ -134,12 +134,13 @@ Environment overrides:
 
 | Variable | Default | Effect |
 |---|---:|---|
+| `HARNESS_ORCHESTRATOR_MAX_STEPS` | Unset | Optional positive model-step limit for the orchestrator, including an intentional value of 12 |
 | `HARNESS_MAX_TOOL_CALLS` | Disabled (unlimited) | Optional tool executions allowed in one OpenCode session run; when unset or empty, no total tool-call ceiling is enforced |
 | `HARNESS_MAX_DELEGATIONS` | Disabled (unlimited) | Optional calls to OpenCode's `subagent` tool allowed in one session run; when unset or empty, no delegation ceiling is enforced |
 | `HARNESS_MAX_IDENTICAL_MUTATIONS` | `4` | Consecutive identical `subagent`, `bash`, `write`, `edit`, `patch`, or `apply_patch` calls before the circuit breaker trips |
 | `HARNESS_MAX_OUTPUT_TOKENS` | Disabled | Optional upper bound for each agent-loop response; when set, OpenCode receives this output-token limit |
 
-Each OpenCode session, including each subagent session, has its own counters; a new prompt resets that session's action budget. Total tool calls and subagent delegations are unlimited by default; when `HARNESS_MAX_TOOL_CALLS` or `HARNESS_MAX_DELEGATIONS` is explicitly set, that per-session ceiling gives a finite action bound, while agent `steps` limits usually stop earlier. This is not a precise dollar ceiling: input-token use and provider-side retries/cost reporting can vary. Configure provider spending limits as a second control.
+Each OpenCode session, including each subagent session, has its own counters; a new prompt resets that session's action budget. Total tool calls and subagent delegations are unlimited by default; when `HARNESS_MAX_TOOL_CALLS` or `HARNESS_MAX_DELEGATIONS` is explicitly set, that per-session ceiling gives a finite action bound, while explicitly configured agent limits may stop earlier. This is not a precise dollar ceiling: input-token use and provider-side retries/cost reporting can vary. Configure provider spending limits as a second control.
 
 ## Full-Epic execution mandates
 
@@ -267,7 +268,7 @@ If the original call is absent, the child cannot be identified by this adapter;
 it remains blocked with its reservation intact. A crash between child creation
 and OpenCode persisting progress metadata can also remain unresolved. This
 change does not promise recovery without evidence or automatic full-Epic
-continuation after step exhaustion; `steps: 12` remains unchanged.
+continuation after an explicitly configured step limit is exhausted.
 
 Contract audit: `@opencode/plugin` and `@opencode/schema` 2.0.25, plus OpenCode
 V2 `packages/core/src/tool/plugin/subagent.ts` (blob
@@ -277,3 +278,28 @@ verify in an installed OpenCode runtime: normal foreground launch, interrupted
 launch recovered from progress metadata after restart, and missing/compacted
 call producing a durable blocker/checkpoint. An authenticated OpenCode runtime
 was not available in the development environment.
+
+
+### Orchestrator step-limit migration
+
+The old `steps: 12` default interrupted valid orchestration before recovery or
+closure could finish. The packaged primary profile now omits `steps`. On load,
+a runtime agent transform also removes exactly `12` from `harness-orchestrator`
+after profile merging, so old project copies cannot silently restore the legacy
+cutoff. This does not rewrite local files or change other agents, permissions,
+models, budgets, or prompts. Other configured step values remain unchanged.
+To intentionally retain 12 (or choose another positive limit), set
+`HARNESS_ORCHESTRATOR_MAX_STEPS`. Invalid values fail explicitly.
+
+After plugin update/reload, `harness_check_agent_readiness` includes
+`orchestrator_steps`: `no_step_limit` with `effective_steps: null`,
+`configured_step_limit` with its value, or `unknown` when inspection failed.
+A configured cap still removes tools at the final model step. No automatic
+prompt/resubmission loop is added. Completion, real blockers, budget admission,
+permission boundaries and existing no-progress guards remain in effect.
+The budget ledger does not meter every orchestrator read or provider token.
+
+Validation covers managed profile upgrade, a merged legacy project profile,
+custom limits, specialist isolation, and more than twelve simulated model/tool
+steps followed by a durable controller checkpoint. A real provider-backed run
+past step 12 remains a separate installed-runtime validation.

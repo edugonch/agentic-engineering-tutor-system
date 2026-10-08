@@ -1,3 +1,4 @@
+import { registerOrchestratorSteps, inspectOrchestratorSteps } from "./src/orchestrator-steps.js"
 import { createSessionRecovery } from "./src/execution/session-recovery.js"
 import { createOrchestratorOwnership } from "./src/orchestrator-ownership.js"
 import { Plugin } from "@opencode/plugin"
@@ -93,9 +94,15 @@ export default Plugin.define({
       }
     }
 
+    // Agent transforms run against merged runtime definitions, including old
+    // project copies that the file provisioner correctly leaves untouched.
+    await registerOrchestratorSteps(ctx.agent, process.env)
+    await ctx.agent.reload()
+
     const currentWorkUnitAgentReadiness = async () => ({
       ...(await checkWorkUnitAgentReadiness(ctx.agent)),
       profile_provisioning: agentProvisioning,
+      orchestrator_steps: await inspectOrchestratorSteps(ctx.agent),
     })
 
     // Jev shadow-mode decision experiment. Disabled by default; opt-in via

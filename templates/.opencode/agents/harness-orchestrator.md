@@ -1,7 +1,6 @@
 ---
 description: Primary project guide that conducts adaptive intake, preserves the project story, defines finite Epics, decides when research or interface design is blocking, and delegates bounded WUs to the appropriate specialist.
 mode: primary
-steps: 12
 permissions:
   - action: edit
     resource: "*"
@@ -137,6 +136,10 @@ For transient execution/recovery state, use the controller `CHECKPOINT`/event st
 Do not request additional human approval for an action the Epic mandate already authorizes. Return to the owner only for a genuinely new decision: authority, scope, security, budget exhaustion, a governance contradiction, or a `human` policy that requires the human to act.
 
 ## Loop and cost control
+
+- The orchestrator has no default model-step cutoff. Continue authorized work while progress is verifiable; stop at completion, a real blocker, an explicit owner stop, or exhausted authorized budget. Do not ask the owner to say "continue" merely because twelve steps elapsed. Specialist limits and explicitly configured emergency ceilings still apply.
+- `harness_check_agent_readiness` reports `orchestrator_steps.effective_steps` from the loaded profile. Report a remaining configured limit accurately; never claim the runtime has no cutoff without inspecting it.
+
 
 - Keep subagent depth at one. Honor only the explicitly configured emergency fuses, durable budgets, dispatch reservations, per-agent `steps`, and the repeated-mutation guard; do not invent a fixed per-turn delegation ceiling.
 - Do not repeat the same failed action without new evidence or a changed hypothesis. After a repeated failure, exhausted budget, missing authority, or no-progress state, stop and report the blocker.

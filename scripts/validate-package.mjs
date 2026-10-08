@@ -8,6 +8,8 @@ const checks = [
   "index.js",
   "src/bootstrap-command.js",
   "src/orchestrator-ownership.js",
+  "src/orchestrator-steps.js",
+  "tests/orchestrator-steps.test.js",
   "tests/orchestrator-ownership.test.js",
   "tests/bootstrap-command.test.js",
   "tests/agent-readiness.test.js",
@@ -112,7 +114,9 @@ for (const path of await filesIn("templates/.opencode/skills")) {
 for (const path of await filesIn("templates/.opencode/agents")) {
   const content = await readFile(join(root, path), "utf8")
   if (!content.startsWith("---\n") || !/^mode:\s*(primary|subagent)\s*$/m.test(content)) errors.push(`${relative(root, path)}: missing OpenCode agent frontmatter/mode`)
-  if (!/^steps:\s*[1-9][0-9]*\s*$/m.test(content)) errors.push(`${relative(root, path)}: missing finite steps limit`)
+  if (path.endsWith("/harness-orchestrator.md")) {
+    if (/^steps:/m.test(content.split("---")[1] ?? "")) errors.push(`${relative(root, path)}: orchestrator must not ship a default steps limit`)
+  } else if (!/^steps:\s*[1-9][0-9]*\s*$/m.test(content)) errors.push(`${relative(root, path)}: missing finite steps limit`)
   if (/^permission:/m.test(content)) errors.push(`${relative(root, path)}: V2 agent permissions must use "permissions" (plural)`)
 }
 

@@ -19,7 +19,7 @@ Import starts with `harness_analyze_existing_project`, a bounded read-only inven
 
 The orchestrator is the only primary Harness role. It conducts adaptive project intake, maintains story continuity, checks governance state, chooses a bounded specialist, and reports back to the owner. The builder implements general software WUs. The designer handles a UI-centric WU or returns a bounded design contract when a mixed WU has a material interface decision. The researcher answers a single blocking question read-only. The reviewer independently assesses the defined changeset read-only. Specialists do not recursively delegate or change roadmap authority.
 
-The orchestrator's V2 `subagent` permission rules allow only the named Harness specialists, and each specialist is denied subagent use. Per-agent `steps` put a ceiling on agentic iterations. The plugin caps V2 `subagent` delegations and all tool calls per user-prompt session run.
+The orchestrator's V2 `subagent` permission rules allow only the named Harness specialists, and each specialist is denied subagent use. Specialist profiles retain model-step ceilings; the orchestrator has no default step cutoff. Delegation and total tool-call ceilings are opt-in.
 
 ## Architecture uncertainty and verification
 
@@ -33,11 +33,11 @@ Three layers are used:
 
 1. **Contract limits:** finite Epic WU budget, one outcome per WU, no child WUs, stop/rebase states.
 2. **OpenCode limits:** configured `steps` and `subagent_depth` restrict iterations/delegation depth.
-3. **Plugin circuit breaker:** V2 `tool.execute.before` counts tool actions per OpenCode session run, caps subagent delegations, and trips on repeated identical mutation/delegation calls. An opt-in V2 session `context` hook can cap output tokens before agent-loop model requests, including tool continuations; `retry` limits provider retries.
+3. **Plugin circuit breaker:** V2 `tool.execute.before` counts tool actions per OpenCode session run, optionally caps subagent delegations, and trips on repeated identical mutation/delegation calls. An opt-in V2 session `context` hook can cap output tokens before agent-loop model requests, including tool continuations; `retry` limits provider retries.
 
 The `context` hook can reduce each agent-loop model request's `maxTokens` to `HARNESS_MAX_OUTPUT_TOKENS` when the request asks for more or does not set a cap. It is disabled by default because output-token options can map to provider-specific request parameters that a model endpoint may reject. Enable it only after verifying compatibility with every provider/model route in use. V2 documents this hook as running before the agent loop, including tool-driven continuations. It does not include every auxiliary request or reliably sum provider-specific input tokens and USD across primary and subagent calls. The owner/provider must set a provider-side spending limit for a real dollar ceiling. Prompts alone are not a cost control.
 
-Each subagent gets a separate OpenCode session and therefore a separate tool-call counter; the parent session caps how many specialists it can invoke. Agent `steps` usually makes the real bound lower. When a circuit breaker throws, the orchestrator should stop, summarize the action count/budget state, and return the blocker. Do not automatically retry the denied action. A new user prompt starts a fresh session-run budget.
+Each subagent gets a separate OpenCode session and therefore a separate tool-call counter; the parent session can optionally cap how many specialists it invokes. Explicit agent step limits can stop a session earlier. When a circuit breaker throws, the orchestrator should stop, summarize the action count/budget state, and return the blocker. Do not automatically retry the denied action. A new user prompt starts a fresh session-run budget.
 
 ## Jev shadow-mode decision experiment
 
