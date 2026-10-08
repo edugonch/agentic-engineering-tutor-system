@@ -73,6 +73,7 @@ const checks = [
   "src/execution/wu-budget.js",
   "tests/execution/dispatch-handoff.test.js",
   "tests/execution/wu-budget-amendment.test.js",
+  "tests/execution/authority-resolution.test.js",
   "tests/execution/session-recovery.test.js",
   "src/execution/verification-workspace.js",
   "src/execution/verification.js",

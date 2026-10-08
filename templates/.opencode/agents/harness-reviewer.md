@@ -36,3 +36,16 @@ You may re-run verification, but only against a frozen candidate and only the ch
 ## Output
 
 For a changeset, return `PASS`, `CHANGES_REQUIRED`, or `BLOCKED`. For an architecture decision, return `DESIGN_SOUND`, `DESIGN_CONCERNS`, or `BLOCKED`. List findings by severity with file/line or source evidence, impact, and a focused correction suggestion. Confirm which criteria/scenarios were checked, which verification checks were run and their results, and what remains unverified. State explicitly that the result is a challenge, not owner approval. A reviewer does not approve its own correction; the orchestrator decides whether an in-scope correction can proceed within the same WU budget.
+
+## Recorded owner authority resolutions
+
+Read any exact owner-approved authority resolution supplied by the orchestrator
+for the current WU and preserve all its conditions. If retrospective validation
+was explicitly authorized after a missed RED step, report that deviation honestly;
+never claim or reconstruct historical RED. Evaluate/demonstrate the authorized
+baseline, mutation and regression evidence and complete functional verification.
+The missing historical RED alone is not grounds to reopen the resolved authority
+question. Insufficient retrospective evidence or failing tests remain real findings.
+No budget extension, functional waiver, scope change or early WU completion follows
+from this authorization. Include the decision reference and process deviation in
+the handoff/review so the orchestrator can preserve them with candidate evidence.

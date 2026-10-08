@@ -26,6 +26,7 @@ export const OPERATION_TYPES = Object.freeze([
   "WU_COMPLETE", // close one WU: candidate + PASS review + settled dispatches (distinct from EPIC COMPLETE)
   "CHECKPOINT", // persist a resumable checkpoint
   "BLOCK", // record a governed stop (typed blocker class)
+  "AUTHORITY_RESOLVE", // apply an explicit approved decision to an exact authority stop
   "CLEAR_BLOCKER", // resolve one explicitly recoverable blocker after its cause is repaired
   "COMPLETE", // record EPIC_EXECUTION_VERIFIED (technical completion, not owner acceptance)
   "BIND_PR", // immutably bind a GitHub PR to the active WU's frozen candidate (repository, pr_number, head/base SHA)
