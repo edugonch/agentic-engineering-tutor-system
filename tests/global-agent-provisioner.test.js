@@ -5,7 +5,7 @@ import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { provisionGlobalHarnessAgents, resolveOpenCodeConfigDir } from "../src/global-agent-provisioner.js"
 
-const ids = ["harness-builder", "harness-researcher", "harness-reviewer", "harness-designer"]
+const ids = ["harness-orchestrator", "harness-builder", "harness-researcher", "harness-reviewer", "harness-designer"]
 
 async function fixture(t) {
   const root = await mkdtemp(join(tmpdir(), "harness-global-agents-"))
@@ -14,7 +14,7 @@ async function fixture(t) {
   for (const id of ids) {
     const source = join(packageRoot, "templates", ".opencode", "agents", `${id}.md`)
     await mkdir(dirname(source), { recursive: true })
-    await writeFile(source, `---\ndescription: ${id}\nmode: subagent\n---\n\n${id} system prompt\n`)
+    await writeFile(source, `---\ndescription: ${id}\nmode: ${id === "harness-orchestrator" ? "primary" : "subagent"}\n---\n\n${id} system prompt\n`)
   }
   t.after(() => rm(root, { recursive: true, force: true }))
   return { root, packageRoot, configDir }
@@ -27,7 +27,7 @@ test("resolves OpenCode global config directory with explicit and XDG overrides"
   assert.throws(() => resolveOpenCodeConfigDir({ OPENCODE_CONFIG_DIR: "relative" }, "/home/test"), /absolute path/)
 })
 
-test("creates all four global specialist profiles and is idempotent", async (t) => {
+test("creates primary orchestrator and four global specialist profiles and is idempotent", async (t) => {
   const { root, packageRoot, configDir } = await fixture(t)
   const first = await provisionGlobalHarnessAgents({ packageRoot, configDir })
   assert.deepEqual(first.created.sort(), ids.slice().sort())

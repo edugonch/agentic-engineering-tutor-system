@@ -9,7 +9,7 @@ test("bootstrap prompt preserves the owner's request and keeps intake approval-g
   assert.match(prompt, /harness_analyze_existing_project/)
   assert.match(prompt, /harness_initialize_project/)
   assert.match(prompt, /initialization_scope="governance_only"/)
-  assert.match(prompt, /plugin manages its four specialist agent profiles in OpenCode's global agents directory/)
+  assert.match(prompt, /plugin manages its primary orchestrator and four specialist agent profiles in OpenCode's global agents directory/)
   assert.match(prompt, /preserves existing or customized global profiles/)
   assert.match(prompt, /If the Harness tools are unavailable, stop/)
 })
@@ -24,7 +24,7 @@ test("bootstrap command forwards the session, delivery, and attachments into int
     session: { prompt: async (input) => sent.push(input) },
   }
 
-  await registerHarnessCommand(ctx)
+  await registerHarnessCommand(ctx, { takeOwnership: async (sessionID) => sent.push({ switched: sessionID }) })
   assert.equal(command.name, "harness")
   await command.execute({
     sessionID: "session-1",
@@ -32,7 +32,8 @@ test("bootstrap command forwards the session, delivery, and attachments into int
     delivery: "steer",
   })
 
-  assert.equal(sent.length, 1)
+  assert.equal(sent.length, 2)
+  assert.deepEqual(sent.shift(), { switched: "session-1" })
   assert.equal(sent[0].sessionID, "session-1")
   assert.equal(sent[0].delivery, "steer")
   assert.deepEqual(sent[0].parts, [{ type: "file", url: "file:///brief.md" }])

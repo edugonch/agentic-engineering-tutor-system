@@ -4,6 +4,7 @@ import { homedir } from "node:os"
 import { isAbsolute, join, resolve } from "node:path"
 
 const GLOBAL_AGENT_IDS = Object.freeze([
+  "harness-orchestrator",
   "harness-builder",
   "harness-researcher",
   "harness-reviewer",

@@ -7,6 +7,8 @@ const errors = []
 const checks = [
   "index.js",
   "src/bootstrap-command.js",
+  "src/orchestrator-ownership.js",
+  "tests/orchestrator-ownership.test.js",
   "tests/bootstrap-command.test.js",
   "tests/agent-readiness.test.js",
   "tests/global-agent-provisioner.test.js",
@@ -121,7 +123,7 @@ for (const marker of ["opencode plugin add 'github:edugonch/agentic-engineering-
   if (!readme.includes(marker)) errors.push(`README.md: missing installer/bootstrap instruction ${marker}`)
 }
 const entry = await readFile(join(root, "index.js"), "utf8")
-for (const marker of ["Plugin.define", 'ctx.session.hook("context"', 'ctx.tool.hook("execute.before"', 'ctx.permission.hook("evaluate"', 'ctx.session.hook("retry"', 'name: "harness_search_knowledge"', 'name: "harness_import_project_knowledge"', 'name: "harness_search_project_knowledge"', 'name: "harness_record_knowledge_artifact"', 'name: "harness_check_agent_readiness"', 'name: "harness_continuation_probe"', 'name: "harness_continuation_spike"', 'name: "harness_execution_controller"', 'name: "harness_freeze_candidate"', 'name: "harness_run_verification"', 'name: "harness_check_execution_readiness"', "createContinuationDriver(", "createCandidateRegistry(", "checkExecutionReadiness(", "runExecutionController(", "recordArtifactWithActivationGate(", "registerHarnessCommand(ctx)"]) {
+for (const marker of ["Plugin.define", 'ctx.session.hook("context"', 'ctx.tool.hook("execute.before"', 'ctx.permission.hook("evaluate"', 'ctx.session.hook("retry"', 'name: "harness_search_knowledge"', 'name: "harness_import_project_knowledge"', 'name: "harness_search_project_knowledge"', 'name: "harness_record_knowledge_artifact"', 'name: "harness_check_agent_readiness"', 'name: "harness_continuation_probe"', 'name: "harness_continuation_spike"', 'name: "harness_execution_controller"', 'name: "harness_freeze_candidate"', 'name: "harness_run_verification"', 'name: "harness_check_execution_readiness"', "createContinuationDriver(", "createCandidateRegistry(", "checkExecutionReadiness(", "runExecutionController(", "recordArtifactWithActivationGate(", "registerHarnessCommand(ctx, ownership)"]) {
   if (!entry.includes(marker)) errors.push(`index.js: missing V2 runtime contract ${marker}`)
 }
 

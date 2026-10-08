@@ -1,3 +1,4 @@
+import { createOrchestratorOwnership } from "./src/orchestrator-ownership.js"
 import { Plugin } from "@opencode/plugin"
 import { fileURLToPath } from "node:url"
 import { join } from "node:path"
@@ -49,6 +50,7 @@ export default Plugin.define({
   async setup(ctx) {
     const settings = readGuardSettings(process.env)
     const guard = createTurnGuard(settings)
+    const ownership = createOrchestratorOwnership(ctx)
     const continuation = createContinuationDriver(ctx)
     // Wave B launch-claim registry (in-memory, ephemeral, single-use): maps a
     // controller session + the agent it prepared to launch, to the exact
@@ -139,7 +141,8 @@ export default Plugin.define({
     }
 
     // A fresh user prompt starts a new per-session action budget.
-    await ctx.session.hook("prompt", (event) => {
+    await ctx.session.hook("prompt", async (event) => {
+      await ownership.onPrompt(event)
       if (!continuation.isInternalPrompt(event.sessionID)) {
         guard.reset(event.sessionID)
       }
@@ -169,6 +172,7 @@ export default Plugin.define({
     // Count tool calls and delegations for the session that actually ran them,
     // and (Wave B) claim a bound prepared dispatch at the launch boundary.
     await ctx.tool.hook("execute.before", async (event) => {
+      await ownership.beforeTool(event)
       // Run the circuit breaker first. If it trips, the subagent is rejected and
       // no claim is written — the pre-side-effect failure stays NEVER_LAUNCHED and
       // releasable (this is the WU-058 case, now structural).
@@ -679,7 +683,7 @@ export default Plugin.define({
       })().catch((error) => continuation.recordSubscriptionError(error?.message ?? String(error)))
     }
 
-    await registerHarnessCommand(ctx)
+    await registerHarnessCommand(ctx, ownership)
 
     return () => {
       eventSubscription.abort()
