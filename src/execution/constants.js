@@ -6,6 +6,9 @@
 // contract each value participates in.
 
 export const OPERATION_TYPES = Object.freeze([
+  "EXTERNAL_WAIT",
+  "EXTERNAL_WAIT_DUE",
+  "EXTERNAL_WAIT_END",
   "SUPERVISOR_BIND",
   "SUPERVISOR_CONTINUE",
   "SUPERVISOR_SENT",

@@ -4,6 +4,8 @@ import { access, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { existsSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { spawn } from "node:child_process"
+import { once } from "node:events"
 import { freezeCandidate } from "../../src/execution/candidate.js"
 import { resolveCheck, runCandidateVerification, runCommand, runDeclaredCheck, sanitizedEnv, validateVerificationContract } from "../../src/execution/verification.js"
 
@@ -172,4 +174,21 @@ test("declared setup and the check share a fresh workspace; setup and timeout ar
   assert.equal(result.setup_results[0].exitCode, 0)
   assert.notEqual(verificationContractHash(contract), verificationContractHash({ ...contract, setup: [] }))
   assert.notEqual(verificationContractHash(contract), verificationContractHash({ ...contract, commands: [{ ...contract.commands[0], timeout_ms: 1 }] }))
+})
+
+test("verification command is reaped after its owning host is killed", async t => {
+  const root = await mkdtemp(join(tmpdir(), "verify-owner-death-"))
+  const ready = join(root, "ready"), survived = join(root, "survived")
+  const childCode = `require('fs').writeFileSync(${JSON.stringify(ready)}, 'running'); setTimeout(() => require('fs').writeFileSync(${JSON.stringify(survived)}, 'orphan'), 1500)`
+  const hostCode = `import { runCommand } from ${JSON.stringify(new URL("../../src/execution/verification.js", import.meta.url).href)}; await runCommand(process.execPath, ['-e', ${JSON.stringify(childCode)}], { cwd: ${JSON.stringify(root)}, timeoutMs: 10000 })`
+  const host = spawn(process.execPath, ["--input-type=module", "-e", hostCode], { stdio: "ignore" })
+  t.after(async () => { host.kill("SIGKILL"); await rm(root, { recursive: true, force: true }) })
+  const deadline = Date.now() + 5000
+  while (!existsSync(ready) && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 20))
+  assert.equal(existsSync(ready), true)
+  const exited = once(host, "exit")
+  host.kill("SIGKILL")
+  await exited
+  await new Promise(resolve => setTimeout(resolve, 1800))
+  assert.equal(existsSync(survived), false)
 })

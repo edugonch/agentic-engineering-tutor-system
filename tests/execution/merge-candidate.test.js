@@ -440,9 +440,34 @@ test("F09: supported rebind preserves same candidate, clears stale CI and accept
     const adapter = fakeAdapter({ prBase: "base-2", checks: { "check-1": "SUCCESS" } })
     const input = { candidate_id: candidate.candidate_id, adapter, session_id: "ses-1" }
     assert.equal((await runRebindPR(root, input)).status, "rebound")
-    await assert.rejects(runMergeCandidate(root, input), /CI.*missing/)
-    await runExecutionController(root, { action: "record_ci", execution_id: "E1", session_id: "ses-1", candidate_id: candidate.candidate_id,
-      head_sha: "head-a", check_identity: "check-1", conclusion: "SUCCESS" })
+    const status = await runExecutionController(root, { action: "status", execution_id: "E1" })
+    assert.equal(status.ci_evidence[candidate.candidate_id], undefined)
     assert.equal((await runMergeCandidate(root, input)).status, "merged")
+    const refreshed = await runExecutionController(root, { action: "status", execution_id: "E1" })
+    assert.equal(refreshed.ci_evidence[candidate.candidate_id]["check-1"].binding_at_revision, refreshed.pr_binding.at_revision)
+  })
+})
+
+test("durable pending CI waits and recovers from real adapter evidence without model-written SUCCESS", async () => {
+  const { runWithExternalWait } = await import("../../src/execution/external-wait.js")
+  await withRoot(async root => {
+    const candidate = await setupReady(root, "ses-1")
+    await runExecutionController(root, { action: "record_ci", execution_id: "E1", session_id: "ses-1", candidate_id: candidate.candidate_id,
+      head_sha: "head-a", check_identity: "check-1", conclusion: "PENDING" })
+    const controller = await createExecutionController({ dir: join(root, ".harness/execution/controller/E1") })
+    const checks = { "check-1": "PENDING" }, adapter = fakeAdapter({ checks })
+    let now = Date.now()
+    const input = { controller, session_id: "ses-1", operation: "merge:" + candidate.candidate_id, now: () => now,
+      run: () => runMergeCandidate(root, { candidate_id: candidate.candidate_id, session_id: "ses-1", adapter }) }
+    const wait = await runWithExternalWait(input)
+    assert.equal(wait.status, "WAITING_EXTERNAL")
+    assert.equal((await controller.snapshot()).state.merge, null)
+    now = Date.parse(wait.next_retry_at)
+    checks["check-1"] = "SUCCESS"
+    assert.equal((await runWithExternalWait(input)).status, "merged")
+    const state = (await controller.snapshot()).state
+    assert.equal(state.external_wait, null)
+    assert.equal(state.ci_evidence[candidate.candidate_id]["check-1"].conclusion, "SUCCESS")
+    assert.match(state.ci_evidence[candidate.candidate_id]["check-1"].evidence_ref, /github.adapter/)
   })
 })

@@ -155,7 +155,11 @@ test('new candidate cannot reuse predecessor CI or close against predecessor mer
     await f.prepare(2)
     await assert.rejects(f.tool({ action: 'complete_wu', candidate_id: 'c2' }), /does not match/)
     await f.bind(2)
-    await assert.rejects(f.merge(2), /CI verify is missing/)
+    f.adapter.getChecks = async ({ head_sha }) => {
+      assert.equal(head_sha, 'h2') // predecessor CI cannot satisfy the new head
+      return [{ name: 'verify', conclusion: 'PENDING', pending: true }]
+    }
+    await assert.rejects(f.merge(2), /CI verify.*PENDING/)
     assert.deepEqual(f.calls, [1])
     assert.equal((await f.controller.snapshot()).state.merge, null)
   })

@@ -138,6 +138,13 @@ export async function createExecutionController({ root, dir, now = () => Date.no
       }
 
       // Avoid billing the same worker interval through both phase and dispatch.
+      if (["WU_COMPLETE", "COMPLETE"].includes(operation.operation_type) && state.budget.active_phase) throw new Error("Settle the active phase before completion")
+      if (["WU_COMPLETE", "COMPLETE"].includes(operation.operation_type) && state.external_wait) throw new Error("Resolve the external wait before completion")
+      if (operation.operation_type === "PHASE_START" && operation.body?.source === "runtime.verification") {
+        const requested = operation.body.authorized_seconds
+        const available = Math.min(deriveBudget(state.budget).available_seconds, wuBudgetUsage(state, state.wu?.wu_id).available_seconds ?? 0)
+        if (!Number.isFinite(requested) || requested <= 0 || requested > available) throw new Error("BLOCKED_BUDGET: verification allocation changed before admission")
+      }
       if (operation.operation_type === "PHASE_START" && operation.body?.phase === "ACTIVE" &&
           Object.values(state.dispatches).some(d => d.reservation_status === "reserved" && d.reserved_seconds > 0)) {
         throw new Error("Billable phase overlaps a dispatch reservation; use dispatch accounting.")

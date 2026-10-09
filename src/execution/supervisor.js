@@ -8,10 +8,18 @@ import { executionProgress } from "./progress.js"
 import { wuBudgetUsage } from "./wu-budget.js"
 import { stableHash } from "./serialize.js"
 
-export function createExecutionSupervisor(ctx, projectRoot, { enabled = false } = {}) {
+export function createExecutionSupervisor(ctx, projectRoot, { enabled = false, now = () => Date.now(), schedule = setTimeout, cancel = clearTimeout } = {}) {
   const running = new Set()
   const internal = new Set()
   const errors = []
+  const timers = new Map()
+  function disarm(execution) { const timer = timers.get(execution); if (timer !== undefined) cancel(timer); timers.delete(execution) }
+  function arm(execution, at) {
+    disarm(execution)
+    const timer = schedule(() => { timers.delete(execution); tick(execution).catch(error => { errors.push({ execution_id: execution, message: error.message }); if (errors.length > 20) errors.shift() }) }, Math.max(1, Math.min(at - now(), 2_147_483_647)))
+    timer?.unref?.()
+    timers.set(execution, timer)
+  }
   const root = join(projectRoot, ".harness/execution/controller")
   const controller = execution => {
     if (!/^[A-Za-z0-9._-]+$/.test(execution) || [".", ".."].includes(execution)) throw new Error("Invalid supervisor execution")
@@ -44,12 +52,21 @@ export function createExecutionSupervisor(ctx, projectRoot, { enabled = false } 
       const c = await controller(execution)
       let { state } = await c.snapshot()
       const session = state.supervisor?.session_id
-      if (!session || state.completed || state.blocker || state.mandate?.authority_kind !== "OWNER_APPROVED_EPIC") return false
+      if (!session || state.completed || state.blocker || state.mandate?.authority_kind !== "OWNER_APPROVED_EPIC") { disarm(execution); return false }
       const info = await identity(session)
-      if (info.outcome !== "succeeded") return false // never override cancellation or failure
+      if (info.outcome !== "succeeded") { disarm(execution); return false } // never override cancellation or failure
       const budget = state.budget
       const wu = state.wu && !state.wu.completed ? wuBudgetUsage(state, state.wu.wu_id) : null
       if (budget.total_seconds - budget.used_seconds <= 0 || (wu?.ceiling_seconds != null && wu.used_seconds >= wu.ceiling_seconds)) return false
+      if (state.external_wait) {
+        const wait = state.external_wait
+        if (now() < Date.parse(wait.next_retry_at)) { arm(execution, Date.parse(wait.next_retry_at)); return false }
+        disarm(execution)
+        if (!wait.due) {
+          await commit(c, session, "EXTERNAL_WAIT_DUE", { wait_id: wait.wait_id, attempt: wait.attempt }, `${wait.wait_id}:due:${wait.attempt}`)
+          state = (await c.snapshot()).state
+        }
+      }
       const unsettled = Object.values(state.dispatches).some(d => ["reserved", "pending_launch", "launched", "ambiguous"].includes(d.status))
       // The root may inspect/recover existing work but cannot start duplicates;
       // public controller admission enforces those limits.
@@ -65,7 +82,7 @@ export function createExecutionSupervisor(ctx, projectRoot, { enabled = false } 
       internal.add(intent.intent_id)
       await ctx.session.prompt({ sessionID: session, id: intent.intent_id, delivery: "queue", resume: true,
         metadata: { harness_continuation: intent.intent_id, execution_id: execution },
-        text: `Continue execution ${execution} from durable status and verify under its existing approved mandate. ${unsettled ? "Inspect/recover the existing dispatch before any new work." : "Execute the next authorized transition."} Preserve budget, scope, permissions and all evidence. A runtime terminal result is not acceptance. Do not request approvals already applicable. Stop on a real unresolved blocker or completion.` })
+        text: `Continue execution ${execution} from durable status and verify under its existing approved mandate. ${state.external_wait ? `The durable external wait is due: observe and retry ${state.external_wait.operation}; never assume remote success.` : unsettled ? "Inspect/recover the existing dispatch before any new work." : "Execute the next authorized transition."} Preserve budget, scope, permissions and all evidence. A runtime terminal result is not acceptance. Do not request approvals already applicable. Stop on a real unresolved blocker or completion.` })
       await commit(c, session, "SUPERVISOR_SENT", { intent_id: intent.intent_id }, `${execution}:sent:${intent.intent_id}`)
       return true
     } finally { running.delete(execution) }
@@ -88,6 +105,7 @@ export function createExecutionSupervisor(ctx, projectRoot, { enabled = false } 
   }
   return {
     enabled, bind, tick, resume: () => scan(),
+    dispose() { for (const execution of timers.keys()) disarm(execution) },
     async onEvent(event) { if (event.type === "session.execution.succeeded" && typeof event.data?.sessionID === "string") await scan(event.data.sessionID) },
     isInternalPrompt(event) {
       const token = event.metadata?.harness_continuation ?? event.prompt?.metadata?.harness_continuation

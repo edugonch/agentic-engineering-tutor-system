@@ -6,6 +6,7 @@
 // prompt, artifact, or controller event. Endpoints are hard-coded. `fetchImpl` is
 // injectable for tests; `baseUrl` is injectable for a local stub.
 
+import { ExternalWaitError } from "./external-errors.js"
 const DEFAULT_BASE_URL = "https://api.github.com"
 
 function ghHeaders(token) {
@@ -23,13 +24,18 @@ export function createGitHubAdapter({ token = process.env.HARNESS_GITHUB_TOKEN ?
   }
 
   async function request(method, path, body) {
-    const res = await fetchImpl(`${baseUrl}${path}`, {
+    let res
+    try { res = await fetchImpl(`${baseUrl}${path}`, {
       method,
       signal: AbortSignal.timeout(timeoutMs),
       headers: { ...ghHeaders(token), ...(body ? { "Content-Type": "application/json" } : {}) },
       ...(body ? { body: JSON.stringify(body) } : {}),
-    })
+    }) } catch (error) {
+      if (["TimeoutError", "AbortError", "TypeError"].includes(error.name)) throw new ExternalWaitError("REMOTE_TRANSIENT", `GitHub ${method} request unavailable: ${error.message}`)
+      throw error
+    }
     if (!res.ok) {
+      if (res.status === 429 || res.status >= 500) throw new ExternalWaitError("REMOTE_TRANSIENT", `GitHub ${method} temporarily unavailable: ${res.status}`)
       throw new Error(`GitHub ${method} ${path} failed: ${res.status} ${res.statusText}`)
     }
     return res.json()
@@ -84,6 +90,7 @@ export function createGitHubAdapter({ token = process.env.HARNESS_GITHUB_TOKEN ?
         // Multiple apps with the same name are ambiguous, never last-wins.
         const run = matches.length === 1 && !statuses.has(name) ? matches[0] : null
         return { name, conclusion: run && (!run.status || run.status === "completed") ? run.conclusion ?? null : matches.length === 0 ? statuses.get(name)?.state ?? null : null,
+          pending: !!(run && run.status && run.status !== "completed") || (matches.length === 0 && (!statuses.has(name) || statuses.get(name)?.state === "pending")),
           run_id: run?.id ?? null, app_id: run?.app?.id ?? null }
       })
     },

@@ -41,6 +41,7 @@ const setsEqual = (a, b) => {
 // review, exact-head CI evidence, and settled dispatches. Pure and exported so it
 // can be tested in isolation.
 export function canStartMerge(state) {
+  if (state.verification_phase) return { allowed: false, reason: "verification is still running" }
   if (!state.wu) return { allowed: false, reason: "no active WU" }
   if (state.wu.completed) return { allowed: false, reason: "active WU already complete" }
   const binding = state.pr_binding
@@ -144,6 +145,33 @@ export function applyEvent(previous, event) {
   }
 
   switch (event.operation_type) {
+    case "EXTERNAL_WAIT": {
+      const old = state.external_wait
+      if (state.completed || state.blocker || !state.wu || state.wu.completed) throw new Error("Execution cannot enter external wait")
+      if (!body.wait_id || !body.operation || !["CI_PENDING", "REMOTE_TRANSIENT"].includes(body.kind)) throw new Error("Invalid external wait identity/kind")
+      if (old && (old.wait_id !== body.wait_id || old.operation !== body.operation || old.started_at !== body.started_at || old.deadline_at !== body.deadline_at)) throw new Error("External wait identity changed")
+      if (body.attempt !== (old?.attempt ?? 0) + 1) throw new Error("External wait attempt out of order")
+      const dates = [body.started_at, body.next_retry_at, body.deadline_at].map(Date.parse)
+      if (dates.some(d => !Number.isFinite(d)) || dates[0] > dates[1] || dates[1] > dates[2]) throw new Error("Invalid external wait interval")
+      state.external_wait = { ...body, due: false }
+      break
+    }
+    case "EXTERNAL_WAIT_DUE": {
+      const w = state.external_wait
+      if (!w || w.wait_id !== body.wait_id || w.attempt !== body.attempt || state.blocker || state.completed) throw new Error("External wait no longer eligible")
+      if (Date.parse(event.timestamp) < Date.parse(w.next_retry_at)) throw new Error("External wait is not due")
+      w.due = true
+      break
+    }
+    case "EXTERNAL_WAIT_END": {
+      if (state.external_wait?.wait_id !== body.wait_id || !["RESOLVED", "REJECTED", "EXPIRED"].includes(body.outcome)) throw new Error("External wait end mismatch")
+      state.external_wait_history ??= []
+      state.external_wait_history.push({ ...state.external_wait, outcome: body.outcome, ended_at: event.timestamp })
+      if (body.outcome === "EXPIRED" && !state.blocker) state.blocker = { class: "BLOCKED_EXTERNAL_FACT", at_revision: state.revision,
+        reason: `${state.external_wait.operation}: ${state.external_wait.kind} did not recover before ${state.external_wait.deadline_at}. Last observation: ${state.external_wait.reason}` }
+      state.external_wait = null
+      break
+    }
     case "SUPERVISOR_BIND": {
       if (!body.session_id || state.mandate?.authority_kind !== MANDATE_AUTHORITY.OWNER_APPROVED_EPIC) throw new Error("Supervisor requires an approved execution and root identity")
       state.supervisor = { session_id: body.session_id, intent: null }
@@ -351,11 +379,14 @@ export function applyEvent(previous, event) {
       state.active_phase_wu_id = state.wu?.wu_id ?? null
       state.budget.active_phase = body.phase
       state.budget.active_started_at = body.started_at
+      if (body.source === "runtime.verification") state.verification_phase = { operation_id: event.operation_id, session_id: body.session_id,
+        owner_pid: body.owner_pid, owner_death_guard: body.owner_death_guard, authorized_seconds: body.authorized_seconds }
       break
     }
 
     case "PHASE_END": {
       if (!state.budget.active_phase) throw new Error("Cannot end a phase when none is active.")
+      if (state.verification_phase && body.expected_phase_id !== state.verification_phase.operation_id) throw new Error("Cannot settle another verification phase")
       const started = state.budget.active_started_at
       const ended = body.ended_at
       if (!Number.isFinite(ended)) throw new Error("PHASE_END requires a finite ended_at.")
@@ -369,6 +400,7 @@ export function applyEvent(previous, event) {
         }
       }
       delete state.active_phase_wu_id
+      delete state.verification_phase
       state.budget.active_phase = null
       state.budget.active_started_at = null
       break

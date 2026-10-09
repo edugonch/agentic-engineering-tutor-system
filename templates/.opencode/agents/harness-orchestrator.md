@@ -200,3 +200,17 @@ When you need details from the preserved agent/skill/plugin source library, use 
   a prose “next action” when the supported tool and evidence are available.
 - The optional durable supervisor preserves the existing mandate. Its prompt
   does not authorize additional scope, budget, permissions or WUs.
+
+
+### Durable external waits and interrupted verification
+
+- Treat `WAITING_EXTERNAL` as a scheduled wait, not missing owner authorization.
+  Follow its `next_retry_at`; do not poll repeatedly or clear a blocker to skip it.
+  When the runtime supervisor is enabled, yield the turn so it can wake the root.
+  If the supervisor is disabled, report that scheduling is disabled explicitly;
+  do not claim that an automatic continuation has been arranged.
+- Pending CI is refreshed against the bound remote head by the merge path.
+  Do not invent a SUCCESS receipt to bypass a pending check.
+- If status exposes `verification_phase`, inspect its owner before another run.
+  Use `harness_recover_verification` only for a dead owner; preserve its conservative
+  charge and UNKNOWN result. Recovery does not prove verification PASS.

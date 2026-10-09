@@ -1,3 +1,4 @@
+import { ExternalWaitError } from "./execution/external-errors.js"
 const DELEGATION_TOOLS = new Set(["subagent", "task"])
 const GUARDED_REPEAT_TOOLS = new Set(["subagent", "task", "bash", "write", "edit", "patch", "apply_patch", "harness_initialize_project"])
 
@@ -130,6 +131,7 @@ export function createTurnGuard(settings = readGuardSettings()) {
         }
         return result
       } catch (error) {
+        if (error instanceof ExternalWaitError) throw error // durable wait policy owns these retries
         const byAction = failures.get(key) ?? new Map()
         const message = String(error?.message ?? error)
         byAction.set(signature, { message, count: prior?.message === message ? prior.count + 1 : 1 })

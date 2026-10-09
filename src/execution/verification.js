@@ -8,6 +8,7 @@
 // returned as BLOCKED_CAPABILITY rather than silently ignored).
 
 import { spawn } from "node:child_process"
+import { fileURLToPath } from "node:url"
 import { disposeWorkspace, materializeCandidate } from "./verification-workspace.js"
 
 const MAX_OUTPUT_BYTES = 1_048_576 // 1 MiB
@@ -68,7 +69,8 @@ export function runCommand(program, args, { cwd, env = sanitizedEnv(cwd), timeou
     if (signal?.aborted) { resolve({ ok: false, aborted: true, exitCode: null, stdout: "", stderr: "", durationMs: 0 }); return }
     let child
     try {
-      child = spawn(program, args, { cwd, env, shell: false, detached: true, stdio: ["ignore", "pipe", "pipe"] })
+      child = spawn(process.execPath, [fileURLToPath(new URL("./command-host.mjs", import.meta.url)), String(process.pid), program, ...args],
+        { cwd, env, shell: false, detached: true, stdio: ["ignore", "pipe", "pipe"] })
     } catch (error) {
       resolve({ ok: false, error: String(error?.message ?? error), exitCode: null, stdout: "", stderr: "", truncated: false, timedOut: false, durationMs: Date.now() - startedAt })
       return

@@ -10,6 +10,7 @@ import { createExecutionController } from "./execution.js"
 import { createCandidateRegistry } from "./candidate-registry.js"
 import { candidateGitTree } from "./git-tree.js"
 import { canStartMerge, canVerifyExternalMerge } from "./state.js"
+import { ExternalWaitError } from "./external-errors.js"
 
 function isSuccessConclusion(value) {
   return typeof value === "string" && value.toUpperCase() === "SUCCESS"
@@ -28,7 +29,7 @@ async function commitMerge(controller, session_id, operation_id, operation_type,
 // Find the execution whose durable state records this candidate. Merge is a rare,
 // explicit operation, so scanning controller directories is acceptable here
 // (unlike the per-tool-call launch-claim boundary).
-async function findExecutionForCandidate(projectRoot, candidate_id) {
+export async function findExecutionForCandidate(projectRoot, candidate_id) {
   const controllerRoot = join(projectRoot, ".harness", "execution", "controller")
   let entries = []
   try {
@@ -59,7 +60,9 @@ export async function runMergeCandidate(projectRoot, { candidate_id, adapter, se
   }
   if (!session_id) throw new Error("runMergeCandidate requires a session_id.")
 
-  const { controller, execution_id, state } = await findExecutionForCandidate(projectRoot, candidate_id)
+  const execution = await findExecutionForCandidate(projectRoot, candidate_id)
+  const { controller, execution_id } = execution
+  let state = execution.state
   const binding = state.pr_binding
   if (!binding) throw new Error("merge blocked: no PR binding.")
   if (binding.candidate_id !== candidate_id) {
@@ -71,8 +74,27 @@ export async function runMergeCandidate(projectRoot, { candidate_id, adapter, se
   if (state.merge?.status === "VERIFIED") return { status: "already_verified", execution_id }
 
   // A fresh start must pass the durable gate.
-  if (!state.merge) {
-    const gate = canStartMerge(state)
+  if (!state.merge || (state.merge.status === "STARTED" && !state.blocker)) {
+    let gate = canStartMerge(state)
+    // CI is an observable external fact: refresh it directly, rather than
+    // requiring the model to translate a pending/absent receipt into SUCCESS.
+    if (!gate.allowed && gate.reason.startsWith("required CI ")) {
+      const checks = await adapter.getChecks({ repository: binding.repository, head_sha: binding.head_sha, check_names: state.mandate.required_ci_checks })
+      for (const name of state.mandate.required_ci_checks) {
+        const check = checks.find(c => c.name === name) ?? { name }
+        const raw = String(check.conclusion).toUpperCase()
+        const conclusion = raw === "SUCCESS" ? "SUCCESS" : check.pending || raw === "PENDING" ? "PENDING" : ["FAILURE", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED"].includes(raw) ? "FAILURE" : "ERROR"
+        const prior = state.ci_evidence[candidate_id]?.[name]
+        if (prior?.conclusion !== conclusion || prior?.head_sha !== binding.head_sha || prior?.binding_at_revision !== binding.at_revision) {
+          await commitMerge(controller, session_id, `${execution_id}:remote-ci:${state.revision}:${name}`, "RECORD_CI", {
+            candidate_id, head_sha: binding.head_sha, check_identity: name, conclusion, binding_at_revision: binding.at_revision,
+            evidence_ref: JSON.stringify({ source: "github.adapter", run_id: check.run_id ?? null, app_id: check.app_id ?? null }) })
+          state = (await controller.snapshot()).state
+        }
+      }
+      gate = canStartMerge(state)
+      if (!gate.allowed && /^required CI .* conclusion is PENDING/.test(gate.reason)) throw new ExternalWaitError("CI_PENDING", gate.reason)
+    }
     if (!gate.allowed) throw new Error(`merge blocked: ${gate.reason}.`)
   }
 
@@ -134,6 +156,7 @@ export async function runMergeCandidate(projectRoot, { candidate_id, adapter, se
     for (const name of required) {
       const c = checks.find(c => c.name === name) ?? { name, conclusion: null }
       if (!isSuccessConclusion(c.conclusion)) {
+        if (c.pending || String(c.conclusion).toUpperCase() === "PENDING") throw new ExternalWaitError("CI_PENDING", `Required CI ${c.name} is pending on ${binding.head_sha}`)
         throw new Error(`merge blocked: required CI ${c.name} conclusion ${c.conclusion ?? "missing"}, not SUCCESS.`)
       }
     }
@@ -236,6 +259,7 @@ export async function runVerifyExternalMerge(projectRoot, { candidate_id, adapte
     for (const name of required) {
       const c = checks.find(c => c.name === name) ?? { name, conclusion: null }
       if (!isSuccessConclusion(c.conclusion)) {
+        if (c.pending || String(c.conclusion).toUpperCase() === "PENDING") throw new ExternalWaitError("CI_PENDING", `Required CI ${c.name} is pending on ${binding.head_sha}`)
         throw new Error(`external merge blocked: required CI ${c.name} conclusion ${c.conclusion ?? "missing"}, not SUCCESS.`)
       }
     }

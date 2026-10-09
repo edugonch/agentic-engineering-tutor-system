@@ -1,7 +1,9 @@
+import { withVerificationBudget, recoverVerificationPhase } from "./src/execution/verification-budget.js"
 import { packageFingerprint } from "./src/package-fingerprint.js"
 import { createWorkerBudgetGuard } from "./src/execution/worker-budget.js"
 import { createExecutionSupervisor } from "./src/execution/supervisor.js"
-import { runRebindPR, runAbortMerge } from "./src/execution/merge.js"
+import { runWithExternalWait } from "./src/execution/external-wait.js"
+import { findExecutionForCandidate, runRebindPR, runAbortMerge } from "./src/execution/merge.js"
 import { findWuExecution } from "./src/execution/execution-query.js"
 import { trackedCandidatePaths } from "./src/execution/git-capture.js"
 import { wuBudgetUsage } from "./src/execution/wu-budget.js"
@@ -597,12 +599,12 @@ export default Plugin.define({
         }, ["candidate_id"]),
         execute: async (input, context) => {
           const adapter = createGitHubAdapter({ token: process.env.HARNESS_GITHUB_TOKEN ?? "" })
-          const result = await guard.runHarness(context?.sessionID, "harness_merge_candidate", input,
-            () => runMergeCandidate(requireProjectRoot(), {
-              candidate_id: String(input.candidate_id ?? ""),
-              adapter,
-              session_id: context?.sessionID,
-            }), () => observeMergeProgress(requireProjectRoot(), input.candidate_id, adapter))
+          const execution = await findExecutionForCandidate(requireProjectRoot(), input.candidate_id)
+          const result = await runWithExternalWait({ controller: execution.controller, session_id: context?.sessionID, observeExistingMerge: true,
+            operation: "harness_merge_candidate:" + input.candidate_id,
+            run: () => guard.runHarness(context?.sessionID, "harness_merge_candidate", input,
+              () => runMergeCandidate(requireProjectRoot(), { candidate_id: input.candidate_id, adapter, session_id: context?.sessionID }),
+              () => observeMergeProgress(requireProjectRoot(), input.candidate_id, adapter)) })
           return json(result)
         },
       })
@@ -615,12 +617,12 @@ export default Plugin.define({
         }, ["candidate_id"]),
         execute: async (input, context) => {
           const adapter = createGitHubAdapter({ token: process.env.HARNESS_GITHUB_TOKEN ?? "" })
-          const result = await guard.runHarness(context?.sessionID, "harness_verify_external_merge", input,
-            () => runVerifyExternalMerge(requireProjectRoot(), {
-              candidate_id: String(input.candidate_id ?? ""),
-              adapter,
-              session_id: context?.sessionID,
-            }), () => observeMergeProgress(requireProjectRoot(), input.candidate_id, adapter))
+          const execution = await findExecutionForCandidate(requireProjectRoot(), input.candidate_id)
+          const result = await runWithExternalWait({ controller: execution.controller, session_id: context?.sessionID, observeExistingMerge: true,
+            operation: "harness_verify_external_merge:" + input.candidate_id,
+            run: () => guard.runHarness(context?.sessionID, "harness_verify_external_merge", input,
+              () => runVerifyExternalMerge(requireProjectRoot(), { candidate_id: input.candidate_id, adapter, session_id: context?.sessionID }),
+              () => observeMergeProgress(requireProjectRoot(), input.candidate_id, adapter)) })
           return json(result)
         },
       })
@@ -675,15 +677,12 @@ export default Plugin.define({
           if (!candidate) {
             return json({ status: "BLOCKED_UNKNOWN_CANDIDATE", candidate_id: input.candidate_id, reason: "no candidate with this id is in the registry." })
           }
+          if (!candidate.verification_contract?.commands?.some(check => check.id === input.verification_check_id))
+            return json({ status: "BLOCKED_UNDECLARED_CHECK", check_id: input.verification_check_id })
           const execution = await findWuExecution(requireProjectRoot(), candidate.verification_contract?.source_wu_id)
           if (!execution) return json({ status: "BLOCKED_BUDGET", reason: "Verification requires its active WU execution" })
-          const b = execution.state.budget
-          const worker = Object.values(execution.state.dispatches).find(d => d.session_id === context?.sessionID && d.status === "launched")
-          const claimed = worker ? Date.parse(worker.launch_claimed_at) : NaN
-          const available = worker ? worker.reserved_seconds - (Number.isFinite(claimed) ? Math.max(0, (Date.now() - claimed) / 1000) : 0)
-            : Math.min(b.total_seconds - b.used_seconds - b.reserved_seconds, wuBudgetUsage(execution.state, execution.state.wu.wu_id).available_seconds ?? Infinity)
-          if (available <= 0) return json({ status: "BLOCKED_BUDGET", reason: "No authorized verification allocation remains" })
-          const result = await runCandidateVerification(candidate, input.verification_check_id, { budgetMs: available * 1000, signal: context?.signal })
+          const result = await withVerificationBudget({ controller: execution.controller, candidate, check_id: input.verification_check_id, context,
+            run: options => runCandidateVerification(candidate, input.verification_check_id, options) })
           // Persist an immutable evidence receipt for checks that actually ran,
           // so a later RECORD_REVIEW can cite durable evidence rather than a
           // caller-declared "PASS".
@@ -694,6 +693,17 @@ export default Plugin.define({
             evidence_id = receipt.evidence_id
           }
           return json({ ...result, evidence_id })
+        },
+      })
+
+      editor.add({
+        name: "harness_recover_verification",
+        description: "Recover an interrupted root verification only after its owning OS process is proven dead and the command-owner guard applies. Conservatively charges the authorized allocation; never reports verification PASS or duplicates a live command.",
+        input: objectInput({ wu_id: { type: "string", minLength: 1 } }, ["wu_id"]),
+        execute: async (input, context) => {
+          const execution = await findWuExecution(requireProjectRoot(), input.wu_id)
+          if (!execution) throw new Error("No active WU execution to recover")
+          return json(await recoverVerificationPhase({ controller: execution.controller, session_id: context?.sessionID }))
         },
       })
 
@@ -822,6 +832,7 @@ export default Plugin.define({
     return () => {
       eventSubscription.abort()
       workerBudget.dispose()
+      supervisor.dispose()
     }
   },
 })

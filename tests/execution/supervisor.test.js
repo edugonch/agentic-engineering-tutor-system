@@ -25,7 +25,7 @@ async function fixture(t) {
   const make = () => createExecutionSupervisor(ctx, root, { enabled: true })
   const s = make()
   await s.bind("E", "ses_root")
-  return { c, commit, prompts, s, make, ctx, loseNextResponse: () => { ambiguous = true } }
+  return { c, root, commit, prompts, s, make, ctx, loseNextResponse: () => { ambiguous = true } }
 }
 
 test("supervisor wakes only the bound root, once per durable progress", async t => {
@@ -58,4 +58,32 @@ test("supervisor never continues through a blocker or user interruption", async 
   await f.commit("BLOCK", { class: "BLOCKED_AUTHORITY", reason: "new decision required" })
   assert.equal(await f.s.tick("E"), false)
   assert.equal(f.prompts.size, 0)
+})
+
+test("supervisor restores durable wait timer after restart and wakes only when due", async t => {
+  const f = await fixture(t)
+  const start = new Date(Date.now() - 1000).toISOString()
+  const due = new Date(Date.now() + 100000).toISOString()
+  await f.commit("EXTERNAL_WAIT", { wait_id: "w", operation: "merge:candidate", kind: "CI_PENDING", reason: "running",
+    attempt: 1, started_at: start, next_retry_at: due, deadline_at: new Date(Date.now() + 200000).toISOString() })
+  const timers = []
+  const restored = createExecutionSupervisor(f.ctx, f.root, { enabled: true,
+    schedule: (fn, delay) => { const timer = { fn, delay }; timers.push(timer); return timer }, cancel: () => {} })
+  t.after(() => restored.dispose())
+  await restored.resume()
+  assert.equal(f.prompts.size, 0)
+  assert.equal(timers.length, 1)
+  assert.ok(timers[0].delay > 0)
+})
+
+test("a due external wait wakes once and never duplicates an admitted continuation", async t => {
+  const f = await fixture(t)
+  await f.commit("EXTERNAL_WAIT", { wait_id: "due-wait", operation: "merge:candidate", kind: "CI_PENDING", reason: "running",
+    attempt: 1, started_at: new Date(Date.now() - 2000).toISOString(), next_retry_at: new Date(Date.now() - 1000).toISOString(), deadline_at: new Date(Date.now() + 60000).toISOString() })
+  await f.s.resume()
+  assert.equal(f.prompts.size, 1)
+  assert.match([...f.prompts.values()][0].text, /external wait is due/)
+  await f.make().resume()
+  assert.equal(f.prompts.size, 1)
+  assert.equal((await f.c.snapshot()).state.external_wait.due, true)
 })

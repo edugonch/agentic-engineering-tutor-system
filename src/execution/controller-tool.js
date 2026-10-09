@@ -50,6 +50,8 @@ async function summary(controller) {
       available_seconds: budget.available_seconds,
       exhausted: budget.exhausted,
       overrun: budget.overrun,
+      active_phase: state.budget.active_phase,
+      active_started_at: state.budget.active_started_at,
     },
     dispatches: Object.entries(state.dispatches).map(([dispatch_id, d]) => ({
       dispatch_id,
@@ -63,6 +65,8 @@ async function summary(controller) {
     })),
     fencing_token: lease?.fencing_token ?? null,
     blocker: state.blocker,
+    external_wait: state.external_wait ?? null,
+    verification_phase: state.verification_phase ?? null,
     next_action: recoveryAction(state),
     last_blocker_resolution: state.last_blocker_resolution ?? null,
     authority_resolutions: state.authority_resolutions ?? {},

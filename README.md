@@ -447,3 +447,27 @@ Keep a consistent backup and compare it with the inspection output. Never edit
 event types require this version or a compatible reader after the first such
 event is emitted; do not downgrade to an older reader over a live execution.
 See `docs/audits/2026-10-08/IMPLEMENTACION.md` for validation and remaining limits.
+
+
+External CI waits now persist their retry schedule. Pending CI and typed transport
+failures use 15–300 second backoff, restored by the opt-in supervisor after restart.
+The WU may declare `external_wait_seconds` (default 1800). An expired wait records
+one external-condition blocker; failed checks, permission errors and head drift
+are not transient retries. CI receipts can be refreshed directly from the bound
+remote head instead of requiring the model to translate remote status.
+
+Root verification now charges a measured ACTIVE phase even on failure/cancellation.
+Worker verification remains within its worker envelope. A command guardian reaps
+its group if the host dies. `harness_recover_verification` can settle an interrupted
+root phase only after its owner has exited; unknown consumption charges the
+admitted allocation and never constitutes a PASS. A live owner cannot be replaced.
+
+Collect real-host canary evidence without launching any models or modifying state:
+
+```bash
+node scripts/collect-continuity-canary.mjs /absolute/canary/project EXECUTION_ID /existing/output/directory/new-evidence.json
+```
+
+This needs an already-running compatible local OpenCode service. The local JSON
+contains sanitized session exports and durable evidence for independent review.
+Neither elapsed time nor a successful export is an acceptance verdict.

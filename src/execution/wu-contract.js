@@ -15,8 +15,10 @@ export function compileWuContract(wuId, definition) {
   if (!Number.isSafeInteger(seconds) || seconds <= 0) throw new Error("WU contract requires a finite active_seconds or Active-time limit")
   if (documented !== null && documented !== seconds) throw new Error("WU documented and executable budgets disagree")
   const verification = typed?.verification_contract ?? null
+  if (typed?.external_wait_seconds !== undefined && (!Number.isSafeInteger(typed.external_wait_seconds) || typed.external_wait_seconds <= 0)) throw new Error("external_wait_seconds must be a positive integer")
   if (verification) validateVerificationContract(verification)
   const contract = { schema_version: 1, wu_id: wuId, active_seconds: seconds, ...source,
+    external_wait_seconds: typed?.external_wait_seconds ?? 1800,
     verification_contract: verification, verification_contract_hash: verification ? verificationContractHash(verification) : null,
     process_obligations: typed?.process_obligations ?? [],
     source_content: content, normalization_required: !verification }
