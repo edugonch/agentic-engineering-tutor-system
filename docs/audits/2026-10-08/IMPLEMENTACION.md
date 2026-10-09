@@ -166,3 +166,42 @@ PR #165/head `478eb0387a09eb87a0ce0b3f2663311e1bc89ed5` unless actual checks req
 code changes. Prior timeout/DB failures remain failures until rerun establishes
 their cause. Preserve retrospective authorization and current live budget;
 no budget extension, event edits or implementation restart is authorized here.
+
+## Follow-up: verification-only correction after checkpoint 112
+
+The prior correction action still replaced the entire compiled WU from a new
+archive. Its literal prose guard could reject explanatory normalization text,
+and its required check mapping was absent from the observed calls. The exact
+V3/V4 text difference cannot be established from the supplied excerpts alone.
+
+`correct_verification_contract` now derives the effective contract from the
+EXISTING contract and imports ONLY `verification_contract` and its hash from
+the integrity-checked APPROVED proposal. Original source text/hash, active-time
+limit, wait limit and process obligations stay byte-for-byte unchanged. The
+full approved proposal is retained separately as `correction_source`; the
+original archived execution_contract line is historical source, while the
+compiled verification field is the effective executable contract. Validation
+checks this exact derivation, provenance and immutable history. This does not
+adopt new prose, scope, budget or waivers from the proposal.
+
+Unchanged command IDs map to themselves; one removed command splitting into
+new command IDs is mapped structurally. Multiple replacements require an
+explicit mapping from the orchestrator, not new owner approval. Unchanged
+setup self-mappings are tolerated and excluded from check coverage. Full
+verification and independent review still determine whether coverage is valid.
+
+The controller tool no longer advertises a model-supplied session_id. Runtime
+ownership and rejection of forged session arguments remain in place.
+
+Recovery of ALFRAN remains the same authorized operation with the already
+approved V4 record and current compiled baseline hash, without session_id or
+check_mapping for the single tests split. After success, resolve the existing
+repaired tooling blocker rather than replacing it; refreeze and run all checks,
+fresh review and exact-head CI/governed merge. No implementation restart,
+additional budget or owner reauthorization is required for that recovery.
+
+Regression coverage includes proposal prose drift, automatic split mapping,
+setup mapping compatibility and idempotent retry. The controller integration
+now exercises correction, new freeze, actual Node verification/receipt, review
+receipt, CI and a mock remote governed merge through WU completion. This is a
+local integration test, not proof of ALFRAN completion or real-provider review.
