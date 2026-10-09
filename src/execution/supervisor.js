@@ -1,4 +1,4 @@
-// Durable continuation outbox. Opt-in until the real-provider canary passes.
+// Durable continuation outbox. Enabled by default; explicit opt-out remains available.
 // It wakes the existing root orchestrator; it never creates/finishes a worker,
 // clears a blocker, changes authority, or grants additional budget.
 import { readdir } from "node:fs/promises"
@@ -8,7 +8,7 @@ import { executionProgress } from "./progress.js"
 import { wuBudgetUsage } from "./wu-budget.js"
 import { stableHash } from "./serialize.js"
 
-export function createExecutionSupervisor(ctx, projectRoot, { enabled = false, now = () => Date.now(), schedule = setTimeout, cancel = clearTimeout } = {}) {
+export function createExecutionSupervisor(ctx, projectRoot, { enabled = true, now = () => Date.now(), schedule = setTimeout, cancel = clearTimeout } = {}) {
   const running = new Set()
   const internal = new Set()
   const errors = []

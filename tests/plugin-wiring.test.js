@@ -9,7 +9,11 @@ import { seedWuContract } from "./execution/wu-fixture.js"
 
 // Loads the actual package entry point/SDK and runs its registered hooks/tools.
 // The host is controlled; this is not a real-provider canary.
-async function host(t) {
+async function host(t, supervisorFlag) {
+  const previousSupervisor = process.env.HARNESS_SUPERVISOR_ENABLED
+  if (supervisorFlag === undefined) delete process.env.HARNESS_SUPERVISOR_ENABLED
+  else process.env.HARNESS_SUPERVISOR_ENABLED = supervisorFlag
+  t.after(() => { if (previousSupervisor === undefined) delete process.env.HARNESS_SUPERVISOR_ENABLED; else process.env.HARNESS_SUPERVISOR_ENABLED = previousSupervisor })
   const root = await mkdtemp(join(tmpdir(), "plugin-host-"))
   const previous = process.env.OPENCODE_CONFIG_DIR
   process.env.OPENCODE_CONFIG_DIR = join(root, "config")
@@ -44,6 +48,7 @@ async function host(t) {
 
 test("whole plugin: Build transfers ownership without executing the stale call; prepare/release/prepare is usable", async t => {
   const f = await host(t)
+  assert.equal(JSON.parse((await f.definitions.get("harness_check_agent_readiness").execute({})).content).supervisor.enabled, true)
   await assert.rejects(f.run({ action: "status" }), /HARNESS_HANDOFF_REQUIRED/)
   assert.equal(f.sessions.get("ses_root").agent, "harness-orchestrator")
   await recordKnowledgeArtifact(f.root, { artifact_type: "epic", artifact_id: "epic-001", title: "Epic", status: "APPROVED", owner_confirmed: true,
@@ -74,4 +79,11 @@ test("whole plugin: Build transfers ownership without executing the stale call; 
   assert.equal(result.wu.completed, false)
   assert.equal((await f.run({ action: "verify" })).passed, true)
   await assert.rejects(f.hooks.get("tool:execute.before")({ ...launch, id: "unclaimed" }), /requires a durable prepare_launch/)
+})
+
+
+test("whole plugin: explicit supervisor zero disables automatic continuation", async t => {
+  const f = await host(t, "0")
+  const readiness = JSON.parse((await f.definitions.get("harness_check_agent_readiness").execute({})).content)
+  assert.equal(readiness.supervisor.enabled, false)
 })

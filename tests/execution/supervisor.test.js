@@ -22,7 +22,7 @@ async function fixture(t) {
   let ambiguous = false
   const ctx = { session: { get: async () => ({ id: "ses_root", agent: "harness-orchestrator", outcome: "succeeded" }),
     prompt: async input => { prompts.set(input.id, input); if (ambiguous) { ambiguous = false; throw new Error("lost response") } return { id: input.id } } } }
-  const make = () => createExecutionSupervisor(ctx, root, { enabled: true })
+  const make = () => createExecutionSupervisor(ctx, root)
   const s = make()
   await s.bind("E", "ses_root")
   return { c, root, commit, prompts, s, make, ctx, loseNextResponse: () => { ambiguous = true } }
@@ -86,4 +86,17 @@ test("a due external wait wakes once and never duplicates an admitted continuati
   await f.make().resume()
   assert.equal(f.prompts.size, 1)
   assert.equal((await f.c.snapshot()).state.external_wait.due, true)
+})
+
+
+test("explicit supervisor opt-out never binds or resumes an execution", async t => {
+  const f = await fixture(t)
+  const disabled = createExecutionSupervisor(f.ctx, f.root, { enabled: false })
+  t.after(() => disabled.dispose())
+  const before = await f.c.snapshot()
+  await disabled.bind("E", "ses_root")
+  await disabled.resume()
+  assert.equal(await disabled.tick("E"), false)
+  assert.deepEqual(await f.c.snapshot(), before)
+  assert.equal(f.prompts.size, 0)
 })
