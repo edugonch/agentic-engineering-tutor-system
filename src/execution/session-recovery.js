@@ -141,6 +141,11 @@ export function createSessionRecovery(ctx, projectRoot) {
     recover,
     reset() { cached.clear() },
     track(binding) { launches.set(key(binding.session_id, binding.call_id), { ...binding, monotonic_started: performance.now() }) },
+    async onProgress(event) {
+      const binding = launches.get(key(event.sessionID, event.id))
+      if (event.tool !== "subagent" || !binding || !event.metadata?.sessionID) return
+      return recover(binding, { ...event, source: "tool.progress", message_id: event.messageID ?? null })
+    },
     async afterTool(event) {
       if (event.tool !== "subagent") return
       const k = key(event.sessionID, event.id)

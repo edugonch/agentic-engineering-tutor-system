@@ -173,3 +173,25 @@ test("claimed pending dispatch blocks replacement before explicit mark_ambiguous
   // Existing identical reservation remains replayable despite the new gate.
   assert.equal((await f.run("reserve", { reserved_seconds: 20 })).commit_status, "replayed")
 })
+
+test("progress binds child before verification even when parent context has no running call", async t => {
+  const f = await fixture(t)
+  f.messages.length = 0
+  f.recovery.track({ ...f.input, call_id: "call_exact" })
+  const { observeSubagentProgress } = await import("../../src/execution/launch-progress.js")
+  let forwarded = 0
+  const tool = { execute: async (_input, context) => {
+    await context.progress({ sessionID: "ses_child", status: "running" })
+    const state = (await f.controller.snapshot()).state
+    assert.equal(state.dispatches.d1.session_id, "ses_child")
+    assert.equal(state.dispatches.d1.status, "launched")
+    assert.equal(state.dispatches.d1.result, null)
+    assert.equal(state.budget.used_seconds, 0)
+    return { content: "child now allowed to run" }
+  } }
+  observeSubagentProgress({ update: (id, update) => { assert.equal(id, "subagent"); update(tool) } }, f.recovery)
+  const result = await tool.execute({ agent: "harness-builder" }, { sessionID: "ses_parent", id: "call_exact", progress: async () => { forwarded++ } })
+  assert.equal(result.content, "child now allowed to run")
+  assert.equal(forwarded, 1)
+  assert.equal(f.reads(), 0)
+})

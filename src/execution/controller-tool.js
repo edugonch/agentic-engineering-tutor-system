@@ -347,6 +347,17 @@ export async function runExecutionController(projectRoot, input, candidateRegist
     return { action, commit_status: res.status, amendment_receipt: body, ...(await summary(controller)) }
   }
 
+  if (action === "correct_verification_contract") {
+    const snap = await controller.snapshot(), wu = snap.state.wu
+    if (!wu || wu.completed) throw new Error("Contract correction requires an active WU")
+    if (!input.wu_artifact_id) throw new Error("Select the exact approved corrected WU artifact")
+    const contract = compileWuContract(wu.wu_id, await readWorkUnitDefinition(projectRoot, wu.wu_id,
+      snap.state.mandate.source_artifact_id, input.wu_artifact_id, { requireApproved: true }))
+    const body = { contract, expected_contract_hash: input.expected_contract_hash, reason: input.reason, check_mapping: input.check_mapping }
+    const res = await commitAction(controller, holder, `${executionId}:contract-correction:${contract.contract_hash}`, "WU_CONTRACT_CORRECT", body)
+    return { action, commit_status: res.status, next_action: "Clear only the resolved tooling blocker, refreeze the same code with the corrected contract, rerun every check and fresh independent review. Prior receipts remain historical.", ...(await summary(controller)) }
+  }
+
   if (action === "bind_wu_contract") {
     const snap = await controller.snapshot()
     const wu = snap.state.wu
