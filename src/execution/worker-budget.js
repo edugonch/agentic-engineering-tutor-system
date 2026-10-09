@@ -1,9 +1,11 @@
+import { usesPlanningEstimates, epicExecutionRemaining } from "./time-policy.js"
 import { readdir } from "node:fs/promises"
 import { join } from "node:path"
 import { createExecutionController } from "./execution.js"
 
-// Enforce the existing reservation at model/tool boundaries and through the
-// supported session interruption API. No arbitrary step counter is involved.
+// Planning estimates never interrupt a worker. Only the explicit Epic budget
+// remains an execution ceiling; legacy executions retain their old policy until
+// an audited owner-approved transition is recorded.
 export function createWorkerBudgetGuard(ctx, projectRoot, recovery, { now = () => Date.now() } = {}) {
   const timers = new Map()
   const failures = []
@@ -37,15 +39,20 @@ export function createWorkerBudgetGuard(ctx, projectRoot, recovery, { now = () =
         if (d.session_id !== sessionID || d.status !== "launched") continue
         const start = Date.parse(d.launch_claimed_at)
         if (!Number.isFinite(start)) continue // legacy unknown interval stays conservatively reserved
-        const remaining = start + d.reserved_seconds * 1000 - now()
+        const advisory = usesPlanningEstimates(state)
+        const remaining = advisory ? epicExecutionRemaining(state, { worker: d, nowMs: now() }) * 1000 : start + d.reserved_seconds * 1000 - now()
         async function expire() {
           const current = (await controller.snapshot()).state
           if (current.dispatches[dispatchID]?.status !== "launched") return
+          if (usesPlanningEstimates(current) && epicExecutionRemaining(current, { worker: current.dispatches[dispatchID], nowMs: now() }) > 0) {
+            await inspect(sessionID, agent)
+            return
+          }
           await ctx.session.interrupt({ sessionID, continue: false })
           const lease = await controller.acquire(child.parentID)
           const latest = await controller.snapshot()
           if (!latest.state.blocker && latest.state.dispatches[dispatchID]?.reservation_status === "reserved") await controller.commit({ operation_id: `${e.name}:reservation-expired:${dispatchID}`, operation_type: "BLOCK",
-            body: { class: "BUDGET_EXHAUSTED", dispatch_id: dispatchID, budget_reason: "reservation_expired", reason: `Dispatch ${dispatchID} reached its ${d.reserved_seconds}s reservation. Inspect terminal evidence and reconcile before allocating any remaining WU budget.` } },
+            body: { class: "BUDGET_EXHAUSTED", dispatch_id: dispatchID, budget_reason: advisory ? "epic_exhausted" : "reservation_expired", reason: advisory ? "Explicit Epic execution budget exhausted; WU estimate was not a cutoff" : `Dispatch ${dispatchID} reached its ${d.reserved_seconds}s reservation. Inspect terminal evidence and reconcile before allocating any remaining WU budget.` } },
             { holder_session_id: child.parentID, expected_revision: latest.state.revision, lease_fencing_token: lease.fencing_token })
         }
         if (!timers.has(sessionID)) {
@@ -56,9 +63,12 @@ export function createWorkerBudgetGuard(ctx, projectRoot, recovery, { now = () =
           timer.unref?.()
           timers.set(sessionID, timer)
         }
-        if (remaining <= 0) throw new Error(`HARNESS_BUDGET_EXHAUSTED: dispatch ${dispatchID} has no remaining reservation`)
+        if (remaining <= 0) throw new Error(`HARNESS_BUDGET_EXHAUSTED: dispatch ${dispatchID} has no remaining ${advisory ? "Epic allocation" : "reservation"}`)
         return { execution_id: e.name, wu_id: state.wu?.wu_id, dispatch_id: dispatchID,
-          remaining_reservation_seconds: Math.max(0, Math.floor(remaining / 1000)),
+          time_policy: advisory ? "planning_estimate" : "legacy_hard_limit",
+          remaining_execution_seconds: Math.max(0, Math.floor(remaining / 1000)),
+          remaining_reservation_seconds: Math.max(0, Math.floor((start + d.reserved_seconds * 1000 - now()) / 1000)),
+          estimate_exceeded: now() > start + d.reserved_seconds * 1000,
           contract: state.wu?.contract ? { source_hash: state.wu.contract.source_hash,
             verification_contract: state.wu.contract.verification_contract, process_obligations: state.wu.contract.process_obligations } : null,
           authority_resolution: state.authority_resolutions?.[state.wu?.wu_id]?.at(-1) ?? null }

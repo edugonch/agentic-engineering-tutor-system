@@ -851,6 +851,39 @@ export async function findApprovedAuthorityResolution(projectRoot, artifactId) {
     source_record_key: record.record_key, source_hash: record.sha256 }
 }
 
+export async function findApprovedTimePolicy(projectRoot, artifactId) {
+  const root = assertRoot(projectRoot)
+  const index = await readIndex(root)
+  const matches = index.records.filter(r => r.classification === "DECISION" &&
+    r.declared_authority === "APPROVED" && r.import_status === "OWNER_APPROVED_ARTIFACT" &&
+    r.source_system === "harness-artifact" && (r.source_id === artifactId || r.record_key === artifactId))
+  if (matches.length !== 1) throw new Error("adopt_planning_estimates requires exactly one local owner-approved DECISION")
+  const record = matches[0]
+  const path = resolve(root, record.archive_path)
+  if (!inside(root, path)) throw new Error("TIME_POLICY_INTEGRITY: unsafe archive path")
+  const info = await lstat(path)
+  if (!info.isFile() || info.isSymbolicLink()) throw new Error("TIME_POLICY_INTEGRITY: expected regular archive")
+  const bytes = await readFile(path)
+  if (sha256(bytes) !== record.sha256 || record.sha256 !== record.source_revision) throw new Error("TIME_POLICY_INTEGRITY: decision differs from approved content")
+  const content = bytes.toString("utf8")
+  const lines = content.split(/\r?\n/).filter(line => line.startsWith("time_policy: "))
+  if (lines.length !== 1) throw new Error("Decision needs exactly one time_policy: JSON line; normalize existing approval into a new linked decision without requesting approval again")
+  const raw = lines[0].slice("time_policy: ".length)
+  const resolution = JSON.parse(raw)
+  const keys = ["execution_id", "mandate_id", "mode", "blocked_at_revision", "epic_total_seconds"]
+  if (!resolution || Array.isArray(resolution) || typeof resolution !== "object" || Object.keys(resolution).some(k => !keys.includes(k))) throw new Error("Invalid time_policy fields")
+  const rawKeys = [...raw.matchAll(/("(?:\\.|[^"\\])*")\s*:/g)].map(m => JSON.parse(m[1]))
+  if (rawKeys.length !== keys.length || new Set(rawKeys).size !== rawKeys.length) throw new Error("Duplicate or missing time_policy fields")
+  for (const key of ["execution_id", "mandate_id"]) {
+    if (typeof resolution[key] !== "string" || !resolution[key].trim()) throw new Error(`time_policy requires ${key}`)
+  }
+  if (resolution.mode !== "WU_PLANNING_ESTIMATES") throw new Error("Unsupported time policy")
+  if (resolution.blocked_at_revision !== null && (!Number.isSafeInteger(resolution.blocked_at_revision) || resolution.blocked_at_revision < 0)) throw new Error("Invalid blocker revision")
+  if (!Number.isFinite(resolution.epic_total_seconds) || resolution.epic_total_seconds <= 0) throw new Error("Invalid Epic total")
+  return { resolution, decision_content: content, source_artifact_id: record.source_id,
+    source_record_key: record.record_key, source_hash: record.sha256 }
+}
+
 // Verify that every WU named by a frozen Epic sequence already exists as a
 // durable Work Unit artifact linked back to that Epic. Sequence declaration is
 // not permission to materialize missing WUs during execution.

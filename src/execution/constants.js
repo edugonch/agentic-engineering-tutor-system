@@ -14,6 +14,7 @@ export const OPERATION_TYPES = Object.freeze([
   "SUPERVISOR_SENT",
   "MANDATE_APPROVE", // owner-approved Epic execution mandate (initial authority input)
   "MANDATE_AMEND", // versioned owner-approved policy amendment; budget/scope remain immutable
+  "TIME_POLICY_ADOPT", // approved conversion of WU limits/reservations to planning estimates
   "WU_BUDGET_AMEND", // approved WU-only additional allocation and atomic budget-block recovery
   "WU_CONTRACT_CORRECT",
   "WU_CONTRACT_BIND", // bind/normalize a historical WU without rewriting prior events

@@ -5,7 +5,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { runExecutionController } from "../../src/execution/controller-tool.js"
 import { createExecutionController } from "../../src/execution/execution.js"
-import { recordKnowledgeArtifact } from "../../src/project-knowledge.js"
+import { recordKnowledgeArtifact, findApprovedEpic } from "../../src/project-knowledge.js"
 
 const deviation = "TDD ordering deviation: implementation preceded the required RED execution. No historical RED evidence exists. Retrospective validation was explicitly authorized by the owner."
 async function fixture(t) {
@@ -14,9 +14,19 @@ async function fixture(t) {
   const run = (action, extra = {}) => runExecutionController(root, { execution_id: "E1", session_id: "parent", action, ...extra })
   const record = input => recordKnowledgeArtifact(root, { title: "Owner decision", status: "APPROVED", owner_confirmed: true, source_refs: ["https://example.com/owner-approval"], ...input })
   await record({ artifact_type: "epic", artifact_id: "EPIC03", content: 'execution_mandate: {"max_wus":10,"total_seconds":86400}' })
-  await run("approve_mandate", { epic_artifact_id: "EPIC03", mandate_id: "M1" })
   const historical = await createExecutionController({ dir: join(root, ".harness/execution/controller/E1") })
   const lease = await historical.acquire("parent")
+  // Replay compatibility fixture: this mandate predates planning-estimate mode.
+  const epic = await findApprovedEpic(root, "EPIC03")
+  await historical.commit({ operation_id: "E1:mandate", operation_type: "MANDATE_APPROVE", body: {
+    execution_id: "E1:exec", mandate_id: "M1", mandate_revision: epic.source_revision,
+    max_wus: 10, total_seconds: 86400, merge_policy: "none", required_ci_checks: [],
+    authority_kind: "OWNER_APPROVED_EPIC", source_artifact_id: epic.source_id,
+    source_record_key: epic.record_key, source_hash: epic.sha256,
+  } }, { holder_session_id: "parent", expected_revision: 0, lease_fencing_token: lease.fencing_token })
+  assert.equal((await run("approve_mandate", { epic_artifact_id: "EPIC03", mandate_id: "M1" })).commit_status, "replayed")
+
+
   await historical.commit({ operation_id: "legacy-activate", operation_type: "WU_ACTIVATE", body: { wu_id: "WU063", mandate_id: "M1" } },
     { holder_session_id: "parent", expected_revision: (await historical.snapshot()).state.revision, lease_fencing_token: lease.fencing_token })
   await run("reserve", { dispatch_id: "builder", reserved_seconds: 13500 })

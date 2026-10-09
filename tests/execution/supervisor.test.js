@@ -6,7 +6,7 @@ import { join } from "node:path"
 import { createExecutionController } from "../../src/execution/execution.js"
 import { createExecutionSupervisor } from "../../src/execution/supervisor.js"
 
-async function fixture(t) {
+async function fixture(t, planning = false) {
   const root = await mkdtemp(join(tmpdir(), "supervisor-"))
   t.after(() => rm(root, { recursive: true, force: true }))
   const c = await createExecutionController({ dir: join(root, ".harness/execution/controller/E") })
@@ -16,6 +16,7 @@ async function fixture(t) {
       { holder_session_id: "ses_root", expected_revision: state.revision, lease_fencing_token: lease.fencing_token })
   }
   await commit("MANDATE_APPROVE", { execution_id: "E", mandate_id: "M", total_seconds: 100, max_wus: 2,
+    ...(planning ? { time_policy: "WU_PLANNING_ESTIMATES" } : {}),
     authority_kind: "OWNER_APPROVED_EPIC", source_artifact_id: "epic", source_record_key: "r", source_hash: "h" })
   await commit("WU_ACTIVATE", { wu_id: "WU1", mandate_id: "M" })
   const prompts = new Map()
@@ -99,4 +100,15 @@ test("explicit supervisor opt-out never binds or resumes an execution", async t 
   assert.equal(await disabled.tick("E"), false)
   assert.deepEqual(await f.c.snapshot(), before)
   assert.equal(f.prompts.size, 0)
+})
+
+
+test("supervisor resumes after WU estimate overrun while Epic budget remains", async t => {
+  const f = await fixture(t, true)
+  t.after(() => f.s.dispose())
+  await f.commit("WU_CONTRACT_BIND", { contract: { wu_id: "WU1", active_seconds: 10 } })
+  await f.commit("PHASE_START", { phase: "ACTIVE", started_at: 0 })
+  await f.commit("PHASE_END", { ended_at: 12 })
+  assert.equal(await f.s.tick("E"), true)
+  assert.equal(f.prompts.size, 1)
 })
