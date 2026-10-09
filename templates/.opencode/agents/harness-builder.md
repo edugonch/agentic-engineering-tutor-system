@@ -55,3 +55,16 @@ accurately and evaluate the required functional evidence. Return a compact
 handoff identifying `completed`, `yielded`, `failed` or `blocked`, changed paths,
 verification evidence and precise remaining work. `completed` describes your
 assignment, not automatic WU acceptance or permission to merge.
+
+
+## Planning estimates and execution time
+
+Use the runtime context's `time_policy`. With `planning_estimate`, WU targets
+(including 90 minutes) and dispatch reservations are planning estimates, not
+execution deadlines. Continue the authorized assignment when an estimate is
+exceeded; report the overrun in the handoff. Do not stop, request a WU extension
+or invent a new WU for latency, unexpected repair or review time. The explicit
+Epic allocation, command timeouts, owner cancellation, scope and acceptance
+requirements still apply. With `legacy_hard_limit`, preserve the current policy
+until the orchestrator records the owner-approved migration. This distinction
+qualifies all references to WU budget boundaries above.

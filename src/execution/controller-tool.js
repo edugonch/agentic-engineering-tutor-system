@@ -1,3 +1,4 @@
+import { PLANNING_ESTIMATES } from "./time-policy.js"
 import { deriveVerificationCorrection, correctionCheckMapping } from "./contract-correction.js"
 import { recoveryAction } from "./progress.js"
 // Phase 2 runtime instrument: `harness_execution_controller`.
@@ -26,7 +27,7 @@ import { project, deriveBudget, applyEvent } from "./state.js"
 import { createExecutionController } from "./execution.js"
 import { createCandidateRegistry } from "./candidate-registry.js"
 import { readVerificationReceipt } from "./verification-results.js"
-import { findApprovedEpic, findApprovedWuBudgetAmendment, findApprovedAuthorityResolution, verifyDeclaredWorkUnits, readWorkUnitDefinition } from "../project-knowledge.js"
+import { findApprovedTimePolicy, findApprovedEpic, findApprovedWuBudgetAmendment, findApprovedAuthorityResolution, verifyDeclaredWorkUnits, readWorkUnitDefinition } from "../project-knowledge.js"
 import { DISPATCH_STATUS, RESERVATION_STATUS, MANDATE_AUTHORITY, RECOVERABLE_BLOCKER_CLASSES } from "./constants.js"
 
 function sanitizeId(raw, label) {
@@ -75,6 +76,7 @@ async function summary(controller) {
     mandate: state.mandate,
     wu: state.wu,
     wu_budget: state.wu ? wuBudgetUsage(state, state.wu.wu_id) : null,
+    time_policy: state.time_policy ?? { mode: "LEGACY_HARD_LIMITS" },
     wu_budget_amendments: state.wu_budget_amendments ?? {},
     contract_status: state.wu?.contract ? (state.wu.contract.normalization_required ? "NORMALIZATION_REQUIRED" : "COMPILED") : "LEGACY_UNBOUND",
     candidates: state.candidates,
@@ -216,7 +218,9 @@ export async function runExecutionController(projectRoot, input, candidateRegist
     if (epic.mandate.wu_sequence?.length) {
       await verifyDeclaredWorkUnits(projectRoot, epic, epic.mandate.wu_sequence)
     }
+    const priorApproval = (await controller.snapshot()).events.find(e => e.operation_id === `${executionId}:mandate`)
     const body = {
+      ...(!priorApproval || priorApproval.body.time_policy ? { time_policy: priorApproval?.body.time_policy ?? PLANNING_ESTIMATES } : {}),
       execution_id: `${executionId}:exec`,
       mandate_id: mandateId,
       mandate_revision: epic.source_revision,
@@ -336,6 +340,15 @@ export async function runExecutionController(projectRoot, input, candidateRegist
     const res = await commitAction(controller, holder,
       `${executionId}:authority-resolution:${authority.source_record_key}`, "AUTHORITY_RESOLVE", body)
     return { action, commit_status: res.status, authority_resolution_receipt: body, ...(await summary(controller)) }
+  }
+
+  if (action === "adopt_planning_estimates") {
+    const authority = await findApprovedTimePolicy(projectRoot, String(input.decision_artifact_id ?? ""))
+    if (authority.resolution.execution_id !== executionId) throw new Error("Time policy execution_id mismatch")
+    const body = { ...authority.resolution, decision_content: authority.decision_content,
+      source_artifact_id: authority.source_artifact_id, source_record_key: authority.source_record_key, source_hash: authority.source_hash }
+    const res = await commitAction(controller, holder, `${executionId}:time-policy:${authority.source_record_key}`, "TIME_POLICY_ADOPT", body)
+    return { action, commit_status: res.status, ...(await summary(controller)) }
   }
 
   if (action === "amend_wu_budget") {
@@ -588,7 +601,7 @@ export async function runExecutionController(projectRoot, input, candidateRegist
     }
     if (!RECOVERABLE_BLOCKER_CLASSES.has(blocker.class)) {
       if (blocker.class === "BLOCKED_AUTHORITY") throw new Error("clear_blocker cannot clear non-recoverable blocker BLOCKED_AUTHORITY. Use resolve_authority_blocker with the exact owner-approved decision; no renewed approval is needed when already granted.")
-      throw new Error(`clear_blocker cannot clear non-recoverable blocker ${blocker.class}.${blocker.class === "BUDGET_EXHAUSTED" ? " For an owner-approved WU allocation within the existing Epic total, use amend_wu_budget with decision_artifact_id." : ""}`)
+      throw new Error(`clear_blocker cannot clear non-recoverable blocker ${blocker.class}.${blocker.class === "BUDGET_EXHAUSTED" ? " If the owner authorized planning estimates, use adopt_planning_estimates with decision_artifact_id; legacy finite allocations use amend_wu_budget. Neither increases the Epic total." : ""}`)
     }
     const operationId = `${executionId}:clear-blocker:${blocker.at_revision}`
     const res = await controller.commit(

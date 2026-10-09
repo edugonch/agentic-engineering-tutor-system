@@ -1,3 +1,4 @@
+import { PLANNING_ESTIMATES } from "./time-policy.js"
 import { validateContractCorrection } from "./contract-correction.js"
 import { executionProgress } from "./progress.js"
 import { wuBudgetUsage } from "./wu-budget.js"
@@ -195,6 +196,10 @@ export function applyEvent(previous, event) {
       if (!body.mandate_id) throw new Error("MANDATE_APPROVE requires mandate_id.")
       if (!Number.isSafeInteger(body.max_wus) || body.max_wus < 1) throw new Error("MANDATE_APPROVE requires a positive integer max_wus.")
       if (!Number.isFinite(body.total_seconds) || body.total_seconds <= 0) throw new Error("MANDATE_APPROVE requires a finite positive total_seconds budget.")
+      if (body.time_policy !== undefined) {
+        if (body.time_policy !== PLANNING_ESTIMATES) throw new Error("Unknown time policy")
+        state.time_policy = { mode: body.time_policy, source: "initial_mandate", at_revision: state.revision }
+      }
       state.execution_id = body.execution_id ?? state.execution_id
       state.mandate = {
         mandate_id: body.mandate_id,
@@ -301,6 +306,22 @@ export function applyEvent(previous, event) {
         source_hash: body.source_hash,
         source_revision: body.source_revision ?? null,
         at_revision: state.revision,
+      }
+      break
+    }
+
+    case "TIME_POLICY_ADOPT": {
+      if (state.completed || !state.mandate || body.mode !== PLANNING_ESTIMATES) throw new Error("Invalid time policy transition")
+      if (`${body.execution_id}:exec` !== state.execution_id || body.mandate_id !== state.mandate.mandate_id || body.epic_total_seconds !== state.budget.total_seconds) throw new Error("Time policy authority target mismatch")
+      if (!body.source_artifact_id || !body.source_record_key || !/^[a-f0-9]{64}$/.test(body.source_hash ?? "")) throw new Error("Time policy requires approved decision provenance")
+      if (state.budget.active_phase || Object.values(state.dispatches).some(d => ![DISPATCH_STATUS.RESULT_RECONCILED, DISPATCH_STATUS.RELEASED].includes(d.status))) throw new Error("Settle existing dispatches and phases before adopting the time policy")
+      if ((state.blocker?.at_revision ?? null) !== body.blocked_at_revision) throw new Error("Time policy blocker baseline changed")
+      if (state.blocker && state.blocker.class !== "BUDGET_EXHAUSTED") throw new Error("Time policy cannot resolve an unrelated blocker")
+      state.time_policy = { ...body, at_revision: state.revision }
+      if (state.blocker && deriveBudget(state.budget).available_seconds > 0) {
+        state.last_blocker_resolution = { ...state.blocker, blocked_at_revision: state.blocker.at_revision,
+          resolution: "Owner-approved WU planning estimates; Epic budget preserved", source_hash: body.source_hash, at_revision: state.revision }
+        state.blocker = null
       }
       break
     }
@@ -670,7 +691,7 @@ export function applyEvent(previous, event) {
 
     case "BLOCK": {
       if (!BLOCKER_CLASSES.includes(body.class)) throw new Error(`Unknown blocker class: ${body.class}.`)
-      state.blocker = { class: body.class, reason: body.reason ?? null, at_revision: state.revision, ...(body.class === "NO_PROGRESS" ? { progress_hash: executionProgress(state) } : {}), ...(body.budget_reason === "reservation_expired" ? { budget_reason: body.budget_reason, dispatch_id: body.dispatch_id } : {}) }
+      state.blocker = { class: body.class, reason: body.reason ?? null, at_revision: state.revision, ...(body.class === "NO_PROGRESS" ? { progress_hash: executionProgress(state) } : {}), ...(["reservation_expired", "epic_exhausted"].includes(body.budget_reason) ? { budget_reason: body.budget_reason, dispatch_id: body.dispatch_id } : {}) }
       break
     }
 

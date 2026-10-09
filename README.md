@@ -487,3 +487,35 @@ its configured shell rules, while `profile_provisioning.preserved` identifies
 preserved global profiles. This diagnostic does not certify terminal exposure or
 credentials: verify the required read in the actual session before declaring an
 authority inaccessible. Empty MCP resources alone do not establish missing access.
+
+### WU time targets are planning estimates
+
+New owner-approved executions use `WU_PLANNING_ESTIMATES`: the WU target (for
+example 90 minutes) keeps planning small, and dispatch reservations estimate the
+next assignment. Neither interrupts a builder/reviewer nor prevents verification,
+CI observation or continuation when exceeded. Actual measured consumption remains
+in the ledger; `wu_budget.enforced=false` and `estimate_overrun_seconds` make the
+distinction explicit. The owner-approved Epic total still bounds execution.
+Command timeouts, cancellation, no-progress protection and acceptance/merge gates
+remain separate controls. Runtime dispatch measurement is a wall-time envelope,
+not a claim that all elapsed latency is active engineering time.
+
+Historical logs retain their original semantics. To migrate an existing execution,
+record the owner's existing instruction as an APPROVED decision, with its source
+reference and exactly one line (substitute values from current status):
+
+```text
+time_policy: {"execution_id":"...","mandate_id":"...","mode":"WU_PLANNING_ESTIMATES","blocked_at_revision":null,"epic_total_seconds":86400}
+```
+
+Use the exact blocker revision when one exists, otherwise null. Then call
+`harness_execution_controller(action="adopt_planning_estimates", execution_id,
+decision_artifact_id)` and `verify`. This is an audited event, not an event-log edit.
+It preserves prior consumption, candidates, reviews, amendments and the frozen WU
+sequence, applies to the remaining execution, and clears only the targeted budget
+stop when Epic capacity remains. Settle interrupted dispatches first; do not replay
+implementation or invent acceptance. An unrelated blocker or exhausted Epic is
+not cleared. Normalizing an already-granted instruction needs no new approval.
+
+Updates refresh unmodified managed profiles. Customized profiles are preserved;
+read the runtime `time_policy` instead of inferring deadlines from old prose.

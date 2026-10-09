@@ -10,7 +10,7 @@ import { spawn } from "node:child_process"
 import { once } from "node:events"
 import { wuBudgetUsage } from "../../src/execution/wu-budget.js"
 
-async function fixture(t) {
+async function fixture(t, planning = false) {
   const dir = await mkdtemp(join(tmpdir(), "verify-budget-"))
   t.after(() => rm(dir, { recursive: true, force: true }))
   const c = await createExecutionController({ dir })
@@ -20,7 +20,7 @@ async function fixture(t) {
       { holder_session_id: "root", expected_revision: state.revision, lease_fencing_token: lease.fencing_token })
   }
   const contract = { source_wu_id: "WU1", commands: [{ id: "check", program: "node", args: ["--version"] }] }
-  await commit("MANDATE_APPROVE", { mandate_id: "M", max_wus: 1, total_seconds: 100 })
+  await commit("MANDATE_APPROVE", { mandate_id: "M", max_wus: 1, total_seconds: 100, ...(planning ? { time_policy: "WU_PLANNING_ESTIMATES" } : {}) })
   await commit("WU_ACTIVATE", { wu_id: "WU1", mandate_id: "M", contract: { active_seconds: 10,
     verification_contract: contract, verification_contract_hash: verificationContractHash(contract) } })
   return { c, commit, candidate: { verification_contract: contract } }
@@ -86,4 +86,30 @@ test("reviewer with exact live launch evidence uses its reservation without acqu
   assert.deepEqual(await c.snapshot(), before)
   await assert.rejects(withVerificationBudget({ ...args, launchEvidence: [], run: () => assert.fail() }), /DISPATCH_IDENTITY/)
   await assert.rejects(withVerificationBudget({ ...args, runtimeSession: { ...runtimeSession, parentID: "other" }, run: () => assert.fail() }), /DISPATCH_IDENTITY/)
+})
+
+
+test("planning estimates allow verification after WU and reviewer reservation overruns", async t => {
+  const { c, commit, candidate } = await fixture(t, true)
+  await commit("PHASE_START", { phase: "ACTIVE", started_at: 0 })
+  await commit("PHASE_END", { ended_at: 12 })
+  assert.equal(wuBudgetUsage((await c.snapshot()).state, "WU1").available_seconds, -2)
+  let ticks = 0
+  const result = await withVerificationBudget({ controller: c, candidate, context: { sessionID: "root" },
+    monotonic: () => (ticks++ % 2) * 2000, run: async ({ budgetMs }) => {
+      assert.equal(budgetMs, 30000) // command timeout, not the exhausted WU estimate
+      return { status: "PASS" }
+    } })
+  assert.equal(result.status, "PASS")
+  assert.equal((await c.snapshot()).state.budget.used_seconds, 14)
+  await commit("DISPATCH_RESERVE", { dispatch_id: "review", reserved_seconds: 0 })
+  await commit("DISPATCH_PREPARE", { dispatch_id: "review", prepared_by_session_id: "root", expected_agent: "harness-reviewer", claim_required: true })
+  await commit("DISPATCH_LAUNCH_CLAIM", { dispatch_id: "review", call_id: "review-call" })
+  await commit("DISPATCH_LAUNCH", { dispatch_id: "review", session_id: "child" })
+  const before = await c.snapshot()
+  assert.equal((await withVerificationBudget({ controller: c, candidate, context: { sessionID: "child" }, run: async ({ budgetMs }) => {
+    assert.ok(budgetMs > 0)
+    return { status: "PASS" }
+  } })).status, "PASS")
+  assert.deepEqual(await c.snapshot(), before, "reviewer does not acquire parent lease or double-charge its interval")
 })

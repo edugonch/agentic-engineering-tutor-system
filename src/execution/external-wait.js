@@ -1,3 +1,4 @@
+import { usesPlanningEstimates } from "./time-policy.js"
 import { stableHash } from "./serialize.js"
 import { wuBudgetUsage } from "./wu-budget.js"
 import { ExternalWaitError } from "./external-errors.js"
@@ -22,7 +23,7 @@ export async function runWithExternalWait({ controller, session_id, operation, r
     throw new Error(`Execution blocked: ${state.blocker.class}`)
   }
   const wu = state.wu && wuBudgetUsage(state, state.wu.wu_id)
-  if (state.budget.total_seconds - state.budget.used_seconds <= 0 || (wu?.ceiling_seconds != null && wu.used_seconds >= wu.ceiling_seconds))
+  if (state.budget.total_seconds - state.budget.used_seconds <= 0 || (!usesPlanningEstimates(state) && wu?.ceiling_seconds != null && wu.used_seconds >= wu.ceiling_seconds))
     throw new Error("BUDGET_EXHAUSTED: no authorized execution budget remains")
   let wait = state.external_wait
   if (wait && wait.operation !== operation) throw new Error(`WAITING_EXTERNAL: pending operation ${wait.operation} must be resolved first`)

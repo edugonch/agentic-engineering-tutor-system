@@ -1,3 +1,4 @@
+import { usesPlanningEstimates, epicExecutionRemaining } from "./time-policy.js"
 import { randomUUID } from "node:crypto"
 import { wuBudgetUsage } from "./wu-budget.js"
 import { verificationContractHash } from "./verification-contract.js"
@@ -34,7 +35,7 @@ export async function withVerificationBudget({ controller, candidate, check_id, 
   if (worker && worker.reservation_status !== "reserved") throw new Error("Verification requires an active worker reservation")
   const claimed = worker ? Date.parse(worker.launch_claimed_at) : NaN
   const elapsedPhase = b.active_phase === "ACTIVE" ? Math.max(0, Date.now() / 1000 - b.active_started_at) : 0
-  const available = worker ? worker.reserved_seconds - (Number.isFinite(claimed) ? Math.max(0, (Date.now() - claimed) / 1000) : 0)
+  const available = usesPlanningEstimates(state) ? epicExecutionRemaining(state, { worker }) : worker ? worker.reserved_seconds - (Number.isFinite(claimed) ? Math.max(0, (Date.now() - claimed) / 1000) : 0)
     : Math.min(b.total_seconds - b.used_seconds - b.reserved_seconds, wu.available_seconds ?? 0) - elapsedPhase
   if (!Number.isFinite(available) || available <= 0) return { status: "BLOCKED_BUDGET", reason: "No authorized verification allocation remains" }
   const checks = candidate.verification_contract.commands.filter(check => !check_id || check.id === check_id)

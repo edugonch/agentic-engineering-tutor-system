@@ -1,3 +1,4 @@
+import { usesPlanningEstimates } from "./time-policy.js"
 // Durable continuation outbox. Enabled by default; explicit opt-out remains available.
 // It wakes the existing root orchestrator; it never creates/finishes a worker,
 // clears a blocker, changes authority, or grants additional budget.
@@ -57,7 +58,7 @@ export function createExecutionSupervisor(ctx, projectRoot, { enabled = true, no
       if (info.outcome !== "succeeded") { disarm(execution); return false } // never override cancellation or failure
       const budget = state.budget
       const wu = state.wu && !state.wu.completed ? wuBudgetUsage(state, state.wu.wu_id) : null
-      if (budget.total_seconds - budget.used_seconds <= 0 || (wu?.ceiling_seconds != null && wu.used_seconds >= wu.ceiling_seconds)) return false
+      if (budget.total_seconds - budget.used_seconds <= 0 || (!usesPlanningEstimates(state) && wu?.ceiling_seconds != null && wu.used_seconds >= wu.ceiling_seconds)) return false
       if (state.external_wait) {
         const wait = state.external_wait
         if (now() < Date.parse(wait.next_retry_at)) { arm(execution, Date.parse(wait.next_retry_at)); return false }
