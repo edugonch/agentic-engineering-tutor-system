@@ -69,7 +69,9 @@ export function runCommand(program, args, { cwd, env = sanitizedEnv(cwd), timeou
     if (signal?.aborted) { resolve({ ok: false, aborted: true, exitCode: null, stdout: "", stderr: "", durationMs: 0 }); return }
     let child
     try {
-      child = spawn(process.execPath, [fileURLToPath(new URL("./command-host.mjs", import.meta.url)), String(process.pid), program, ...args],
+      // OpenCode may be a compiled Bun executable: execPath is its CLI, not Node.
+      // Resolve Node through the same PATH used by the declared npm/node checks.
+      child = spawn("node", [fileURLToPath(new URL("./command-host.mjs", import.meta.url)), String(process.pid), program, ...args],
         { cwd, env, shell: false, detached: true, stdio: ["ignore", "pipe", "pipe"] })
     } catch (error) {
       resolve({ ok: false, error: String(error?.message ?? error), exitCode: null, stdout: "", stderr: "", truncated: false, timedOut: false, durationMs: Date.now() - startedAt })

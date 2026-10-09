@@ -96,3 +96,32 @@ node scripts/collect-continuity-canary.mjs /ruta/repositorio-canary EXECUTION_ID
 El directorio de salida debe existir y el archivo debe ser nuevo. El archivo contiene contexto de las sesiones del canary y debe conservarse con sus evidencias, sin publicarlo automáticamente.
 
 Comprobación local de disponibilidad mediante `Service.discover()`: `real_opencode_service_available=false`. Esto bloquea aquí la prueba con proveedor real; no bloqueó las correcciones, sus pruebas ni la creación del recolector. Los restantes alcances parciales de la matriz no se declaran cerrados por estos resultados.
+
+## Follow-up: WU063 verification host and reviewer admission
+
+ALFRAN reported a frozen candidate whose declared setup invoked the OpenCode CLI
+with command-host arguments, and a reviewer rejected by the parent's lease.
+
+- `runCommand` incorrectly assumed `process.execPath` was a JavaScript runtime.
+  In the packaged OpenCode host it can be the OpenCode executable. The command
+  host now uses `node` from the same PATH as declared npm/node commands. The
+  launch still uses argv, a detached process group, cancellation and owner-death
+  cleanup. Node must be available in the OpenCode service PATH (Node 24 for
+  ALFRAN); changing the terminal PATH alone does not change an existing service.
+- Verification previously classified an unbound pending child as root work.
+  It now accepts the pending worker reservation only with an exact runtime
+  parent/tool-call/agent/child match. Runtime identity is read through the SDK,
+  not accepted as model tool input. No parent lease is acquired or transferred,
+  no launch identity or completion is invented, and the reservation remains
+  responsible for consumption. Missing/conflicting evidence fails with
+  `HARNESS_DISPATCH_IDENTITY_REQUIRED` rather than attempting root admission.
+- Regression tests reproduced both failures before the changes. Package
+  validation and all 455 tests pass after the changes, including cancellation,
+  timeout and host-death cleanup. This does not constitute real OpenCode
+  acceptance: the service is unavailable in this environment.
+
+Resume the existing frozen candidate after plugin update/service restart and
+supported resolution of the runner tooling blocker. Preserve the current
+budget, retrospective authorization and candidate; rerun declared checks and a
+fresh independent review before acceptance/CI/merge. Do not reimplement WU063 or
+claim that its reported local GREEN constitutes independent review.

@@ -192,3 +192,19 @@ test("verification command is reaped after its owning host is killed", async t =
   await new Promise(resolve => setTimeout(resolve, 1800))
   assert.equal(existsSync(survived), false)
 })
+
+test("command host uses Node even when plugin execPath is an embedded CLI", async t => {
+  const root = await mkdtemp(join(tmpdir(), "embedded-runtime-"))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const script = `import { runCommand } from ${JSON.stringify(new URL("../../src/execution/verification.js", import.meta.url).href)};
+    Object.defineProperty(process, 'execPath', { value: '/missing/opencode' });
+    const result = await runCommand('node', ['-e', 'console.log("actual-node")'], { cwd: ${JSON.stringify(root)} });
+    console.log(JSON.stringify(result));`
+  const child = spawn(process.execPath, ["--input-type=module", "-e", script])
+  let output = ""
+  child.stdout.on("data", chunk => output += chunk)
+  await once(child, "close")
+  const result = JSON.parse(output)
+  assert.equal(result.ok, true, result.error ?? result.stderr)
+  assert.match(result.stdout, /actual-node/)
+})

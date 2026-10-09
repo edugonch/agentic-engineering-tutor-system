@@ -5,7 +5,7 @@ import { verificationContractHash } from "./verification-contract.js"
 // Verification inside a worker is covered by that worker's measured envelope.
 // Root verification owns an ACTIVE phase, settled even on failure/cancellation.
 // The timestamps are anchored to monotonic elapsed time after admission.
-export async function withVerificationBudget({ controller, candidate, check_id, context, run, monotonic = () => performance.now() }) {
+export async function withVerificationBudget({ controller, candidate, check_id, context, runtimeSession, launchEvidence = [], run, monotonic = () => performance.now() }) {
   const session = context?.sessionID
   if (!session) throw new Error("Verification requires a runtime session identity")
   const { state } = await controller.snapshot()
@@ -16,7 +16,22 @@ export async function withVerificationBudget({ controller, candidate, check_id, 
     throw new Error("Verification candidate does not match the active WU contract")
   const b = state.budget, wu = wuBudgetUsage(state, state.wu.wu_id)
   if (state.verification_phase) throw new Error("HARNESS_VERIFICATION_IN_PROGRESS: observe the existing verification before starting another")
-  const worker = Object.values(state.dispatches).find(d => d.session_id === session && d.status === "launched")
+  let worker = Object.values(state.dispatches).find(d => d.session_id === session && d.status === "launched")
+  // While a subagent is running, the parent may not yet have persisted LAUNCH.
+  // Admit only the exact child exposed by the claimed runtime tool call. This
+  // is read-only: no lease transfer, identity recovery or acceptance is implied.
+  if (!worker && runtimeSession?.parentID) {
+    const matches = Object.values(state.dispatches).filter(d =>
+      runtimeSession.id === session && d.status === "pending_launch" && !d.session_id &&
+      d.prepared_by_session_id === runtimeSession.parentID && d.expected_agent === runtimeSession.agent &&
+      d.launch_call_id && (Array.isArray(launchEvidence) ? launchEvidence : []).flatMap(m =>
+        m.type === "assistant" ? m.content ?? [] : []).filter(p =>
+        p.type === "tool" && p.name === "subagent" && p.id === d.launch_call_id &&
+        p.state?.input?.agent === d.expected_agent && p.state?.metadata?.sessionID === session).length === 1)
+    if (matches.length !== 1) throw new Error("HARNESS_DISPATCH_IDENTITY_REQUIRED: verification requires the exact claimed child; inspect the parent launch evidence")
+    worker = matches[0]
+  }
+  if (worker && worker.reservation_status !== "reserved") throw new Error("Verification requires an active worker reservation")
   const claimed = worker ? Date.parse(worker.launch_claimed_at) : NaN
   const elapsedPhase = b.active_phase === "ACTIVE" ? Math.max(0, Date.now() / 1000 - b.active_started_at) : 0
   const available = worker ? worker.reserved_seconds - (Number.isFinite(claimed) ? Math.max(0, (Date.now() - claimed) / 1000) : 0)
