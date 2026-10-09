@@ -214,3 +214,32 @@ loop. The orchestrator template requires prompt blocker/checkpoint recording
 without asking permission already granted by the mandate. Existing customized
 or project-local agent profiles are not overwritten by this runtime correction;
 compare them with the packaged template when updating those profiles.
+
+## Process repair without renewed per-WU authority
+
+An owner-approved `process_policy` decision can delegate transparent TDD ordering
+recovery for the remaining Epic. `adopt_process_policy` records its exact source
+once. `start_process_recovery` moves a covered `TDD_ORDER` deviation to repair,
+without accepting the work. A legacy authority blocker requires its exact
+`status.blocker_fingerprint` in the approved policy; other authority remains intact.
+See the orchestrator template for the envelope and full transition sequence.
+
+Register executed negative baseline/mutation receipts with
+`record_process_evidence`, restore full GREEN, freeze the final candidate and
+prepare an independent reviewer with its `candidate_id`. After handoff and
+reconciliation, `record_process_review` reads the reviewer's exact `process_review`
+attestation. The verdict is bound to candidate and evidence set. Ordinary review,
+CI, merge and WU completion still apply. A missing-module failure alone is not
+behavioral acceptance. `record_red` is available for structured TDD obligations;
+it establishes observed baseline failure, not unobserved historical edit order.
+
+The worker context carries all current-WU authority resolutions. Proposed additive
+verification checks may be adopted when `technical_verification` is delegated;
+existing checks, setup, capabilities and environment cannot be weakened by that
+route. Semantic substitutions require their applicable approved source.
+
+External-wait expiry is observational: the merge wrapper reads the current remote
+condition first. An old timeout can recover after terminal exact-binding evidence;
+the normal merge path revalidates before any side effect. The supervisor may wake
+the root once to observe an expired wait, never to clear unrelated blockers or
+fabricate CI success. User interruption remains authoritative.

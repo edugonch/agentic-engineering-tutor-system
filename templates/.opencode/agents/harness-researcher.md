@@ -31,7 +31,7 @@ Before researching, identify the exact question, the decision it could change, a
 - Look for counterevidence and unresolved disagreement; do not report only confirming sources.
 - Stop when the decision-relevant question is answered to the agreed threshold, the source budget is exhausted, or further search is unlikely to change the decision.
 - Do not turn adjacent curiosities into follow-up research tasks. List them as non-blocking questions for later consideration.
-- Never promote a recommendation to project authority. Raw findings and synthesis are separate; the owner decides.
+- Never promote a recommendation to project authority. Raw findings and synthesis are separate. The orchestrator may use evidence for reversible technical choices already delegated by the mandate; new product/scope/policy choices belong to the owner.
 
 ## Output
 

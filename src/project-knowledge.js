@@ -884,6 +884,36 @@ export async function findApprovedTimePolicy(projectRoot, artifactId) {
     source_record_key: record.record_key, source_hash: record.sha256 }
 }
 
+export async function findApprovedProcessPolicy(projectRoot, artifactId) {
+  const root = assertRoot(projectRoot)
+  const index = await readIndex(root)
+  const matches = index.records.filter(r => r.classification === "DECISION" &&
+    r.declared_authority === "APPROVED" && r.import_status === "OWNER_APPROVED_ARTIFACT" &&
+    r.source_system === "harness-artifact" && (r.source_id === artifactId || r.record_key === artifactId))
+  if (matches.length !== 1) throw new Error("adopt_process_policy requires exactly one local owner-approved DECISION")
+  const record = matches[0]
+  const path = resolve(root, record.archive_path)
+  if (!inside(root, path)) throw new Error("PROCESS_POLICY_INTEGRITY: unsafe archive path")
+  const info = await lstat(path)
+  if (!info.isFile() || info.isSymbolicLink()) throw new Error("PROCESS_POLICY_INTEGRITY: expected regular archive")
+  const bytes = await readFile(path)
+  if (sha256(bytes) !== record.sha256 || record.sha256 !== record.source_revision) throw new Error("PROCESS_POLICY_INTEGRITY: decision differs from approved content")
+  const content = bytes.toString("utf8")
+  const lines = content.split(/\r?\n/).filter(line => line.startsWith("process_policy: "))
+  if (lines.length !== 1) throw new Error("Decision needs exactly one process_policy: JSON line; normalize existing approval into a new linked decision without requesting approval again")
+  const raw = lines[0].slice("process_policy: ".length)
+  const resolution = JSON.parse(raw)
+  const keys = ["execution_id", "mandate_id", "scope", "recoverable", "technical_verification", "legacy_blocker_hashes"]
+  if (!resolution || Array.isArray(resolution) || typeof resolution !== "object" || Object.keys(resolution).some(k => !keys.includes(k))) throw new Error("Invalid process_policy fields")
+  const rawKeys = [...raw.matchAll(/("(?:\\.|[^"\\])*")\s*:/g)].map(m => JSON.parse(m[1]))
+  if (rawKeys.length !== keys.length || new Set(rawKeys).size !== rawKeys.length) throw new Error("Duplicate or missing process_policy fields")
+  if (typeof resolution.execution_id !== 'string' || typeof resolution.mandate_id !== 'string' || resolution.scope !== 'remaining_epic' ||
+      JSON.stringify(resolution.recoverable) !== '["TDD_ORDER"]' || typeof resolution.technical_verification !== 'boolean' ||
+      !Array.isArray(resolution.legacy_blocker_hashes) || resolution.legacy_blocker_hashes.some(h => !/^[a-f0-9]{64}$/.test(h))) throw new Error('Invalid process recovery policy')
+  return { resolution, decision_content: content, source_artifact_id: record.source_id,
+    source_record_key: record.record_key, source_hash: record.sha256 }
+}
+
 // Verify that every WU named by a frozen Epic sequence already exists as a
 // durable Work Unit artifact linked back to that Epic. Sequence declaration is
 // not permission to materialize missing WUs during execution.
@@ -971,13 +1001,14 @@ function parseExecutionMandate(content) {
 
 // Resolve and verify the actual WU source before execution. The approved Epic
 // supplies authority; a derived WU need not falsely claim owner approval.
-export async function readWorkUnitDefinition(projectRoot, wuId, epicId, sourceId = wuId, { requireApproved = false } = {}) {
+export async function readWorkUnitDefinition(projectRoot, wuId, epicId, sourceId = wuId, { requireApproved = false, requireProposed = false } = {}) {
   const root = assertRoot(projectRoot)
   const index = await readIndex(root)
   const matches = index.records.filter(r => r.classification === "WORK_UNIT" &&
     (r.record_key === sourceId || r.source_id === sourceId || (sourceId === wuId && r.source_id.startsWith(`${wuId}-`))))
   if (matches.length !== 1) throw new Error(`WU_CONTRACT_REQUIRED: expected one durable source for ${wuId}; record the existing WU or select its exact wu_artifact_id.`)
   const record = matches[0]
+  if (requireProposed && (record.source_system !== "harness-artifact" || record.import_status !== "RECORDED_ARTIFACT")) throw new Error("Delegated correction requires a PROPOSED WU source; rejected or superseded sources cannot be reused")
   if (requireApproved && (record.declared_authority !== "APPROVED" || record.import_status !== "OWNER_APPROVED_ARTIFACT")) throw new Error("Contract correction requires an APPROVED WU source")
   if (record.source_id !== wuId && !record.source_id.startsWith(`${wuId}-`)) throw new Error("WU source identity mismatch")
   if (!(record.relationships ?? []).includes(epicId)) throw new Error("WU contract must be linked to the approved Epic")
@@ -988,5 +1019,6 @@ export async function readWorkUnitDefinition(projectRoot, wuId, epicId, sourceId
   if (!info.isFile() || info.isSymbolicLink()) throw new Error("WU contract must be a regular file")
   const bytes = await readFile(path)
   if (sha256(bytes) !== record.sha256) throw new Error("WU contract integrity mismatch")
+  if (requireProposed && !/^---\r?\nartifact_id: [^\n]+\r?\nartifact_type: "work-unit"\r?\nstatus: "PROPOSED"\r?\n/.test(bytes.toString("utf8"))) throw new Error("Delegated correction requires a PROPOSED WU source; rejected or superseded sources cannot be reused")
   return { ...(requireApproved ? { source_authority: "APPROVED" } : {}), content: bytes.toString("utf8"), source_record_key: record.record_key, source_hash: record.sha256, source_revision: record.source_revision }
 }

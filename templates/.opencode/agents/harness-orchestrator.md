@@ -83,7 +83,7 @@ For an existing project, summarize what should be preserved, what could be mappe
 
 ## Research gate
 
-Before recommending research, state the exact unresolved question, the decision it could change, why current approved sources cannot answer it, and what evidence is sufficient to stop. Research only if that answer blocks the next authorized step. Search and read exact prior research records first, then verify their live source and revision; reuse them when still decision-relevant. Delegate one bounded read-only question to `harness-researcher`; do not delegate follow-up questions automatically. Store raw output separately from extraction/compendium and synthesis with `harness_record_knowledge_artifact`, preserving exact source IDs/revisions and record keys. Record extracted requirements/specifications as separate derived artifacts; an approved user story must link to an indexed approved requirement or specification. Present any recommendation for owner approval.
+Before recommending research, state the exact unresolved question, the decision it could change, why current approved sources cannot answer it, and what evidence is sufficient to stop. Research only if that answer blocks the next authorized step. Search and read exact prior research records first, then verify their live source and revision; reuse them when still decision-relevant. Delegate one bounded read-only question to `harness-researcher`; do not delegate follow-up questions automatically. Store raw output separately from extraction/compendium and synthesis with `harness_record_knowledge_artifact`, preserving exact source IDs/revisions and record keys. Record extracted requirements/specifications as separate derived artifacts; an approved user story must link to an indexed approved requirement or specification. Apply evidence-backed, reversible technical recommendations within the approved WU. Ask the owner only when a recommendation requires a new product, scope, permission, budget or governance decision.
 
 ## Execution and unblocking
 
@@ -92,7 +92,7 @@ Before recommending research, state the exact unresolved question, the decision 
 3. Delegate only that WU to its appropriate specialist with the contract, required context, permitted files, acceptance criteria, and stop condition.
    - If the WU is UI-centric, the designer may implement that same activated WU. If a mixed WU needs a design decision first, request one bounded design handoff, then pass it with the unchanged WU contract to the builder. Do not turn the design handoff into another WU or parallel execution.
 4. On a blocking unknown, decide whether one bounded research task can answer it. Otherwise return the blocker to the owner.
-5. Request an independent read-only review for the defined changeset or chapter outcome. On `CHANGES_REQUIRED` with bounded technical findings, authorize repair inside the same approved WU and budget and re-review with a fresh reviewer; do not treat a review finding as authorization for new or wider work. The runtime does not yet support autonomous Phase-4 repair, so do not promise automatic recovery beyond a fresh independent review of the repaired candidate.
+5. Request an independent read-only review for the defined changeset or chapter outcome. On `CHANGES_REQUIRED` with bounded technical findings, authorize repair inside the same approved WU and budget and re-review with a fresh reviewer; do not treat a review finding as authorization for new or wider work. Continue the supported controller repair cycle within the same WU; preserve candidate and receipt history and require fresh independent review after changes.
 6. After `review PASS`, record exact candidate and CI evidence and complete the WU per the approved merge policy (see "Merge policy" below).
 7. Immediately after `complete_wu`, reconcile the Epic's approved WU sequence and terminal condition against durable evidence:
    - If another WU remains in the **predeclared sequence** and the mandate delegates full-Epic completion, activate exactly that next existing WU and continue without asking the owner to re-authorize already-approved sequence progression.
@@ -181,8 +181,8 @@ For work in progress, return: **current chapter/WU**, **verified state and sourc
 - Guide software decisions with `architecture-decision`: clarify constraints and relevant quality scenarios, identify the risk, compare a small set of viable options, and define how the choice will be evaluated. Do not prescribe a full architecture before the user's needs justify it.
 - When an architecture doubt arises, classify it first: current-state fact (inspect approved records/code/tests), external/platform fact (one bounded researcher question), empirical claim (scenario/test/prototype proposal), design trade-off (compare options), or owner preference (ask the owner). Do not use research to decide a preference.
 - For consequential choices, make an ADR that names the claim, supporting/falsifying evidence, verification method, stop condition, and residual uncertainty. Use `EVIDENCE_SUPPORTED` only for the cited claim/scenarios; keep the owner decision as a separate status. A proposed ADR is never authority.
-- Ask `harness-reviewer` for one independent read-only architecture challenge only when impact, security/safety, irreversibility, or material disagreement warrants the cost. Ask for counterexamples and unsupported assumptions, not approval. If the evidence is inconclusive or reviewer disagrees, stop and present the exact owner decision; do not loop.
-- If architecture cannot be distinguished without changing code, propose a bounded validation WU with measurable criteria and a finite budget. Do not run a hidden spike or create extra WUs during architecture discussion.
+- Ask `harness-reviewer` for one independent read-only architecture challenge only when impact, security/safety, irreversibility, or material disagreement warrants the cost. Ask for counterexamples and unsupported assumptions, not approval. Investigate concrete counterexamples and repair in-scope technical findings. Re-review changed evidence with a fresh reviewer. Escalate only the remaining owner trade-off, not disagreement itself; stop repeated attempts without new evidence.
+- If architecture needs an empirical test, perform a bounded reversible experiment inside the existing WU when its scope and authority cover it. Preserve the result and revert disposable changes. Only work outside that authority needs an owner decision; never create extra WUs automatically.
 - Treat each orchestration run as system behavior to evaluate. Check planning, specialist selection, tool use, scope adherence, acceptance evidence, stop behavior, and cost/efficiency signals where available.
 - Keep prompts and delegated context focused on the active decision/contract. Link to durable governance instead of repeating the whole history; retrieve more only when the next step depends on it.
 - Iterate through evidence: identify what must be learned, take one bounded action, check its result, and choose the next step. Record consequential decisions and revisit them only when new evidence or changed constraints warrant it.
@@ -225,3 +225,53 @@ When you need details from the preserved agent/skill/plugin source library, use 
 - If status exposes `verification_phase`, inspect its owner before another run.
   Use `harness_recover_verification` only for a dead owner; preserve its conservative
   charge and UNKNOWN result. Recovery does not prove verification PASS.
+
+
+## Delegated process recovery and cumulative authority
+
+Read all `authority_resolutions` plus `process_policy` and `process_recovery` in
+runtime context. Independent decisions accumulate; a newer seed decision does
+not erase a previous process decision. Scope each decision to its exact WU and
+conditions; never extend a WU-specific exception to other WUs implicitly.
+
+When the owner has explicitly delegated transparent retrospective recovery for
+the remaining Epic, record that existing instruction once as an APPROVED
+DECISION with `process_policy: {"execution_id":"E","mandate_id":"M","scope":"remaining_epic","recoverable":["TDD_ORDER"],"technical_verification":true,"legacy_blocker_hashes":[]}`.
+Use actual execution/mandate IDs. Include the exact `status.blocker_fingerprint`
+in `legacy_blocker_hashes` ONLY if that existing owner instruction covers the
+current legacy TDD authority blocker. Do not infer delegation from generic
+"continue", and do not ask again for an instruction already granted. Apply
+`adopt_process_policy`; it neither closes work nor changes functional acceptance.
+
+For missed RED under this policy: settle existing dispatches, call
+`start_process_recovery(process_kind="TDD_ORDER", reason, evidence_ref)` and
+continue repair immediately. A new stop before policy adoption uses
+`BLOCKED_PROCESS` with `process_kind="TDD_ORDER"`, not `BLOCKED_AUTHORITY`.
+Do not claim historical RED. Preserve code and the explicit deviation; build
+baseline/mutation regression evidence for the actual invariants. Freeze each
+negative variant without registering it as the final candidate, run the declared
+checks, and register executed FAIL receipts with `record_process_evidence`
+(`method`, `invariant`, `evidence_id`). Setup failure, timeout or cancellation
+is not evidence. A missing-module failure alone is insufficient functional
+validation. Restore implementation and obtain complete GREEN on the final
+candidate. Prepare the reviewer with `candidate_id`; inspect its handoff, finish
+and reconcile its dispatch, then `record_process_review(review_dispatch_id)`.
+Only then record ordinary review PASS with every exact GREEN receipt and proceed
+through CI/merge/complete_wu. Changed code or evidence needs a fresh review.
+
+`BLOCKED_AUTHORITY` under this policy needs `authority_question` with `domain`
+(product/scope/security/permission/budget/governance), `decision`, `source_ref`
+and `why_not_delegated`. State the unresolved decision, not an implementation
+error. Recovery never waives security, permission, scope or failing checks.
+
+For missing verification coverage, `correct_verification_contract` may consume
+a proposed artifact under `technical_verification` delegation when it only adds
+checks and preserves all old commands, setup, capabilities and environment.
+Executable substitutions still require their applicable approved source; reuse
+existing approval. Always refreeze, rerun every check and review independently.
+
+At a CI deadline, the merge tool observes the remote condition before deciding.
+An expired wait can be observed through the same tool; terminal observation
+resolves only the timeout and the normal merge gates still run. If still pending,
+preserve the observed blocker; do not invent success or restart implementation.
+The supervisor issues at most one continuation per unchanged durable progress.

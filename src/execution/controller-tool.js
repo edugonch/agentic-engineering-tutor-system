@@ -1,3 +1,4 @@
+import { processReviewAttestation, applicableAuthority, blockerFingerprint, activeRecovery } from "./process-recovery.js"
 import { PLANNING_ESTIMATES } from "./time-policy.js"
 import { deriveVerificationCorrection, correctionCheckMapping } from "./contract-correction.js"
 import { recoveryAction } from "./progress.js"
@@ -27,7 +28,7 @@ import { project, deriveBudget, applyEvent } from "./state.js"
 import { createExecutionController } from "./execution.js"
 import { createCandidateRegistry } from "./candidate-registry.js"
 import { readVerificationReceipt } from "./verification-results.js"
-import { findApprovedTimePolicy, findApprovedEpic, findApprovedWuBudgetAmendment, findApprovedAuthorityResolution, verifyDeclaredWorkUnits, readWorkUnitDefinition } from "../project-knowledge.js"
+import { findApprovedProcessPolicy, findApprovedTimePolicy, findApprovedEpic, findApprovedWuBudgetAmendment, findApprovedAuthorityResolution, verifyDeclaredWorkUnits, readWorkUnitDefinition } from "../project-knowledge.js"
 import { DISPATCH_STATUS, RESERVATION_STATUS, MANDATE_AUTHORITY, RECOVERABLE_BLOCKER_CLASSES } from "./constants.js"
 
 function sanitizeId(raw, label) {
@@ -67,6 +68,8 @@ async function summary(controller) {
     })),
     fencing_token: lease?.fencing_token ?? null,
     blocker: state.blocker,
+    blocker_fingerprint: state.blocker ? blockerFingerprint(state.blocker) : null,
+    ...applicableAuthority(state),
     external_wait: state.external_wait ?? null,
     verification_phase: state.verification_phase ?? null,
     next_action: recoveryAction(state),
@@ -342,6 +345,51 @@ export async function runExecutionController(projectRoot, input, candidateRegist
     return { action, commit_status: res.status, authority_resolution_receipt: body, ...(await summary(controller)) }
   }
 
+  if (action === "adopt_process_policy") {
+    const a = await findApprovedProcessPolicy(projectRoot, String(input.decision_artifact_id ?? ""))
+    if (a.resolution.execution_id !== executionId) throw new Error("Process policy execution mismatch")
+    const res = await commitAction(controller, holder, `${executionId}:process-policy:${a.source_record_key}`, "PROCESS_POLICY_ADOPT",
+      { policy: a.resolution, decision_content: a.decision_content, source_artifact_id: a.source_artifact_id, source_record_key: a.source_record_key, source_hash: a.source_hash })
+    return { action, commit_status: res.status, ...(await summary(controller)) }
+  }
+  if (action === "start_process_recovery") {
+    const { state, events } = await controller.snapshot()
+    const id = `${executionId}:process-recovery:${state.wu?.wu_id}`
+    const previous = events.find(e => e.operation_id === id)
+    const body = previous?.body ?? { wu_id: state.wu?.wu_id, kind: input.process_kind, reason: input.reason,
+      evidence_ref: input.evidence_ref, blocked_at_revision: state.blocker?.at_revision ?? null }
+    if (previous && (body.kind !== input.process_kind || body.reason !== input.reason || body.evidence_ref !== input.evidence_ref)) throw new Error("Process recovery retry changed content")
+    const res = await commitAction(controller, holder, id, "PROCESS_RECOVERY_START", body)
+    return { action, commit_status: res.status, ...(await summary(controller)) }
+  }
+  if (["record_process_evidence", "record_red"].includes(action)) {
+    const snap = await controller.snapshot()
+    if (!/^verify-[a-f0-9]{64}$/.test(input.evidence_id ?? "")) throw new Error("Invalid process evidence receipt ID")
+    const receipt = await readVerificationReceipt(join(projectRoot, ".harness/execution/verification-results"), String(input.evidence_id ?? ""))
+    if (!receipt || receipt.status !== "FAIL" || receipt.evidence_version !== 2 || receipt.exit_code === 0 || receipt.exit_code === null ||
+        receipt.output.timed_out || receipt.output.aborted || receipt.output.setup_results.some(r => !r.ok)) throw new Error("Executed negative check required; setup failures/timeouts/cancellation are not process evidence")
+    const candidate = await registry.load(receipt.candidate_id)
+    if (!candidate || !candidate.verification_contract?.commands?.some(check => check.id === receipt.check_id) || candidate.verification_contract?.source_wu_id !== snap.state.wu?.wu_id ||
+        receipt.verification_contract_hash !== snap.state.wu?.contract?.verification_contract_hash ||
+        candidate.manifest?.verification_contract?.contract_hash !== receipt.verification_contract_hash) throw new Error("Negative evidence must match active WU/check contract")
+    const body = { wu_id: snap.state.wu.wu_id, candidate_id: candidate.candidate_id, tree_hash: candidate.tree_hash,
+      ...(action === "record_process_evidence" ? { method: input.method, invariant: input.invariant } : {}), receipt }
+    const type = action === "record_red" ? "PROCESS_RED_RECORD" : "PROCESS_EVIDENCE"
+    const res = await commitAction(controller, holder, `${executionId}:${type}:${receipt.evidence_id}`, type, body)
+    return { action, commit_status: res.status, ...(await summary(controller)) }
+  }
+  if (action === "record_process_review") {
+    const { state } = await controller.snapshot()
+    const recovery = activeRecovery(state)
+    const dispatch = state.dispatches[input.review_dispatch_id]
+    if (!recovery || !dispatch?.handoff) throw new Error("Process recovery and independent reviewer handoff required")
+    const attestation = processReviewAttestation(dispatch)
+    const body = { candidate_id: attestation.candidate_id, review_dispatch_id: input.review_dispatch_id,
+      assessment: attestation.assessment, evidence_ids: attestation.evidence_ids, handoff_hash: dispatch.handoff.content_hash }
+    const res = await commitAction(controller, holder, `${executionId}:process-review:${stableHash(body)}`, "PROCESS_REVIEW", body)
+    return { action, commit_status: res.status, ...(await summary(controller)) }
+  }
+
   if (action === "adopt_planning_estimates") {
     const authority = await findApprovedTimePolicy(projectRoot, String(input.decision_artifact_id ?? ""))
     if (authority.resolution.execution_id !== executionId) throw new Error("Time policy execution_id mismatch")
@@ -365,8 +413,19 @@ export async function runExecutionController(projectRoot, input, candidateRegist
     const snap = await controller.snapshot(), wu = snap.state.wu
     if (!wu || wu.completed) throw new Error("Contract correction requires an active WU")
     if (!input.wu_artifact_id) throw new Error("Select the exact approved corrected WU artifact")
-    const proposal = compileWuContract(wu.wu_id, await readWorkUnitDefinition(projectRoot, wu.wu_id,
-      snap.state.mandate.source_artifact_id, input.wu_artifact_id, { requireApproved: true }))
+    let definition
+    try { definition = await readWorkUnitDefinition(projectRoot, wu.wu_id, snap.state.mandate.source_artifact_id, input.wu_artifact_id, { requireApproved: true }) }
+    catch (error) {
+      if (!snap.state.process_policy?.policy?.technical_verification) throw error
+      definition = await readWorkUnitDefinition(projectRoot, wu.wu_id, snap.state.mandate.source_artifact_id, input.wu_artifact_id, { requireProposed: true })
+      definition.source_authority = "DELEGATED_TECHNICAL"
+    }
+    let proposal = compileWuContract(wu.wu_id, definition)
+    if (definition.source_authority === "DELEGATED_TECHNICAL") {
+      const { contract_hash, ...unsigned } = proposal
+      const delegated = { ...unsigned, source_authority: "DELEGATED_TECHNICAL", policy_source_hash: snap.state.process_policy.source_hash }
+      proposal = { ...delegated, contract_hash: stableHash(delegated) }
+    }
     const operation = `${executionId}:verification-correction:${input.expected_contract_hash}:${proposal.contract_hash}`
     const previous = snap.events.find(e => e.operation_id === operation)
     const baseline = previous ? snap.state.contract_corrections.find(c =>
@@ -437,6 +496,12 @@ export async function runExecutionController(projectRoot, input, candidateRegist
       body.prepared_by_session_id = holder
       body.expected_agent = String(input.launch_agent)
       body.claim_required = true
+      const { state } = await controller.snapshot()
+      if (body.expected_agent === 'harness-reviewer' && activeRecovery(state)) {
+        const candidate = state.candidates[input.candidate_id]
+        if (!candidate || candidate.wu_id !== state.wu.wu_id || candidate.superseded_by_contract) throw new Error('prepare_launch for process review requires the exact recorded candidate_id')
+        body.process_review_candidate_id = input.candidate_id
+      }
     }
     const res = await commitAction(controller, holder, `${executionId}:prepare:${dispatchId}`, "DISPATCH_PREPARE", body)
     return { action, commit_status: res.status, dispatch_id: dispatchId, ...(await summary(controller)) }
@@ -563,8 +628,15 @@ export async function runExecutionController(projectRoot, input, candidateRegist
     const cls = String(input.class ?? "")
     if (!cls) throw new Error("block requires class (a BLOCKER_CLASSES value).")
     const reason = String(input.reason ?? "")
+    const { state } = await controller.snapshot()
+    if (state.process_policy && cls === "BLOCKED_AUTHORITY") {
+      const q = input.authority_question
+      if (!q || !['product', 'scope', 'security', 'permission', 'budget', 'governance'].includes(q.domain) ||
+          !q.decision?.trim() || !q.source_ref?.trim() || !q.why_not_delegated?.trim()) throw new Error("Identify the actual owner decision, source, domain and why it is not delegated; process deviations use start_process_recovery")
+    }
+    if (cls === "BLOCKED_PROCESS" && input.process_kind !== "TDD_ORDER") throw new Error("Typed process deviation required")
     if (!reason) throw new Error("block requires reason (a human-readable explanation of the stop).")
-    const res = await commitObservation(controller, holder, `${executionId}:block`, "BLOCK", { class: cls, reason }, () => true, state => Boolean(state.blocker))
+    const res = await commitObservation(controller, holder, `${executionId}:block`, "BLOCK", { class: cls, reason, ...(input.authority_question ? { authority_question: input.authority_question } : {}), ...(cls === "BLOCKED_PROCESS" ? { kind: input.process_kind } : {}) }, () => true, state => Boolean(state.blocker))
     return { action, commit_status: res.status, ...(await summary(controller)) }
   }
 

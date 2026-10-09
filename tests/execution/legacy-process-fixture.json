@@ -1,0 +1,143 @@
+{
+  "source_commit": "6cca3cfc22494678e3f69bdb4b2ef691f5812e05",
+  "events": [
+    {
+      "sequence": 1,
+      "event_id": "aaa2b057-67fe-4bc9-872d-6cff1580d490",
+      "operation_id": "historic:0",
+      "operation_type": "MANDATE_APPROVE",
+      "operation_hash_version": 2,
+      "operation_hash": "590f31b6afca2be2d7c5674f97f69e86f5fcba1d5caca628ad77a2072b79ca6c",
+      "body": {
+        "execution_id": "historic:exec",
+        "mandate_id": "M",
+        "total_seconds": 86400,
+        "max_wus": 2
+      },
+      "result": null,
+      "previous_revision": 0,
+      "next_revision": 1,
+      "fencing_token": 1,
+      "timestamp": "2026-10-09T21:57:02.907Z"
+    },
+    {
+      "sequence": 2,
+      "event_id": "0ee8478f-4113-4124-9314-b6ca7b3272d1",
+      "operation_id": "historic:1",
+      "operation_type": "WU_ACTIVATE",
+      "operation_hash_version": 2,
+      "operation_hash": "3e62841a267896147df7e611132c3e90287b56ad8427bf880e3be6bbde07e31d",
+      "body": {
+        "wu_id": "WU063",
+        "mandate_id": "M"
+      },
+      "result": null,
+      "previous_revision": 1,
+      "next_revision": 2,
+      "fencing_token": 1,
+      "timestamp": "2026-10-09T21:57:02.913Z"
+    },
+    {
+      "sequence": 3,
+      "event_id": "0ffd676d-6336-4f2b-b45e-ad4d6466e7f0",
+      "operation_id": "historic:2",
+      "operation_type": "DISPATCH_RESERVE",
+      "operation_hash_version": 2,
+      "operation_hash": "a3a08314e2e11efef6aade6111b004345d6fe276c84169382314c0b68c4358df",
+      "body": {
+        "dispatch_id": "build",
+        "reserved_seconds": 100
+      },
+      "result": null,
+      "previous_revision": 2,
+      "next_revision": 3,
+      "fencing_token": 1,
+      "timestamp": "2026-10-09T21:57:02.917Z"
+    },
+    {
+      "sequence": 4,
+      "event_id": "638ac8f6-5faf-4afc-8126-3967089af1d5",
+      "operation_id": "historic:3",
+      "operation_type": "DISPATCH_LAUNCH",
+      "operation_hash_version": 2,
+      "operation_hash": "225f460db6954be00fc400fe43fb32a3f6666f3f53fd6f33cf45bc8e3e72765c",
+      "body": {
+        "dispatch_id": "build",
+        "session_id": "child"
+      },
+      "result": null,
+      "previous_revision": 3,
+      "next_revision": 4,
+      "fencing_token": 1,
+      "timestamp": "2026-10-09T21:57:02.923Z"
+    },
+    {
+      "sequence": 5,
+      "event_id": "7b9e0c00-a4d4-4bc6-8cb8-1f60c2835efe",
+      "operation_id": "historic:4",
+      "operation_type": "DISPATCH_FINISH",
+      "operation_hash_version": 2,
+      "operation_hash": "65e56e279c6d48e37ac8fafef5556f423f68b51f60fdb3f3b4c86657c4d42fa9",
+      "body": {
+        "dispatch_id": "build",
+        "result": "Legacy handoff"
+      },
+      "result": null,
+      "previous_revision": 4,
+      "next_revision": 5,
+      "fencing_token": 1,
+      "timestamp": "2026-10-09T21:57:02.926Z"
+    },
+    {
+      "sequence": 6,
+      "event_id": "700269ab-bced-405c-b482-4cc13ab51975",
+      "operation_id": "historic:5",
+      "operation_type": "DISPATCH_RECONCILE",
+      "operation_hash_version": 2,
+      "operation_hash": "d21fe07a2b250920f191726ee938db694ca6bcd1b72df51d06a34c2078436f83",
+      "body": {
+        "dispatch_id": "build"
+      },
+      "result": null,
+      "previous_revision": 5,
+      "next_revision": 6,
+      "fencing_token": 1,
+      "timestamp": "2026-10-09T21:57:02.930Z"
+    },
+    {
+      "sequence": 7,
+      "event_id": "71065860-5cf7-4b60-b1f2-69ac63a260d7",
+      "operation_id": "historic:6",
+      "operation_type": "BLOCK",
+      "operation_hash_version": 2,
+      "operation_hash": "5e49806015d0ab2dd053892ab0b9da8992d0f1f1f65490c66d811264e3ea399b",
+      "body": {
+        "class": "BLOCKED_AUTHORITY",
+        "reason": "Legacy TDD ordering deviation"
+      },
+      "result": null,
+      "previous_revision": 6,
+      "next_revision": 7,
+      "fencing_token": 1,
+      "timestamp": "2026-10-09T21:57:02.933Z"
+    },
+    {
+      "sequence": 8,
+      "event_id": "a97c10a6-0dd9-4989-afac-57b21e967cdf",
+      "operation_id": "historic:7",
+      "operation_type": "CHECKPOINT",
+      "operation_hash_version": 2,
+      "operation_hash": "2363ad412d7637645c706f28d65f29d20e3231752d9c2013d2f4f9d4a4af4ee0",
+      "body": {
+        "note": "Preserve old evidence"
+      },
+      "result": null,
+      "previous_revision": 7,
+      "next_revision": 8,
+      "fencing_token": 1,
+      "timestamp": "2026-10-09T21:57:02.938Z"
+    }
+  ],
+  "state_hash": "dc34f784d462be34bec30dc7dfc1974d549e1500f7d0cef17c3e4fa4690ccc94",
+  "progress_hash": "631d7ac26da01a63ca4d0d71675e6ed15060f3c9b7a8e077839abe353ea51e92"
+}

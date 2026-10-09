@@ -149,3 +149,30 @@ test("verification-only correction preserves original source despite proposal pr
   assert.deepEqual(correctionCheckMapping({ ...old.verification_contract, setup: [{ id: "install" }] }, next.verification_contract,
     { ...mapping, install: ["install"] }), mapping)
 })
+
+test('delegated additive checks retain existing gates and cannot substitute echo/pass or widen capabilities', async () => {
+  const { deriveVerificationCorrection, correctionCheckMapping } = await import('../../src/execution/contract-correction.js')
+  const { stableHash } = await import('../../src/execution/serialize.js')
+  const { state } = fixture()
+  const old = state.wu.contract
+  state.process_policy = { source_hash: 'f'.repeat(64), policy: { technical_verification: true } }
+  for (const variation of ['add', 'replace', 'capability', 'environment', 'setup', 'wrong-policy']) {
+    const nextVerification = structuredClone(old.verification_contract)
+    nextVerification.commands.push({ id: 'extra-regression', program: 'node', args: ['--test', 'regression.test.js'] })
+    if (variation === 'replace') nextVerification.commands[0].args = ['-e', 'process.exit(0)']
+    if (variation === 'capability') nextVerification.capabilities = ['NETWORK']
+    if (variation === 'environment') nextVerification.environment = { network_policy: 'NETWORK_FORBIDDEN' }
+    if (variation === 'setup') nextVerification.setup = [{ id: 'new-install', program: 'npm', args: ['install'] }]
+    const { contract_hash: ignored, ...unsigned } = compileWuContract('WU1', { content: 'execution_contract: '+JSON.stringify({ active_seconds: 2400, verification_contract: nextVerification, process_obligations: old.process_obligations }), source_record_key: 'proposal', source_hash: 'a'.repeat(64), source_authority: 'DELEGATED_TECHNICAL' })
+    const source = { ...unsigned, policy_source_hash: variation === 'wrong-policy' ? 'e'.repeat(64) : state.process_policy.source_hash }
+    const proposal = { ...source, contract_hash: stableHash(source) }
+    const contract = deriveVerificationCorrection(old, proposal)
+    const body = { mode: 'verification_only', contract, expected_contract_hash: old.contract_hash, reason: 'Add discovered coverage', check_mapping: correctionCheckMapping(old.verification_contract, contract.verification_contract) }
+    if (variation === 'add') {
+      const next = applyEvent(state, { operation_type: 'WU_CONTRACT_CORRECT', body })
+      assert.equal(next.wu.contract.source_content, old.source_content)
+      assert.equal(next.wu.contract.verification_contract.commands.length, old.verification_contract.commands.length + 1)
+      assert.equal(next.candidates.old.superseded_by_contract, contract.contract_hash)
+    } else assert.throws(() => applyEvent(state, { operation_type: 'WU_CONTRACT_CORRECT', body }), undefined, variation)
+  }
+})

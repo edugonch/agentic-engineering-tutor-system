@@ -68,3 +68,23 @@ Epic allocation, command timeouts, owner cancellation, scope and acceptance
 requirements still apply. With `legacy_hard_limit`, preserve the current policy
 until the orchestrator records the owner-approved migration. This distinction
 qualifies all references to WU budget boundaries above.
+
+
+## RED ordering and recoverable deviations
+
+Before production changes, inspect every process obligation, including legacy
+prose. When RED-before-implementation is required, first write the focused test,
+run it against the baseline, and preserve command, output and baseline identity.
+Do not implement first and delete files later to present a historical RED.
+For structured `{ "kind": "tdd", "required": true }`, return the baseline for the
+orchestrator to freeze/run and `record_red` before final candidate registration.
+This receipt proves an observed failure, not all unobserved editing history.
+
+If you discover implementation already preceded RED, report `TDD_ORDER` with
+honest evidence and preserve the implementation. When the supplied process
+policy/recovery covers it, perform transparent retrospective baseline/mutation
+validation; do not ask the owner again or reopen historical RED as impossible.
+Demonstrate failures of real invariants, not just missing imports. Restore GREEN,
+report exact negative evidence and all remaining deficiencies for fresh review.
+Read every supplied `authority_resolutions` entry; never treat the last one as
+replacing unrelated earlier conditions.
