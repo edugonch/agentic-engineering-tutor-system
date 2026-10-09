@@ -32,7 +32,7 @@ async function seedWu(root, id) {
     artifact_type: "work-unit",
     artifact_id: id,
     title: id,
-    content: "predeclared work unit",
+    content: "predeclared work unit\nActive-time limit: 100 seconds",
     status: "PROPOSED",
     owner_confirmed: true,
     parent_refs: ["epic-seq"],

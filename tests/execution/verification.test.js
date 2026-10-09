@@ -4,6 +4,8 @@ import { access, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { existsSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { spawn } from "node:child_process"
+import { once } from "node:events"
 import { freezeCandidate } from "../../src/execution/candidate.js"
 import { resolveCheck, runCandidateVerification, runCommand, runDeclaredCheck, sanitizedEnv, validateVerificationContract } from "../../src/execution/verification.js"
 
@@ -104,6 +106,23 @@ test("runCommand caps output and kills its process group", async () => {
   assert.ok(result.stdout.length <= 100)
 })
 
+test("cancelling verification terminates the running command and cannot produce PASS", async () => {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), 100)
+  try {
+    const result = await runCommand(process.execPath, ["-e", "setTimeout(() => {}, 10000)"], {
+      cwd: tmpdir(), timeoutMs: 20000, signal: controller.signal,
+    })
+    assert.equal(result.aborted, true)
+    assert.equal(result.ok, false)
+    const cancelled = await runCommand(process.execPath, ["-e", "process.exit(0)"], {
+      cwd: tmpdir(), signal: controller.signal,
+    })
+    assert.equal(cancelled.aborted, true)
+    assert.equal(cancelled.ok, false)
+  } finally { clearTimeout(timer) }
+})
+
 test("runCandidateVerification runs only the frozen contract's checks", async () => {
   const root = await mkdtemp(join(tmpdir(), "harness-verify-candidate-"))
   try {
@@ -142,4 +161,34 @@ test("timeout kills the check and its still-running children (process group)", a
   assert.equal(result.timedOut, true)
   await new Promise((resolveDelay) => setTimeout(resolveDelay, 1200))
   assert.equal(existsSync(marker), false) // child killed with the group on timeout
+})
+
+test("declared setup and the check share a fresh workspace; setup and timeout are frozen identity", async () => {
+  const { freezeCandidate } = await import("../../src/execution/candidate.js")
+  const { verificationContractHash } = await import("../../src/execution/verification-contract.js")
+  const contract = { setup: [{ id: "prepare", program: process.execPath, args: ["-e", "require('fs').writeFileSync('dependency.js', 'module.exports = 42')"], timeout_ms: 1000 }],
+    commands: [{ id: "test", program: process.execPath, args: ["-e", "require('assert').equal(require('./dependency.js'), 42)"], timeout_ms: 45000 }] }
+  const candidate = await freezeCandidate(process.cwd(), { verification_contract: contract })
+  const result = await runDeclaredCheck(candidate, contract, "test")
+  assert.equal(result.status, "PASS")
+  assert.equal(result.setup_results[0].exitCode, 0)
+  assert.notEqual(verificationContractHash(contract), verificationContractHash({ ...contract, setup: [] }))
+  assert.notEqual(verificationContractHash(contract), verificationContractHash({ ...contract, commands: [{ ...contract.commands[0], timeout_ms: 1 }] }))
+})
+
+test("verification command is reaped after its owning host is killed", async t => {
+  const root = await mkdtemp(join(tmpdir(), "verify-owner-death-"))
+  const ready = join(root, "ready"), survived = join(root, "survived")
+  const childCode = `require('fs').writeFileSync(${JSON.stringify(ready)}, 'running'); setTimeout(() => require('fs').writeFileSync(${JSON.stringify(survived)}, 'orphan'), 1500)`
+  const hostCode = `import { runCommand } from ${JSON.stringify(new URL("../../src/execution/verification.js", import.meta.url).href)}; await runCommand(process.execPath, ['-e', ${JSON.stringify(childCode)}], { cwd: ${JSON.stringify(root)}, timeoutMs: 10000 })`
+  const host = spawn(process.execPath, ["--input-type=module", "-e", hostCode], { stdio: "ignore" })
+  t.after(async () => { host.kill("SIGKILL"); await rm(root, { recursive: true, force: true }) })
+  const deadline = Date.now() + 5000
+  while (!existsSync(ready) && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 20))
+  assert.equal(existsSync(ready), true)
+  const exited = once(host, "exit")
+  host.kill("SIGKILL")
+  await exited
+  await new Promise(resolve => setTimeout(resolve, 1800))
+  assert.equal(existsSync(survived), false)
 })

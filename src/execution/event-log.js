@@ -2,6 +2,7 @@
 // projection (state, budget, dispatches, candidates) is rebuilt from them.
 
 import { readFile } from "node:fs/promises"
+import { operationIdentityHash, stableHash } from "./serialize.js"
 import { atomicWriteDurable } from "./fsync.js"
 
 export async function readLog(logPath) {
@@ -25,6 +26,11 @@ export function validateLog(events) {
     if (!event.event_id || !event.operation_id || !event.operation_type || !Number.isSafeInteger(event.previous_revision) || !Number.isSafeInteger(event.next_revision)) {
       throw new Error(`Malformed event at sequence ${event.sequence}.`)
     }
+    const version = event.operation_hash_version ?? 1
+    if (![1, 2].includes(version)) throw new Error(`Unsupported operation hash version ${version}.`)
+    const digest = version === 2 ? operationIdentityHash(event) : stableHash(event.body ?? null)
+    if (event.operation_hash !== digest) throw new Error(`Event integrity mismatch at sequence ${event.sequence}.`)
+
   })
   return events
 }

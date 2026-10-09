@@ -32,10 +32,11 @@ export function deriveRequirements(contract, { phase = "BUILD" } = {}) {
     add({ capability: "verification.runner", volatility: "STABLE" })
     add({ capability: "reviewer.execute_declared_checks", volatility: "STABLE" })
     add({ capability: "workspace.supported", volatility: "STABLE" })
+    add({ capability: "runtime.interrupt", volatility: "STABLE" })
   }
 
   // Volatile binaries from every declared command's program.
-  for (const command of contract?.commands ?? []) {
+  for (const command of [...(contract?.setup ?? []), ...(contract?.commands ?? [])]) {
     if (typeof command?.program === "string" && command.program) {
       add({ capability: `binary.${command.program}`, program: command.program, volatility: "VOLATILE" })
     }
@@ -60,7 +61,7 @@ export async function evaluateReadiness(requirements, probe) {
     checked.push({
       capability: requirement.capability,
       volatility: requirement.volatility,
-      status: result.status ?? "READY",
+      status: result.status === "READY" ? "READY" : "BLOCKED",
       reason: result.reason ?? null,
     })
   }
@@ -70,7 +71,7 @@ export async function evaluateReadiness(requirements, probe) {
 
 export function budgetStatus({ remaining, buildReserve = 0, reviewReserve = 0 }) {
   const required = buildReserve + reviewReserve
-  if (remaining < required) {
+  if (!Number.isFinite(remaining) || remaining <= 0 || remaining < required) {
     return {
       status: "BLOCKED_BUDGET",
       remaining,
@@ -88,6 +89,8 @@ export function pathDigest(path) {
 export function buildFingerprint(info = {}) {
   return {
     plugin_revision: info.pluginRevision ?? null,
+    opencode_version: info.opencodeVersion ?? null,
+    effective_profiles: info.profiles ?? {},
     node_version: info.nodeVersion ?? null,
     platform: info.platform ?? null,
     arch: info.arch ?? null,
@@ -101,7 +104,7 @@ export function buildFingerprint(info = {}) {
 export async function checkExecutionReadiness({ contract, phase = "BUILD", probe, budget, info = {} }) {
   const requirements = deriveRequirements(contract, { phase })
   const capability = await evaluateReadiness(requirements, probe)
-  const budgetResult = budgetStatus(budget ?? { remaining: Number.POSITIVE_INFINITY })
+  const budgetResult = budgetStatus(budget ?? { remaining: null })
 
   const status = capability.status !== "READY"
     ? capability.status

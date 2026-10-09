@@ -53,3 +53,11 @@ Stop when acceptance criteria pass, the approved budget is exhausted, a blocking
 - Verification performed and result: [PENDING]
 - Known limitations or unresolved decisions: [PENDING]
 - Reviewer outcome: [PENDING]
+
+## Executable contract (normalize before reservation)
+
+Add one `execution_contract: { ... }` JSON line with the approved `active_seconds`,
+`verification_contract` (`commands`, optional ordered `setup`, per-command
+`timeout_ms`, capabilities/environment), and `process_obligations`. Preserve the
+approved source and acceptance criteria; do not invent budget or approvals.
+Normalize a historical WU through `bind_wu_contract` before the next candidate.

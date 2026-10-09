@@ -1,3 +1,4 @@
+import { recoveryAction } from "./progress.js"
 // Phase 2 runtime instrument: `harness_execution_controller`.
 //
 // This is a control surface over the durable execution controller, NOT new
@@ -16,14 +17,15 @@
 // AMBIGUOUS hazard: recovery marks AMBIGUOUS and never auto-launches.
 
 import { join } from "node:path"
+import { compileWuContract } from "./wu-contract.js"
 import { wuBudgetUsage } from "./wu-budget.js"
 import { stableHash } from "./serialize.js"
 import { readLog, validateLog } from "./event-log.js"
-import { project, deriveBudget } from "./state.js"
+import { project, deriveBudget, applyEvent } from "./state.js"
 import { createExecutionController } from "./execution.js"
 import { createCandidateRegistry } from "./candidate-registry.js"
 import { readVerificationReceipt } from "./verification-results.js"
-import { findApprovedEpic, findApprovedWuBudgetAmendment, findApprovedAuthorityResolution, verifyDeclaredWorkUnits } from "../project-knowledge.js"
+import { findApprovedEpic, findApprovedWuBudgetAmendment, findApprovedAuthorityResolution, verifyDeclaredWorkUnits, readWorkUnitDefinition } from "../project-knowledge.js"
 import { DISPATCH_STATUS, RESERVATION_STATUS, MANDATE_AUTHORITY, RECOVERABLE_BLOCKER_CLASSES } from "./constants.js"
 
 function sanitizeId(raw, label) {
@@ -48,6 +50,8 @@ async function summary(controller) {
       available_seconds: budget.available_seconds,
       exhausted: budget.exhausted,
       overrun: budget.overrun,
+      active_phase: state.budget.active_phase,
+      active_started_at: state.budget.active_started_at,
     },
     dispatches: Object.entries(state.dispatches).map(([dispatch_id, d]) => ({
       dispatch_id,
@@ -56,9 +60,14 @@ async function summary(controller) {
       reserved_seconds: d.reserved_seconds,
       reservation_status: d.reservation_status,
       actual_consumption: d.actual_consumption,
+      consumption_basis: d.consumption_basis ?? "unsettled",
+      runtime_usage: d.usage ?? null,
     })),
     fencing_token: lease?.fencing_token ?? null,
     blocker: state.blocker,
+    external_wait: state.external_wait ?? null,
+    verification_phase: state.verification_phase ?? null,
+    next_action: recoveryAction(state),
     last_blocker_resolution: state.last_blocker_resolution ?? null,
     authority_resolutions: state.authority_resolutions ?? {},
     completed: state.completed,
@@ -66,6 +75,7 @@ async function summary(controller) {
     wu: state.wu,
     wu_budget: state.wu ? wuBudgetUsage(state, state.wu.wu_id) : null,
     wu_budget_amendments: state.wu_budget_amendments ?? {},
+    contract_status: state.wu?.contract ? (state.wu.contract.normalization_required ? "NORMALIZATION_REQUIRED" : "COMPILED") : "LEGACY_UNBOUND",
     candidates: state.candidates,
     reviews: state.reviews,
     pr_binding: state.pr_binding ?? null,
@@ -337,6 +347,17 @@ export async function runExecutionController(projectRoot, input, candidateRegist
     return { action, commit_status: res.status, amendment_receipt: body, ...(await summary(controller)) }
   }
 
+  if (action === "bind_wu_contract") {
+    const snap = await controller.snapshot()
+    const wu = snap.state.wu
+    if (!wu || wu.completed) throw new Error("bind_wu_contract requires an active WU")
+    const contract = compileWuContract(wu.wu_id, await readWorkUnitDefinition(projectRoot, wu.wu_id,
+      snap.state.mandate.source_artifact_id, input.wu_artifact_id ?? wu.wu_id))
+    if (contract.normalization_required) throw new Error("Normalize the existing WU verification criteria into execution_contract before binding")
+    const res = await commitAction(controller, holder, `${executionId}:wu-contract:${contract.contract_hash}`, "WU_CONTRACT_BIND", { contract })
+    return { action, commit_status: res.status, ...(await summary(controller)) }
+  }
+
   if (action === "activate_wu") {
     const wuId = String(input.wu_id ?? "")
     if (!wuId) throw new Error("activate_wu requires wu_id.")
@@ -346,7 +367,15 @@ export async function runExecutionController(projectRoot, input, candidateRegist
     if (snap.state.mandate?.authority_kind !== MANDATE_AUTHORITY.OWNER_APPROVED_EPIC) {
       throw new Error("activate_wu requires an OWNER_APPROVED_EPIC mandate (use approve_mandate, not init).")
     }
-    const res = await commitAction(controller, holder, `${executionId}:activate:${wuId}`, "WU_ACTIVATE", { wu_id: wuId, mandate_id: mandateId })
+    const priorActivation = snap.events.find(e => e.operation_id === `${executionId}:activate:${wuId}`)
+    if (priorActivation && priorActivation.body.mandate_id === mandateId &&
+        (!input.wu_artifact_id || input.wu_artifact_id === priorActivation.body.contract?.source_record_key)) {
+      return { action, commit_status: "replayed", wu_id: wuId, ...(await summary(controller)) }
+    }
+    // Validate lifecycle first, before loading a successor that is not yet eligible.
+    applyEvent(snap.state, { operation_type: "WU_ACTIVATE", body: { wu_id: wuId, mandate_id: mandateId }, next_revision: snap.state.revision + 1 })
+    const contract = compileWuContract(wuId, await readWorkUnitDefinition(projectRoot, wuId, snap.state.mandate.source_artifact_id, input.wu_artifact_id ?? wuId))
+    const res = await commitAction(controller, holder, `${executionId}:activate:${wuId}`, "WU_ACTIVATE", { wu_id: wuId, mandate_id: mandateId, contract })
     return { action, commit_status: res.status, wu_id: wuId, ...(await summary(controller)) }
   }
 
@@ -356,6 +385,8 @@ export async function runExecutionController(projectRoot, input, candidateRegist
 
   if (action === "reserve") {
     const dispatchId = requireDispatchId(input)
+    const current = (await controller.snapshot()).state
+    if (current.wu?.contract?.normalization_required) throw new Error("Normalize/bind the existing WU verification contract before reserving work; no budget has been spent")
     const reserved = Number(input.reserved_seconds)
     if (!Number.isFinite(reserved) || reserved < 0) throw new Error("reserve requires a finite non-negative reserved_seconds.")
     const res = await commitAction(controller, holder, `${executionId}:reserve:${dispatchId}`, "DISPATCH_RESERVE", { dispatch_id: dispatchId, reserved_seconds: reserved })
@@ -436,10 +467,16 @@ export async function runExecutionController(projectRoot, input, candidateRegist
     const snap = await controller.snapshot()
     const wuId = snap.state.wu?.wu_id ?? null
     if (!wuId) throw new Error("record_candidate requires an active WU (activate_wu first).")
+    if (snap.state.wu.contract) {
+      const effective = snap.state.wu.contract
+      if (!effective.verification_contract_hash) throw new Error("WU verification contract requires normalization before freezing; retain the approved source criteria.")
+      if (candidate.manifest?.verification_contract?.contract_hash !== effective.verification_contract_hash)
+        throw new Error("Candidate verification contract differs from the active WU contract")
+    }
     const requiredCheckIds = (candidate.verification_contract?.commands ?? []).map((check) => check.id)
     const contractHash = candidate.manifest?.verification_contract?.contract_hash ?? null
     const res = await controller.commit(
-      { operation_id: `${executionId}:candidate:${candidateId}`, operation_type: "FREEZE_CANDIDATE", body: { candidate_id: candidateId, wu_id: wuId, manifest_hash: candidate.manifest_hash, tree_hash: candidate.tree_hash, manifest: candidate.manifest ?? null, verification_contract_hash: contractHash, required_check_ids: requiredCheckIds } },
+      { operation_id: `${executionId}:candidate:${candidateId}`, operation_type: "FREEZE_CANDIDATE", body: { candidate_id: candidateId, wu_id: wuId, manifest_hash: candidate.manifest_hash, tree_hash: candidate.tree_hash, manifest: candidate.manifest ?? null, verification_contract_hash: contractHash, required_check_ids: requiredCheckIds, wu_contract_hash: snap.state.wu.contract?.contract_hash ?? null } },
       { holder_session_id: holder, expected_revision: snap.state.revision, lease_fencing_token: lease.fencing_token },
     )
     return { action, commit_status: res.status, candidate_id: candidateId, ...(await summary(controller)) }
@@ -470,7 +507,7 @@ export async function runExecutionController(projectRoot, input, candidateRegist
       verifiedCheckIds.push(receipt.check_id)
     }
     const res = await controller.commit(
-      { operation_id: `${executionId}:review:${candidateId}`, operation_type: "RECORD_REVIEW", body: { candidate_id: candidateId, verdict, candidate_hashes: { manifest_hash: frozenCandidate.manifest_hash, tree_hash: frozenCandidate.tree_hash }, reviewer: input.reviewer ?? null, verification_evidence_ids: evidenceIds, verification_contract_hash: contractHash, verified_check_ids: verifiedCheckIds } },
+      { operation_id: `${executionId}:review:${candidateId}:${stableHash({ verdict, evidenceIds, reviewer: input.reviewer ?? null })}`, operation_type: "RECORD_REVIEW", body: { candidate_id: candidateId, verdict, candidate_hashes: { manifest_hash: frozenCandidate.manifest_hash, tree_hash: frozenCandidate.tree_hash }, reviewer: input.reviewer ?? null, verification_evidence_ids: evidenceIds, verification_contract_hash: contractHash, verified_check_ids: verifiedCheckIds } },
       { holder_session_id: holder, expected_revision: snap.state.revision, lease_fencing_token: lease.fencing_token },
     )
     return { action, commit_status: res.status, candidate_id: candidateId, ...(await summary(controller)) }
@@ -561,7 +598,7 @@ export async function runExecutionController(projectRoot, input, candidateRegist
   }
 
   if (action === "bind_pr") {
-    const res = await commitAction(controller, holder, `${executionId}:bind-pr:${stableHash({ candidate_id: input.candidate_id, repository: input.repository, pr_number: input.pr_number })}`, "BIND_PR", {
+    const res = await commitAction(controller, holder, `${executionId}:bind-pr:${stableHash({ candidate_id: input.candidate_id, repository: input.repository, pr_number: input.pr_number, head_sha: input.head_sha, base_sha: input.base_sha, base_branch: input.base_branch })}`, "BIND_PR", {
       repository: String(input.repository ?? ""),
       pr_number: Number(input.pr_number),
       candidate_id: String(input.candidate_id ?? ""),
@@ -573,12 +610,14 @@ export async function runExecutionController(projectRoot, input, candidateRegist
   }
 
   if (action === "record_ci") {
+    const binding = (await controller.snapshot()).state.pr_binding
     const res = await commitObservation(controller, holder, `${executionId}:record-ci`, "RECORD_CI", {
       candidate_id: String(input.candidate_id ?? ""),
       head_sha: String(input.head_sha ?? ""),
       check_identity: String(input.check_identity ?? ""),
       conclusion: String(input.conclusion ?? ""),
       evidence_ref: input.evidence_ref ?? null,
+      binding_at_revision: binding?.candidate_id === input.candidate_id ? binding.at_revision : null,
     }, body => body.candidate_id === String(input.candidate_id ?? "") && body.check_identity === String(input.check_identity ?? ""))
     return { action, commit_status: res.status, ...(await summary(controller)) }
   }

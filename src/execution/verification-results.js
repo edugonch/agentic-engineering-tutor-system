@@ -27,6 +27,7 @@ function receiptEvidenceHash(identity) {
     status: identity.status ?? null,
     exit_code: identity.exit_code ?? null,
     fingerprint: identity.fingerprint ?? null,
+    ...(identity.evidence_version === 2 ? { evidence_version: 2, output: identity.output } : {}),
   }))
 }
 
@@ -34,7 +35,10 @@ function receiptEvidenceHash(identity) {
 // identity fields participate in the hash; stdout/stderr stay out of the digest
 // (they are evidence detail, not identity).
 export function createVerificationReceipt(result) {
+  const output = { stdout: result.stdout ?? "", stderr: result.stderr ?? "", truncated: result.truncated ?? false,
+    timed_out: result.timedOut ?? false, aborted: result.aborted ?? false, duration_ms: result.durationMs ?? null, setup_results: result.setup_results ?? [] }
   const evidence_hash = receiptEvidenceHash({
+    evidence_version: 2, output,
     candidate_id: result.candidate_id ?? null,
     verification_contract_hash: result.verification_contract_hash ?? null,
     check_id: result.check_id ?? null,
@@ -43,6 +47,7 @@ export function createVerificationReceipt(result) {
     fingerprint: result.fingerprint ?? null,
   })
   return {
+    evidence_version: 2, output,
     evidence_id: `verify-${evidence_hash}`,
     evidence_hash,
     candidate_id: result.candidate_id ?? null,

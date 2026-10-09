@@ -1,15 +1,31 @@
 {
   "name": "opencode-agentic-harness",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Story-governed, bounded software project orchestration for OpenCode",
   "type": "module",
   "main": "./index.js",
   "module": "./index.js",
   "exports": "./index.js",
-  "files": ["index.js", "src/", "templates/", "README.md", "docs/"],
-  "keywords": ["opencode", "opencode-plugin", "agents", "harness", "project-governance"],
-  "engines": { "node": ">=20" },
-  "dependencies": { "@opencode/plugin": "latest" },
+  "files": [
+    "index.js",
+    "src/",
+    "templates/",
+    "README.md",
+    "docs/"
+  ],
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "agents",
+    "harness",
+    "project-governance"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@opencode/plugin": "2.0.25"
+  },
   "scripts": {
     "test": "node --test",
     "validate": "node scripts/validate-package.mjs",

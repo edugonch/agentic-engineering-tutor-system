@@ -3,6 +3,7 @@ import assert from "node:assert/strict"
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { stableHash } from "../../src/execution/serialize.js"
 import { readLog, validateLog, writeLog } from "../../src/execution/event-log.js"
 
 const event = (sequence, operation_id) => ({
@@ -10,7 +11,7 @@ const event = (sequence, operation_id) => ({
   event_id: `e${sequence}`,
   operation_id,
   operation_type: "CHECKPOINT",
-  operation_hash: "h",
+  operation_hash: stableHash(null),
   body: null,
   previous_revision: sequence - 1,
   next_revision: sequence,

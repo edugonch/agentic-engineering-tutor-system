@@ -382,3 +382,92 @@ transparent deviation statement to builder and fresh reviewer. Correct failing
 tests and demonstrate the authorized evidence within remaining budget. Run `verify`
 after resolution and continue the existing mandate; no repeated owner approval is
 needed for the same resolved question. New evidence deficiencies still matter.
+
+## Controller continuity repair (2026-10-08)
+
+This release pins `@opencode/plugin` **2.0.25** and checks the actual package
+entrypoint in CI. Install/update the plugin normally; no manual patch or profile
+copy is required. The four specialist profiles no longer ship step cutoffs.
+Explicit `HARNESS_BUILDER_MAX_STEPS`, `HARNESS_REVIEWER_MAX_STEPS`,
+`HARNESS_RESEARCHER_MAX_STEPS`, `HARNESS_DESIGNER_MAX_STEPS` and
+`HARNESS_PROVIDER_RETRY_LIMIT` remain operator overrides.
+
+New WU activation loads a linked, integrity-checked WU artifact. Its execution
+contract should contain one JSON line:
+
+```text
+execution_contract: {"active_seconds":2400,"verification_contract":{"setup":[{"id":"dependencies","program":"npm","args":["ci","--ignore-scripts"],"timeout_ms":180000}],"commands":[{"id":"tests","program":"npm","args":["test"],"timeout_ms":300000}],"environment":{"network_policy":"UNRESTRICTED"}},"process_obligations":["RED before implementation, except for an exact applicable owner-approved deviation"]}
+```
+
+This is a format example, not a budget approval or a command recommendation for
+all projects. Compile the project's existing approved criteria, commands and
+budget. If a documented `Active-time limit` exists it must agree. A prose-only
+WU is marked `NORMALIZATION_REQUIRED` before work is reserved. Use
+`bind_wu_contract` with the exact `wu_artifact_id` to bind a historical execution
+or normalize a prose-only contract; normalization must preserve the original
+source text and allocation. Existing compiled contracts cannot be replaced this
+way. Existing owner authority resolutions remain applicable and are included in
+the identified specialist's runtime context.
+
+Candidate freezing derives verification from the active contract and captures
+all tracked files plus explicitly named additions. Governed merge compares the
+complete Git tree with the remote head. Required CI must be present, current and
+unambiguous. `harness_rebind_pr` supports remote head/base movement of an identical
+candidate and invalidates prior CI. `harness_abort_merge` can cancel only a
+confirmed closed, unmerged PR; an open ambiguous remote effect is investigated,
+not assumed absent. GitHub branch protection remains necessary for server-side
+atomic policy enforcement while a base branch is moving.
+
+Reconciliation uses a runtime-observed worker wall-time upper bound when the
+foreground child has a verified terminal result. Unknown or interrupted capture
+retains conservative reservation billing. This does not refund historical
+charges or claim exact active-time metering. Worker reservation deadlines are
+checked at runtime boundaries and use OpenCode's supported interruption API once
+an exact child identity is available. An expired reservation may be settled and
+remaining authorized WU allocation reused; exhaustion of that allocation still
+requires an actual approved extension.
+
+The durable root continuation supervisor is implemented behind
+`HARNESS_SUPERVISOR_ENABLED=1`. It reuses the existing root session, persists prompt
+intent and identity, preserves blockers/budget and avoids repeating unchanged
+progress. It is **off by default pending the real-provider canary**. It does not
+resume a user-interrupted or failed root automatically. Read readiness for its
+status and recorded subscription/continuation errors. A mocked host test is not
+proof of sustained real-provider operation.
+
+Before applying transitions to an existing execution, run the read-only
+compatibility inspection from this package checkout:
+
+```bash
+node scripts/inspect-execution.mjs /absolute/path/to/project EXECUTION_ID
+```
+
+Keep a consistent backup and compare it with the inspection output. Never edit
+`events.ndjson` to remove a blocker, invent RED evidence, or reclaim budget. New
+event types require this version or a compatible reader after the first such
+event is emitted; do not downgrade to an older reader over a live execution.
+See `docs/audits/2026-10-08/IMPLEMENTACION.md` for validation and remaining limits.
+
+
+External CI waits now persist their retry schedule. Pending CI and typed transport
+failures use 15–300 second backoff, restored by the opt-in supervisor after restart.
+The WU may declare `external_wait_seconds` (default 1800). An expired wait records
+one external-condition blocker; failed checks, permission errors and head drift
+are not transient retries. CI receipts can be refreshed directly from the bound
+remote head instead of requiring the model to translate remote status.
+
+Root verification now charges a measured ACTIVE phase even on failure/cancellation.
+Worker verification remains within its worker envelope. A command guardian reaps
+its group if the host dies. `harness_recover_verification` can settle an interrupted
+root phase only after its owner has exited; unknown consumption charges the
+admitted allocation and never constitutes a PASS. A live owner cannot be replaced.
+
+Collect real-host canary evidence without launching any models or modifying state:
+
+```bash
+node scripts/collect-continuity-canary.mjs /absolute/canary/project EXECUTION_ID /existing/output/directory/new-evidence.json
+```
+
+This needs an already-running compatible local OpenCode service. The local JSON
+contains sanitized session exports and durable evidence for independent review.
+Neither elapsed time nor a successful export is an acceptance verdict.

@@ -1,3 +1,5 @@
+import { seedWuContract } from "./wu-fixture.js"
+import { candidateGitTree } from "../../src/execution/git-tree.js"
 import test from "node:test"
 import assert from "node:assert/strict"
 import { mkdtemp, rm, writeFile } from "node:fs/promises"
@@ -27,6 +29,7 @@ async function withRoot(fn) {
 function fakeAdapter({ prState = "open", prHead = "head-a", prBase = "base-1", prBaseBranch = "main", merged = false, mergeCommitSha = "merge-1", checks = {}, mergeResult = { merged: true, merge_commit_sha: "merge-1" } } = {}) {
   let mergedNow = merged
   return {
+    getCommitTree: async () => candidateGitTree({ overlay: [{ path: "change.txt", mode: "100644", type: "file", content: Buffer.from("hello").toString("base64") }] }),
     getPullRequest: async () => ({
       state: mergedNow ? "closed" : prState,
       merged: mergedNow,
@@ -52,6 +55,7 @@ async function setupReady(root, sid, { requiredCiChecks = ["check-1"], mergePoli
     source_refs: ["https://example.com/epic-source"],
   })
   await runExecutionController(root, { action: "approve_mandate", execution_id: "E1", session_id: sid, epic_artifact_id: "epic-001" })
+  await seedWuContract(root)
   await runExecutionController(root, { action: "activate_wu", execution_id: "E1", session_id: sid, wu_id: "WU-01", mandate_id: "E1-MANDATE-001" })
 
   await writeFile(join(root, "change.txt"), "hello")
@@ -139,7 +143,8 @@ test("recovery: already-merged PR with the expected head records + verifies, nev
     // PR already merged remotely with the expected head and a merge commit.
     let mergeCalls = 0
     const adapter = {
-      getPullRequest: async () => ({ state: "closed", merged: true, head_sha: "head-a", base_sha: "base-1", base_branch: "main", merge_commit_sha: "merge-existing" }),
+      getCommitTree: async () => candidateGitTree({ overlay: [{ path: "change.txt", mode: "100644", type: "file", content: Buffer.from("hello").toString("base64") }] }),
+    getPullRequest: async () => ({ state: "closed", merged: true, head_sha: "head-a", base_sha: "base-1", base_branch: "main", merge_commit_sha: "merge-existing" }),
       getChecks: async ({ check_names }) => check_names.map((n) => ({ name: n, conclusion: "SUCCESS" })),
       merge: async () => { mergeCalls += 1; return { merged: true, merge_commit_sha: "merge-again" } },
     }
@@ -238,7 +243,8 @@ test("RECORDED recovery: exact remote merge → VERIFY, no second record or merg
     ])
     let mergeCalls = 0
     const adapter = {
-      getPullRequest: async () => ({ state: "closed", merged: true, head_sha: "head-a", base_sha: "base-1", base_branch: "main", merge_commit_sha: "merge-1" }),
+      getCommitTree: async () => candidateGitTree({ overlay: [{ path: "change.txt", mode: "100644", type: "file", content: Buffer.from("hello").toString("base64") }] }),
+    getPullRequest: async () => ({ state: "closed", merged: true, head_sha: "head-a", base_sha: "base-1", base_branch: "main", merge_commit_sha: "merge-1" }),
       getChecks: async () => [],
       merge: async () => { mergeCalls += 1; return { merged: true, merge_commit_sha: "merge-again" } },
     }
@@ -261,7 +267,8 @@ test("RECORDED recovery: remote merge commit differs → fail closed", async () 
       ["E1:merge-record:merge-1", "MERGE_RECORD", { merge_commit_sha: "merge-1", merged_head_sha: "head-a" }],
     ])
     const adapter = {
-      getPullRequest: async () => ({ state: "closed", merged: true, head_sha: "head-a", base_sha: "base-1", base_branch: "main", merge_commit_sha: "merge-DIFFERENT" }),
+      getCommitTree: async () => candidateGitTree({ overlay: [{ path: "change.txt", mode: "100644", type: "file", content: Buffer.from("hello").toString("base64") }] }),
+    getPullRequest: async () => ({ state: "closed", merged: true, head_sha: "head-a", base_sha: "base-1", base_branch: "main", merge_commit_sha: "merge-DIFFERENT" }),
       getChecks: async () => [],
       merge: async () => { throw new Error("must not merge") },
     }
@@ -298,7 +305,8 @@ test("human: verify an already-merged external PR reaches VERIFIED (never merge(
     const candidate = await setupReady(root, sid, { mergePolicy: "human", requiredCiChecks: [] })
     let mergeCalls = 0
     const adapter = {
-      getPullRequest: async () => ({ state: "closed", merged: true, head_sha: "head-a", base_sha: "base-1", base_branch: "main", merge_commit_sha: "merge-h1" }),
+      getCommitTree: async () => candidateGitTree({ overlay: [{ path: "change.txt", mode: "100644", type: "file", content: Buffer.from("hello").toString("base64") }] }),
+    getPullRequest: async () => ({ state: "closed", merged: true, head_sha: "head-a", base_sha: "base-1", base_branch: "main", merge_commit_sha: "merge-h1" }),
       getChecks: async () => [],
       merge: async () => { mergeCalls += 1; return { merged: true, merge_commit_sha: "never" } },
     }
@@ -316,7 +324,7 @@ test("human: PR not merged is rejected", async () => {
   await withRoot(async (root) => {
     const sid = "ses-1"
     const candidate = await setupReady(root, sid, { mergePolicy: "human", requiredCiChecks: [] })
-    const adapter = { getPullRequest: async () => ({ state: "open", merged: false, head_sha: "head-a", base_sha: "base-1", base_branch: "main", merge_commit_sha: null }), getChecks: async () => [], merge: async () => { throw new Error("no") } }
+    const adapter = { getCommitTree: async () => candidateGitTree(candidate), getPullRequest: async () => ({ state: "open", merged: false, head_sha: "head-a", base_sha: "base-1", base_branch: "main", merge_commit_sha: null }), getChecks: async () => [], merge: async () => { throw new Error("no") } }
     await assert.rejects(
       runVerifyExternalMerge(root, { candidate_id: candidate.candidate_id, adapter, session_id: sid }),
       /not merged/,
@@ -328,7 +336,7 @@ test("human: head drift is rejected", async () => {
   await withRoot(async (root) => {
     const sid = "ses-1"
     const candidate = await setupReady(root, sid, { mergePolicy: "human", requiredCiChecks: [] })
-    const adapter = { getPullRequest: async () => ({ state: "closed", merged: true, head_sha: "head-DRIFTED", base_sha: "base-1", base_branch: "main", merge_commit_sha: "merge-h1" }), getChecks: async () => [] }
+    const adapter = { getCommitTree: async () => candidateGitTree(candidate), getPullRequest: async () => ({ state: "closed", merged: true, head_sha: "head-DRIFTED", base_sha: "base-1", base_branch: "main", merge_commit_sha: "merge-h1" }), getChecks: async () => [] }
     await assert.rejects(
       runVerifyExternalMerge(root, { candidate_id: candidate.candidate_id, adapter, session_id: sid }),
       /drifted/,
@@ -340,7 +348,7 @@ test("human: non-human policy is rejected", async () => {
   await withRoot(async (root) => {
     const sid = "ses-1"
     const candidate = await setupReady(root, sid, { mergePolicy: "governed_auto" })
-    const adapter = { getPullRequest: async () => ({ state: "closed", merged: true, head_sha: "head-a", base_sha: "base-1", base_branch: "main", merge_commit_sha: "merge-h1" }), getChecks: async () => [] }
+    const adapter = { getCommitTree: async () => candidateGitTree(candidate), getPullRequest: async () => ({ state: "closed", merged: true, head_sha: "head-a", base_sha: "base-1", base_branch: "main", merge_commit_sha: "merge-h1" }), getChecks: async () => [] }
     await assert.rejects(
       runVerifyExternalMerge(root, { candidate_id: candidate.candidate_id, adapter, session_id: sid }),
       /not human/,
@@ -360,7 +368,7 @@ test("human: RECORDED recovery validates remote merge commit and verifies only",
       { holder_session_id: sid, expected_revision: (await controller.snapshot()).state.revision, lease_fencing_token: lease.fencing_token },
     )
     // recovery with matching remote merge commit
-    const adapter = { getPullRequest: async () => ({ state: "closed", merged: true, head_sha: "head-a", base_sha: "base-1", base_branch: "main", merge_commit_sha: "merge-h1" }), getChecks: async () => [] }
+    const adapter = { getCommitTree: async () => candidateGitTree(candidate), getPullRequest: async () => ({ state: "closed", merged: true, head_sha: "head-a", base_sha: "base-1", base_branch: "main", merge_commit_sha: "merge-h1" }), getChecks: async () => [] }
     const result = await runVerifyExternalMerge(root, { candidate_id: candidate.candidate_id, adapter, session_id: sid })
     assert.equal(result.status, "verified_external_merge")
     const snap = await controller.snapshot()
@@ -379,10 +387,87 @@ test("human: RECORDED recovery with a different remote merge commit fails closed
       { operation_id: "E1:ext-record:h1", operation_type: "MERGE_EXTERNAL_RECORD", body: { merge_commit_sha: "merge-h1", merged_head_sha: "head-a" } },
       { holder_session_id: sid, expected_revision: (await controller.snapshot()).state.revision, lease_fencing_token: lease.fencing_token },
     )
-    const adapter = { getPullRequest: async () => ({ state: "closed", merged: true, head_sha: "head-a", base_sha: "base-1", base_branch: "main", merge_commit_sha: "merge-DIFFERENT" }), getChecks: async () => [] }
+    const adapter = { getCommitTree: async () => candidateGitTree(candidate), getPullRequest: async () => ({ state: "closed", merged: true, head_sha: "head-a", base_sha: "base-1", base_branch: "main", merge_commit_sha: "merge-DIFFERENT" }), getChecks: async () => [] }
     await assert.rejects(
       runVerifyExternalMerge(root, { candidate_id: candidate.candidate_id, adapter, session_id: sid }),
       /differs from recorded/,
     )
+  })
+})
+
+test("F01: a resumed STARTED merge rechecks a newly recorded security blocker", async () => {
+  await withRoot(async root => {
+    const candidate = await setupReady(root, "ses-1")
+    const c = await createExecutionController({ dir: join(root, ".harness/execution/controller/E1") })
+    const lease = await c.acquire("ses-1")
+    await c.commit({ operation_id: "old-start", operation_type: "MERGE_START", body: {} }, { holder_session_id: "ses-1", expected_revision: (await c.snapshot()).state.revision, lease_fencing_token: lease.fencing_token })
+    await runExecutionController(root, { action: "block", execution_id: "E1", session_id: "ses-1", class: "BLOCKED_SECURITY", reason: "new finding" })
+    const adapter = fakeAdapter({ checks: { "check-1": "SUCCESS" } })
+    let effects = 0
+    adapter.merge = async () => { effects++; throw new Error("must not execute") }
+    await assert.rejects(runMergeCandidate(root, { candidate_id: candidate.candidate_id, adapter, session_id: "ses-1" }), /BLOCKED_SECURITY/)
+    assert.equal(effects, 0)
+  })
+})
+
+test("F09: remote CI failure leaves no STARTED merge; corrected CI can proceed", async () => {
+  await withRoot(async root => {
+    const candidate = await setupReady(root, "ses-1")
+    const args = { candidate_id: candidate.candidate_id, session_id: "ses-1" }
+    await assert.rejects(runMergeCandidate(root, { ...args, adapter: fakeAdapter({ checks: { "check-1": "FAILURE" } }) }), /not SUCCESS/)
+    const status = await runExecutionController(root, { action: "status", execution_id: "E1" })
+    assert.equal(status.merge, null)
+    assert.equal((await runMergeCandidate(root, { ...args, adapter: fakeAdapter({ checks: { "check-1": "SUCCESS" } }) })).status, "merged")
+  })
+})
+
+test("F02: remote head with a different complete tree cannot merge", async () => {
+  await withRoot(async root => {
+    const candidate = await setupReady(root, "ses-1")
+    const adapter = fakeAdapter({ checks: { "check-1": "SUCCESS" } })
+    adapter.getCommitTree = async () => "0".repeat(40)
+    let effects = 0
+    adapter.merge = async () => { effects++ }
+    await assert.rejects(runMergeCandidate(root, { candidate_id: candidate.candidate_id, adapter, session_id: "ses-1" }), /Git tree.*differs/)
+    assert.equal(effects, 0)
+  })
+})
+
+test("F09: supported rebind preserves same candidate, clears stale CI and accepts fresh evidence", async () => {
+  const { runRebindPR } = await import("../../src/execution/merge.js")
+  await withRoot(async root => {
+    const candidate = await setupReady(root, "ses-1")
+    const adapter = fakeAdapter({ prBase: "base-2", checks: { "check-1": "SUCCESS" } })
+    const input = { candidate_id: candidate.candidate_id, adapter, session_id: "ses-1" }
+    assert.equal((await runRebindPR(root, input)).status, "rebound")
+    const status = await runExecutionController(root, { action: "status", execution_id: "E1" })
+    assert.equal(status.ci_evidence[candidate.candidate_id], undefined)
+    assert.equal((await runMergeCandidate(root, input)).status, "merged")
+    const refreshed = await runExecutionController(root, { action: "status", execution_id: "E1" })
+    assert.equal(refreshed.ci_evidence[candidate.candidate_id]["check-1"].binding_at_revision, refreshed.pr_binding.at_revision)
+  })
+})
+
+test("durable pending CI waits and recovers from real adapter evidence without model-written SUCCESS", async () => {
+  const { runWithExternalWait } = await import("../../src/execution/external-wait.js")
+  await withRoot(async root => {
+    const candidate = await setupReady(root, "ses-1")
+    await runExecutionController(root, { action: "record_ci", execution_id: "E1", session_id: "ses-1", candidate_id: candidate.candidate_id,
+      head_sha: "head-a", check_identity: "check-1", conclusion: "PENDING" })
+    const controller = await createExecutionController({ dir: join(root, ".harness/execution/controller/E1") })
+    const checks = { "check-1": "PENDING" }, adapter = fakeAdapter({ checks })
+    let now = Date.now()
+    const input = { controller, session_id: "ses-1", operation: "merge:" + candidate.candidate_id, now: () => now,
+      run: () => runMergeCandidate(root, { candidate_id: candidate.candidate_id, session_id: "ses-1", adapter }) }
+    const wait = await runWithExternalWait(input)
+    assert.equal(wait.status, "WAITING_EXTERNAL")
+    assert.equal((await controller.snapshot()).state.merge, null)
+    now = Date.parse(wait.next_retry_at)
+    checks["check-1"] = "SUCCESS"
+    assert.equal((await runWithExternalWait(input)).status, "merged")
+    const state = (await controller.snapshot()).state
+    assert.equal(state.external_wait, null)
+    assert.equal(state.ci_evidence[candidate.candidate_id]["check-1"].conclusion, "SUCCESS")
+    assert.match(state.ci_evidence[candidate.candidate_id]["check-1"].evidence_ref, /github.adapter/)
   })
 })

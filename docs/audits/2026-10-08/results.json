@@ -1,0 +1,86 @@
+{
+  "audit_commit": "f094b038f1f036a55eb6f375fcac6d15678c8792",
+  "probes": [
+    {
+      "id": "A01_nominal_budget",
+      "used_seconds": 3600,
+      "original_wu_contract_seconds": 2400,
+      "loaded_wu_ceiling": null,
+      "verify": true
+    },
+    {
+      "id": "A02_release_binding",
+      "durable_status": "released",
+      "ephemeral_binding_remaining": true,
+      "note": "Composes registry and controller as index.js does; no real OpenCode runtime"
+    },
+    {
+      "id": "A03_review_update",
+      "error": "Operation E1:review:cand-961a354d79aea0ddb45016350a437ef7472695210b1fcc3108d065b4e63f38b3 was reused with different content; this is a conflict, not a replay."
+    },
+    {
+      "id": "A04_merge_resume_blocker",
+      "merge_result": "merged",
+      "remote_merge_calls": 1,
+      "blocker_after": "BLOCKED_SECURITY",
+      "note": "Fake remote; no external merge"
+    },
+    {
+      "id": "A05_same_candidate_rebind",
+      "error": "Operation E1:bind-pr:c210da6f74ac7c01c6582a0da64b75541641b54cf489f7577fe79368de976de5 was reused with different content; this is a conflict, not a replay.",
+      "refreeze_same_bytes_same_id": true
+    },
+    {
+      "id": "A06_started_merge_blocks_repair",
+      "error": "BIND_PR: already bound to repository audit/example PR #1 head arbitrary-head; replacement requires a new reviewed candidate and a settled predecessor (no merge in progress).",
+      "merge_state": "STARTED"
+    },
+    {
+      "id": "A07_workspace_dependencies",
+      "checkout": "PASS",
+      "candidate": "FAIL",
+      "reason": "Dependency exists in checkout but disposable workspace has no provisioning phase"
+    },
+    {
+      "id": "A08_no_progress_external_change",
+      "external_condition_now_ready": true,
+      "third_attempt_invoked": false,
+      "error": "HARNESS_NO_PROGRESS"
+    },
+    {
+      "id": "A09_verify_event_integrity",
+      "modified_event_hash_not_recomputed": true,
+      "verify": true,
+      "note": "Tampering is confined to disposable audit fixture"
+    },
+    {
+      "id": "A10_complete_then_dispatch",
+      "completed": true,
+      "dispatch_after_completion": "reserved",
+      "note": "Public init/probe execution; missing terminal guard also visible in applyEvent"
+    },
+    {
+      "id": "A11_readiness_budget_zero",
+      "status": "READY",
+      "budget": {
+        "status": "READY",
+        "remaining": 0,
+        "required": 0
+      },
+      "note": "index.js supplies remaining only; build/review reserves default to zero"
+    },
+    {
+      "id": "A12_ci_rerun_selection",
+      "latest_supplied": "success",
+      "selected": "failure",
+      "note": "Synthetic API response, no network; last name wins independent of run id"
+    },
+    {
+      "id": "A13_candidate_head_binding",
+      "status": "merged",
+      "bound_head": "arbitrary-head",
+      "tree_check_supported_by_adapter": false,
+      "note": "Fake remote: reviewed tree is never compared with PR head contents"
+    }
+  ]
+}

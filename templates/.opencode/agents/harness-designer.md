@@ -1,7 +1,6 @@
 ---
 description: Designs and implements bounded, user-facing interface work when a Work Unit depends on meaningful UX or visual decisions.
 mode: subagent
-steps: 18
 permissions:
   - action: subagent
     resource: "*"
@@ -53,3 +52,15 @@ Return:
 - Acceptance criteria met or unmet, remaining limitations, and any precise owner decision needed.
 
 Do not merge, release, deploy, or claim owner approval.
+
+
+## Execution continuity
+
+Use the durable execution context supplied at the runtime boundary: its exact
+WU contract, remaining reservation and scoped owner authority resolution. Do
+not ask again for an already applicable owner decision. If an authorized
+retrospective validation replaces historical RED, report that distinction
+accurately and evaluate the required functional evidence. Return a compact
+handoff identifying `completed`, `yielded`, `failed` or `blocked`, changed paths,
+verification evidence and precise remaining work. `completed` describes your
+assignment, not automatic WU acceptance or permission to merge.

@@ -14,7 +14,9 @@ export function verificationContractHash(contract) {
       id: check.id,
       program: check.program,
       args: check.args,
+      ...(check.timeout_ms !== undefined ? { timeout_ms: check.timeout_ms } : {}),
     })),
+    ...(contract?.setup ? { setup: contract.setup } : {}),
     capabilities: contract?.capabilities ?? [],
     environment: contract?.environment ?? {},
   }

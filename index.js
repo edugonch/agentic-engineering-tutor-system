@@ -1,5 +1,17 @@
+import { withVerificationBudget, recoverVerificationPhase } from "./src/execution/verification-budget.js"
+import { packageFingerprint } from "./src/package-fingerprint.js"
+import { createWorkerBudgetGuard } from "./src/execution/worker-budget.js"
+import { createExecutionSupervisor } from "./src/execution/supervisor.js"
+import { runWithExternalWait } from "./src/execution/external-wait.js"
+import { findExecutionForCandidate, runRebindPR, runAbortMerge } from "./src/execution/merge.js"
+import { findWuExecution } from "./src/execution/execution-query.js"
+import { trackedCandidatePaths } from "./src/execution/git-capture.js"
+import { wuBudgetUsage } from "./src/execution/wu-budget.js"
+import { stableHash } from "./src/execution/serialize.js"
+import { mkdtemp, rm } from "node:fs/promises"
+import { tmpdir } from "node:os"
 import { createDispatchHandoffReader } from "./src/execution/dispatch-handoff.js"
-import { registerOrchestratorSteps, inspectOrchestratorSteps } from "./src/orchestrator-steps.js"
+import { registerOrchestratorSteps, registerSpecialistSteps, inspectOrchestratorSteps } from "./src/orchestrator-steps.js"
 import { createSessionRecovery } from "./src/execution/session-recovery.js"
 import { createOrchestratorOwnership } from "./src/orchestrator-ownership.js"
 import { Plugin } from "@opencode/plugin"
@@ -26,7 +38,8 @@ import {
   isJevReady,
   readJevSettings,
 } from "./src/decision/index.js"
-import { runContinuationProbe, createContinuationDriver, createCandidateRegistry, captureBaseSnapshot, freezeCandidate, runCandidateVerification, checkExecutionReadiness, pathDigest, validateVerificationContract, runExecutionController, claimDispatchLaunch, createLaunchBindingRegistry, createVerificationReceipt, writeVerificationReceipt, createGitHubAdapter, runMergeCandidate, runVerifyExternalMerge, BLOCKER_CLASSES, CI_CONCLUSIONS } from "./src/execution/index.js"
+import { runContinuationProbe, createContinuationDriver, createCandidateRegistry, captureBaseSnapshot, freezeCandidate, runCandidateVerification, checkExecutionReadiness, pathDigest, validateVerificationContract, runExecutionController, claimDispatchLaunch, createLaunchBindingRegistry, findPendingLaunchBinding, createVerificationReceipt, writeVerificationReceipt, createGitHubAdapter, runMergeCandidate, runVerifyExternalMerge, observeMergeProgress, BLOCKER_CLASSES, CI_CONCLUSIONS } from "./src/execution/index.js"
+import { verificationContractHash } from "./src/execution/verification-contract.js"
 
 const json = (value) => ({ content: JSON.stringify(value, null, 2) })
 const objectInput = (properties, required = []) => ({
@@ -51,6 +64,7 @@ function detectBrowser() {
 export default Plugin.define({
   id: "opencode.agentic-harness",
   async setup(ctx) {
+    const packageRevision = await packageFingerprint(fileURLToPath(new URL(".", import.meta.url)))
     const settings = readGuardSettings(process.env)
     const guard = createTurnGuard(settings)
     const ownership = createOrchestratorOwnership(ctx)
@@ -71,7 +85,9 @@ export default Plugin.define({
       return projectRoot
     }
 
+    const supervisor = createExecutionSupervisor(ctx, requireProjectRoot(), { enabled: process.env.HARNESS_SUPERVISOR_ENABLED === "1" })
     const sessionRecovery = createSessionRecovery(ctx, requireProjectRoot())
+    const workerBudget = createWorkerBudgetGuard(ctx, requireProjectRoot(), sessionRecovery)
     const readDispatchHandoff = createDispatchHandoffReader(ctx, requireProjectRoot())
 
     const candidateRegistry = createCandidateRegistry({ dir: join(requireProjectRoot(), ".harness", "execution") })
@@ -99,12 +115,15 @@ export default Plugin.define({
     // Agent transforms run against merged runtime definitions, including old
     // project copies that the file provisioner correctly leaves untouched.
     await registerOrchestratorSteps(ctx.agent, process.env)
+    await registerSpecialistSteps(ctx.agent, process.env)
     await ctx.agent.reload()
 
     const currentWorkUnitAgentReadiness = async () => ({
       ...(await checkWorkUnitAgentReadiness(ctx.agent)),
       profile_provisioning: agentProvisioning,
       orchestrator_steps: await inspectOrchestratorSteps(ctx.agent),
+      supervisor: supervisor.status(),
+      worker_budget: { interruption_supported: typeof ctx.session.interrupt === "function", errors: workerBudget.failures() },
       dispatch_handoff_reader: {
         tool: "harness_read_dispatch_handoff",
         available: typeof ctx.session?.get === "function" && typeof ctx.session?.context === "function",
@@ -160,7 +179,7 @@ export default Plugin.define({
     // A fresh user prompt starts a new per-session action budget.
     await ctx.session.hook("prompt", async (event) => {
       await ownership.onPrompt(event)
-      if (!continuation.isInternalPrompt(event.sessionID)) {
+      if (!supervisor.isInternalPrompt(event) && !continuation.isInternalPrompt(event.sessionID)) {
         guard.reset(event.sessionID)
         sessionRecovery.reset()
       }
@@ -177,20 +196,28 @@ export default Plugin.define({
     })
 
     // V2 calls this hook before every agent-loop request, including tool continuations.
-    await ctx.session.hook("context", (event) => {
+    await ctx.session.hook("context", async (event) => {
+      const executionContext = await workerBudget.inspect(event.sessionID, event.agent)
+      if (executionContext) {
+        event.system ??= []
+        event.system.push({ type: "text", text: `Durable Harness execution context. Follow this WU contract and its existing scoped owner resolution; preserve role permissions and functional verification. Do not reopen an authority question already resolved by this decision.\n${JSON.stringify(executionContext)}` })
+      }
       applyOutputTokenCap(event.options, settings.maxOutputTokens)
       continuation.onContext(event)
     })
 
-    // Allow at most one retry after the initial provider request.
+    // Preserve OpenCode's transient-error policy. An operator may explicitly
+    // install an emergency retry ceiling; the plugin has no hidden default.
     await ctx.session.hook("retry", (event) => {
-      if (event.attempt >= 2) event.decision = { retry: false }
+      const limit = Number(process.env.HARNESS_PROVIDER_RETRY_LIMIT)
+      if (Number.isSafeInteger(limit) && limit > 0 && event.attempt >= limit) event.decision = { retry: false }
     })
 
     // Count tool calls and delegations for the session that actually ran them,
     // and (Wave B) claim a bound prepared dispatch at the launch boundary.
     await ctx.tool.hook("execute.before", async (event) => {
       await ownership.beforeTool(event)
+      await workerBudget.inspect(event.sessionID, event.agent)
       // Run the circuit breaker first. If it trips, the subagent is rejected and
       // no claim is written — the pre-side-effect failure stays NEVER_LAUNCHED and
       // releasable (this is the WU-058 case, now structural).
@@ -208,7 +235,9 @@ export default Plugin.define({
           // Consume exactly once: remove the binding BEFORE attempting the
           // durable claim. If the claim fails, the subagent does not execute and
           // no stale binding remains to re-claim the same dispatch later.
-          const binding = launchBindings.consume(event.sessionID, agent)
+          const binding = launchBindings.consume(event.sessionID, agent) ??
+            (agent.startsWith("harness-") ? await findPendingLaunchBinding(requireProjectRoot(), event.sessionID, agent) : null)
+          if (agent.startsWith("harness-") && !binding) throw new Error("Harness specialist requires a durable prepare_launch binding before delegation")
           if (binding) {
             const callId = String(event.id ?? "")
             if (!callId) {
@@ -228,6 +257,7 @@ export default Plugin.define({
 
     await ctx.tool.hook("execute.after", async (event) => {
       const result = await sessionRecovery.afterTool(event)
+      if (result?.child_session_id) workerBudget.release(result.child_session_id)
       if (result && event.status === "completed") {
         // Preserve the original tool result and its session metadata.
         const notice = `Harness launch tracking: ${JSON.stringify(result)}`
@@ -488,7 +518,7 @@ export default Plugin.define({
         name: "harness_execution_controller",
         description: "Phase 2 durable execution control surface. Drives the recoverable execution machine under .harness/execution/controller/<execution_id>/. Dispatch actions: init (approve a mandate), reserve, prepare_launch, record_launch, mark_ambiguous, resolve_ambiguous_launch (audited AMBIGUOUS -> LAUNCHED recovery using an independently verified external session id), record_finish, reconcile, release, recover (read-only classification), status, verify (read-only invariant check). Authority/lifecycle actions: approve_mandate, amend_mandate (policy-only amendment from a new APPROVED Epic artifact; preserves budget/scope/history), amend_wu_budget (apply a structured APPROVED decision to extend the active WU allocation and atomically resolve its exact BUDGET_EXHAUSTED blocker; preserve Epic total and history), resolve_authority_blocker (apply an explicit structured APPROVED decision to the exact BLOCKED_AUTHORITY stop; retain owner conditions and preserve budget, scope and verification gates), activate_wu, record_candidate (loads the candidate from the registry; the caller cannot supply hashes), record_review, complete_wu (WU close), checkpoint, block, clear_blocker (recoverable blockers only), bind_pr, record_ci. complete remains Epic-level (EPIC_EXECUTION_VERIFIED). It is instrumentation, not new authority: every mutation routes through the controller commit path with operation_id + expected_revision + lease fencing. It never writes state.json or the event log directly, never edits OpenCode config/permissions/agents, and never simulates the model. Use verify after any restart to prove the durable core is intact.",
         input: objectInput({
-          action: { type: "string", enum: ["init", "approve_mandate", "amend_mandate", "amend_wu_budget", "resolve_authority_blocker", "status", "reserve", "prepare_launch", "record_launch", "mark_ambiguous", "resolve_ambiguous_launch", "record_finish", "recover", "reconcile", "release", "verify", "activate_wu", "record_candidate", "record_review", "complete_wu", "checkpoint", "block", "clear_blocker", "bind_pr", "record_ci", "complete"], default: "status" },
+          action: { type: "string", enum: ["init", "approve_mandate", "amend_mandate", "amend_wu_budget", "resolve_authority_blocker", "status", "reserve", "prepare_launch", "record_launch", "mark_ambiguous", "resolve_ambiguous_launch", "record_finish", "recover", "reconcile", "release", "verify", "activate_wu", "bind_wu_contract", "record_candidate", "record_review", "complete_wu", "checkpoint", "block", "clear_blocker", "bind_pr", "record_ci", "complete"], default: "status" },
           execution_id: { type: "string", minLength: 1, description: "Stable isolation key; durable state lives under .harness/execution/controller/<execution_id>/." },
           session_id: { type: "string", minLength: 1, description: "OpenCode session ID holding the execution lease (required for mutations)." },
           mandate_id: { type: "string", minLength: 1 },
@@ -499,6 +529,7 @@ export default Plugin.define({
           total_seconds: { type: "number", exclusiveMinimum: 0 },
           dispatch_id: { type: "string", minLength: 1 },
           reserved_seconds: { type: "number", minimum: 0 },
+          wu_artifact_id: { type: "string", description: "Exact source key when the WU has multiple source revisions." },
           launch_agent: { type: "string", minLength: 1, description: "Agent the orchestrator is about to launch (prepare_launch); enables the runtime launch-claim boundary." },
           launch_session_id: { type: "string", minLength: 1, description: "External identity persisted at record_launch or resolve_ambiguous_launch (distinct from the lease-holding session_id)." },
           recovery_evidence: { type: "string", minLength: 1, description: "For resolve_ambiguous_launch: concise evidence explaining how the exact external session identity was independently established. This action never launches/retries work." },
@@ -535,6 +566,8 @@ export default Plugin.define({
           }
           const result = await guard.runHarness(context?.sessionID ?? input.session_id, "harness_execution_controller", input,
             () => runExecutionController(requireProjectRoot(), input, candidateRegistry))
+          if (supervisor.enabled && result.mandate?.authority_kind === "OWNER_APPROVED_EPIC") await supervisor.bind(input.execution_id, context?.sessionID ?? input.session_id)
+          if (input.action === "release") launchBindings.release(input.execution_id, input.dispatch_id)
           // Wave B: after a successful prepare_launch with a named launch_agent,
           // register the ephemeral launch binding so the runtime can claim the
           // exact dispatch at the execute.before boundary of the next subagent.
@@ -551,6 +584,13 @@ export default Plugin.define({
         },
       })
 
+      for (const [name, run, description] of [
+        ["harness_rebind_pr", runRebindPR, "Revalidate the existing PR binding against its current remote head/base and exact frozen tree. Requires no unresolved merge; invalidates previous CI."],
+        ["harness_abort_merge", runAbortMerge, "Recover a STARTED merge: records cancellation only for a remotely closed, unmerged exact-head PR. An already merged PR is reconciled; an open ambiguous attempt is preserved."],
+      ]) editor.add({ name, description, input: objectInput({ candidate_id: { type: "string" } }, ["candidate_id"]),
+        execute: async (input, context) => json(await run(requireProjectRoot(), { candidate_id: input.candidate_id,
+          adapter: createGitHubAdapter(), session_id: context?.sessionID })) })
+
       editor.add({
         name: "harness_merge_candidate",
         description: "Merge the exact already-reviewed candidate's bound PR, per the governed_auto policy. The model provides only candidate_id; repository/PR/head/base/policy/CI/review are resolved from durable state. Credentials come from the HARNESS_GITHUB_TOKEN runtime environment variable, never from this input. Idempotent: a retry after a crash re-queries GitHub and records an existing merge instead of merging twice. Head/base drift, a closed-without-merge PR, or a merge with a different head fail closed.",
@@ -559,12 +599,12 @@ export default Plugin.define({
         }, ["candidate_id"]),
         execute: async (input, context) => {
           const adapter = createGitHubAdapter({ token: process.env.HARNESS_GITHUB_TOKEN ?? "" })
-          const result = await guard.runHarness(context?.sessionID, "harness_merge_candidate", input,
-            () => runMergeCandidate(requireProjectRoot(), {
-              candidate_id: String(input.candidate_id ?? ""),
-              adapter,
-              session_id: context?.sessionID,
-            }))
+          const execution = await findExecutionForCandidate(requireProjectRoot(), input.candidate_id)
+          const result = await runWithExternalWait({ controller: execution.controller, session_id: context?.sessionID, observeExistingMerge: true,
+            operation: "harness_merge_candidate:" + input.candidate_id,
+            run: () => guard.runHarness(context?.sessionID, "harness_merge_candidate", input,
+              () => runMergeCandidate(requireProjectRoot(), { candidate_id: input.candidate_id, adapter, session_id: context?.sessionID }),
+              () => observeMergeProgress(requireProjectRoot(), input.candidate_id, adapter)) })
           return json(result)
         },
       })
@@ -577,12 +617,12 @@ export default Plugin.define({
         }, ["candidate_id"]),
         execute: async (input, context) => {
           const adapter = createGitHubAdapter({ token: process.env.HARNESS_GITHUB_TOKEN ?? "" })
-          const result = await guard.runHarness(context?.sessionID, "harness_verify_external_merge", input,
-            () => runVerifyExternalMerge(requireProjectRoot(), {
-              candidate_id: String(input.candidate_id ?? ""),
-              adapter,
-              session_id: context?.sessionID,
-            }))
+          const execution = await findExecutionForCandidate(requireProjectRoot(), input.candidate_id)
+          const result = await runWithExternalWait({ controller: execution.controller, session_id: context?.sessionID, observeExistingMerge: true,
+            operation: "harness_verify_external_merge:" + input.candidate_id,
+            run: () => guard.runHarness(context?.sessionID, "harness_verify_external_merge", input,
+              () => runVerifyExternalMerge(requireProjectRoot(), { candidate_id: input.candidate_id, adapter, session_id: context?.sessionID }),
+              () => observeMergeProgress(requireProjectRoot(), input.candidate_id, adapter)) })
           return json(result)
         },
       })
@@ -599,12 +639,17 @@ export default Plugin.define({
         }, ["wu_id"]),
         execute: async (input) => {
           const root = requireProjectRoot()
-          const base = input.base_paths?.length ? await captureBaseSnapshot(root, input.base_paths) : null
-          const contract = input.verification_contract ?? null
-          if (contract && !contract.source_wu_id) contract.source_wu_id = input.wu_id
+          const execution = await findWuExecution(root, input.wu_id)
+          if (!execution?.state.wu.contract?.verification_contract) throw new Error("Bind the WU executable contract before freezing a candidate")
+          const base = null
+          const contract = structuredClone(execution.state.wu.contract.verification_contract)
+          const paths = await trackedCandidatePaths(root, [...(input.base_paths ?? []), ...(input.overlay_paths ?? [])], input.deletions ?? [])
+          contract.source_wu_hash = execution.state.wu.contract.source_hash
+          contract.source_wu_revision = execution.state.wu.contract.source_revision
+          contract.source_wu_id = input.wu_id
           const candidate = await freezeCandidate(root, {
             base,
-            paths: input.overlay_paths ?? [],
+            paths,
             deletions: input.deletions ?? [],
             verification_contract: contract,
           })
@@ -627,12 +672,17 @@ export default Plugin.define({
           candidate_id: { type: "string", minLength: 1, pattern: "^cand-[0-9a-f]{64}$" },
           verification_check_id: { type: "string", minLength: 1 },
         }, ["candidate_id", "verification_check_id"]),
-        execute: async (input) => {
+        execute: async (input, context) => {
           const candidate = await candidateRegistry.load(input.candidate_id)
           if (!candidate) {
             return json({ status: "BLOCKED_UNKNOWN_CANDIDATE", candidate_id: input.candidate_id, reason: "no candidate with this id is in the registry." })
           }
-          const result = await runCandidateVerification(candidate, input.verification_check_id)
+          if (!candidate.verification_contract?.commands?.some(check => check.id === input.verification_check_id))
+            return json({ status: "BLOCKED_UNDECLARED_CHECK", check_id: input.verification_check_id })
+          const execution = await findWuExecution(requireProjectRoot(), candidate.verification_contract?.source_wu_id)
+          if (!execution) return json({ status: "BLOCKED_BUDGET", reason: "Verification requires its active WU execution" })
+          const result = await withVerificationBudget({ controller: execution.controller, candidate, check_id: input.verification_check_id, context,
+            run: options => runCandidateVerification(candidate, input.verification_check_id, options) })
           // Persist an immutable evidence receipt for checks that actually ran,
           // so a later RECORD_REVIEW can cite durable evidence rather than a
           // caller-declared "PASS".
@@ -647,6 +697,17 @@ export default Plugin.define({
       })
 
       editor.add({
+        name: "harness_recover_verification",
+        description: "Recover an interrupted root verification only after its owning OS process is proven dead and the command-owner guard applies. Conservatively charges the authorized allocation; never reports verification PASS or duplicates a live command.",
+        input: objectInput({ wu_id: { type: "string", minLength: 1 } }, ["wu_id"]),
+        execute: async (input, context) => {
+          const execution = await findWuExecution(requireProjectRoot(), input.wu_id)
+          if (!execution) throw new Error("No active WU execution to recover")
+          return json(await recoverVerificationPhase({ controller: execution.controller, session_id: context?.sessionID }))
+        },
+      })
+
+      editor.add({
         name: "harness_check_execution_readiness",
         description: "Diagnostic preflight, never authority. Evaluates the concrete capabilities a Work Unit's frozen verification contract requires (builder/reviewer, verification runner, binaries, browser, network policy, budget) and returns READY or BLOCKED_CAPABILITY/BLOCKED_BUDGET with every requirement. Requirements are derived from the contract; the caller cannot invent capabilities. BUILD checks stable+volatile; REVIEW re-checks only volatile.",
         input: objectInput({
@@ -657,10 +718,16 @@ export default Plugin.define({
           remaining_budget: { type: "number", minimum: 0 },
         }, ["wu_id"]),
         execute: async (input) => {
-          let contract = input.verification_contract ?? null
+          const execution = await findWuExecution(requireProjectRoot(), input.wu_id)
+          if (!execution?.state.wu.contract?.verification_contract) return json({ status: "BLOCKED", reason: "No active compiled WU contract. Normalize/bind the existing WU before starting work." })
+          let contract = execution.state.wu.contract.verification_contract
+          const profiles = {}
           if (input.candidate_id) {
             const candidate = await candidateRegistry.load(input.candidate_id)
             if (!candidate) return json({ status: "BLOCKED", reason: `unknown candidate ${input.candidate_id}` })
+            if (candidate.verification_contract?.source_wu_id !== input.wu_id ||
+                verificationContractHash(candidate.verification_contract) !== execution.state.wu.contract.verification_contract_hash)
+              return json({ status: "BLOCKED", reason: "Candidate does not match the active WU verification contract" })
             contract = candidate.verification_contract
           }
           if (!contract) {
@@ -676,7 +743,7 @@ export default Plugin.define({
             for (const agent of records) {
               for (const key of ["name", "id", "agentID", "identifier"]) {
                 const value = agent?.[key]
-                if (typeof value === "string" && value) ids.add(value)
+                if (typeof value === "string" && value) { if (!agent.disabled && ["subagent", "all"].includes(agent.mode)) ids.add(value); profiles[value] = stableHash(agent) }
               }
             }
             agents = ids
@@ -700,8 +767,17 @@ export default Plugin.define({
                 return tools.has("harness_run_verification") ? { status: "READY" } : { status: "BLOCKED", reason: "harness_run_verification is not registered." }
               case "reviewer.execute_declared_checks":
                 return (agents.has("harness-reviewer") && tools.has("harness_run_verification")) ? { status: "READY" } : { status: "BLOCKED", reason: "reviewer cannot execute declared checks." }
-              case "workspace.supported":
-                return { status: "READY" }
+              case "workspace.supported": {
+                try {
+                  const path = await mkdtemp(join(tmpdir(), "harness-preflight-"))
+                  await rm(path, { recursive: true })
+                  return { status: "READY" }
+                } catch (error) { return { status: "BLOCKED", reason: error.message } }
+              }
+              case "runtime.interrupt":
+                return typeof ctx.session.interrupt === "function" ? { status: "READY" } : { status: "BLOCKED", reason: "Session interruption is required to enforce worker reservations." }
+              case "github.governed_merge":
+                return process.env.HARNESS_GITHUB_TOKEN ? { status: "READY", reason: "Token configured; repository-specific permission and branch rules are revalidated at merge." } : { status: "BLOCKED", reason: "Governed merge requires HARNESS_GITHUB_TOKEN before BUILD." }
               case "network.isolation":
                 return { status: "BLOCKED", reason: "network isolation is not yet enforceable." }
               default:
@@ -715,9 +791,13 @@ export default Plugin.define({
             }
           }
 
-          const budget = { remaining: Number.isFinite(input.remaining_budget) ? input.remaining_budget : Number.POSITIVE_INFINITY }
+          const b = execution.state.budget
+          const wu = wuBudgetUsage(execution.state, input.wu_id)
+          const budget = { remaining: Math.min(b.total_seconds - b.used_seconds - b.reserved_seconds, wu.available_seconds ?? Infinity) }
           const info = {
-            pluginRevision: null,
+            pluginRevision: packageRevision,
+            opencodeVersion: ctx.app?.version ?? null,
+            profiles,
             nodeVersion: process.version,
             platform: process.platform,
             arch: process.arch,
@@ -725,16 +805,20 @@ export default Plugin.define({
             binaries: Object.fromEntries((contract.commands ?? []).map((check) => [check.program, resolveBinary(check.program)])),
             browser: detectBrowser(),
           }
-          return json(await checkExecutionReadiness({ contract, phase: input.phase ?? "BUILD", probe, budget, info }))
+          const readinessContract = { ...contract, capabilities: [...(contract.capabilities ?? []),
+            ...(execution.state.mandate?.merge_policy === "governed_auto" ? ["github.governed_merge"] : [])] }
+          return json({ ...(await checkExecutionReadiness({ contract: readinessContract, phase: input.phase ?? "BUILD", probe, budget, info })),
+            limitations: ["Dynamic session permission rules and remote branch policies are enforced at execution; registry presence is not an authorization grant."] })
         },
       })
     })
 
-    if (continuation.enabled) {
+    if (continuation.enabled || supervisor.enabled) {
       ;(async () => {
         try {
           for await (const event of ctx.event.subscribe({ signal: eventSubscription.signal })) {
             await continuation.onEvent(event).catch(() => {})
+            await supervisor.onEvent(event)
           }
         } catch (error) {
           continuation.recordSubscriptionError(error?.message ?? String(error))
@@ -742,10 +826,13 @@ export default Plugin.define({
       })().catch((error) => continuation.recordSubscriptionError(error?.message ?? String(error)))
     }
 
+    await supervisor.resume()
     await registerHarnessCommand(ctx, ownership)
 
     return () => {
       eventSubscription.abort()
+      workerBudget.dispose()
+      supervisor.dispose()
     }
   },
 })

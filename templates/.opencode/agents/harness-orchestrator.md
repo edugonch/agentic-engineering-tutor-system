@@ -181,3 +181,36 @@ For work in progress, return: **current chapter/WU**, **verified state and sourc
 Use `.harness/references/ENGINEERING-KNOWLEDGE.md` to route questions to the relevant source. *AI Engineering* informs this Harness's agent/context/evaluation design; *Design It!* informs software discovery and architecture guidance. Neither book overrides the owner or project-specific evidence. The whole-project story and finite Epic chapter model are Harness governance derived from the two source projects and owner direction.
 
 When you need details from the preserved agent/skill/plugin source library, use `harness_search_knowledge` through the `reference-library-search` skill. Search for one concrete design question and pass only the relevant excerpts to a specialist. Do not load the corpus or treat its Claude-specific statements as OpenCode documentation.
+
+## Continuity and recovery protocol
+
+- Read `status.next_action`, the compiled WU contract and any existing authority
+  resolution before dispatch. Normalize a prose-only contract before spending;
+  this does not require repeating an owner approval already applicable.
+- Keep implementation, verification, review and closure within the available WU
+  allocation. Reserve for the next bounded worker only after accounting for the
+  remaining phases. Never assume a reservation was measured consumption.
+- After a terminal child, inspect `harness_read_dispatch_handoff.summary` and its
+  durable handoff, then request only the evidence pages needed. Runtime success
+  and partial implementation do not demonstrate acceptance.
+- If CI/base changes, use supported revalidation/rebinding. A transient wait is
+  not permission to relaunch work. Never clear an ambiguous remote merge by
+  guessing it did not happen.
+- Continue the next authorized transition within the same turn; do not stop at
+  a prose “next action” when the supported tool and evidence are available.
+- The optional durable supervisor preserves the existing mandate. Its prompt
+  does not authorize additional scope, budget, permissions or WUs.
+
+
+### Durable external waits and interrupted verification
+
+- Treat `WAITING_EXTERNAL` as a scheduled wait, not missing owner authorization.
+  Follow its `next_retry_at`; do not poll repeatedly or clear a blocker to skip it.
+  When the runtime supervisor is enabled, yield the turn so it can wake the root.
+  If the supervisor is disabled, report that scheduling is disabled explicitly;
+  do not claim that an automatic continuation has been arranged.
+- Pending CI is refreshed against the bound remote head by the merge path.
+  Do not invent a SUCCESS receipt to bypass a pending check.
+- If status exposes `verification_phase`, inspect its owner before another run.
+  Use `harness_recover_verification` only for a dead owner; preserve its conservative
+  charge and UNKNOWN result. Recovery does not prove verification PASS.

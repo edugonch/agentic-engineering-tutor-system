@@ -1,3 +1,4 @@
+import { seedWuContract } from "./wu-fixture.js"
 import test from "node:test"
 import assert from "node:assert/strict"
 import { mkdtemp, rm, writeFile } from "node:fs/promises"
@@ -130,6 +131,7 @@ async function governedCandidate(root, sid) {
     source_refs: ["https://example.com/epic-source"],
   })
   await runExecutionController(root, { action: "approve_mandate", execution_id: "E1", session_id: sid, epic_artifact_id: "epic-001" })
+  await seedWuContract(root)
   await runExecutionController(root, { action: "activate_wu", execution_id: "E1", session_id: sid, wu_id: "WU-01", mandate_id: "E1-MANDATE-001" })
   await writeFile(join(root, "change.txt"), "hello")
   const registry = createCandidateRegistry({ dir: join(root, ".harness", "execution") })
