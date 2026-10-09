@@ -125,3 +125,44 @@ supported resolution of the runner tooling blocker. Preserve the current
 budget, retrospective authorization and candidate; rerun declared checks and a
 fresh independent review before acceptance/CI/merge. Do not reimplement WU063 or
 claim that its reported local GREEN constitutes independent review.
+
+## Follow-up: live dispatch progress and explicit contract corrections
+
+ALFRAN checkpoint 111 confirms the Node command-host fix worked (typecheck PASS),
+but the reviewer still could not resolve its dispatch. The prior fix depended
+on the parent context exposing a running call. The plugin now observes the
+supported `subagent` progress callback directly, validates the actual child via
+`session.get`, and persists the exact claimed identity before the child proceeds.
+Original progress/results are preserved. No matching by agent name alone, model
+supplied child ID, or lease transfer is introduced. Restart recovery and terminal
+accounting remain unchanged. Real-host confirmation remains pending.
+
+The new controller action `correct_verification_contract` requires:
+
+- An exact `wu_artifact_id` for an APPROVED WU source linked to the existing Epic.
+- The current `expected_contract_hash` (compiled WU hash, not candidate hash).
+- A nonempty `reason` and complete `check_mapping` from old check IDs to new IDs.
+- Preserved WU scope/acceptance prose before `execution_contract`, original
+  budget, process obligations and environment policy. Generated knowledge
+  envelopes/titles are excluded from the prose comparison.
+- Settled dispatches and phases, no pending external wait or merge, and no
+  unresolved non-tooling blocker.
+
+It appends `WU_CONTRACT_CORRECT`, retains the prior contract and all receipts,
+marks old WU candidates superseded and clears only the current PR binding.
+It does not clear the blocker or change budget. Superseded candidates cannot be
+reviewed, rebound, used for CI acceptance, merged or completed. Refreeze the
+same code under the corrected contract, rerun every declared check, and obtain
+a fresh independent review. Check mapping is traceability, not proof that the
+commands preserve coverage; the reviewer must inspect that equivalence.
+
+For ALFRAN V4, inspect the current controller state and approved record
+`fa29b273cd9c0624713058688cea2ca1854698d600402052097b36a41d443f5d`.
+Map old `tests` to `commerce-tests`, `api-tests`, `crm-migration-tests`, and map
+each unchanged check (types/lint/format/arch) to itself if those are the actual
+old IDs. Call `correct_verification_contract` with the current compiled hash
+and reason. Resolve only the tooling blocker whose causes are repaired. Preserve
+PR #165/head `478eb0387a09eb87a0ce0b3f2663311e1bc89ed5` unless actual checks require
+code changes. Prior timeout/DB failures remain failures until rerun establishes
+their cause. Preserve retrospective authorization and current live budget;
+no budget extension, event edits or implementation restart is authorized here.

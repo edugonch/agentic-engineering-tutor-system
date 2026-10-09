@@ -938,13 +938,14 @@ function parseExecutionMandate(content) {
 
 // Resolve and verify the actual WU source before execution. The approved Epic
 // supplies authority; a derived WU need not falsely claim owner approval.
-export async function readWorkUnitDefinition(projectRoot, wuId, epicId, sourceId = wuId) {
+export async function readWorkUnitDefinition(projectRoot, wuId, epicId, sourceId = wuId, { requireApproved = false } = {}) {
   const root = assertRoot(projectRoot)
   const index = await readIndex(root)
   const matches = index.records.filter(r => r.classification === "WORK_UNIT" &&
     (r.record_key === sourceId || r.source_id === sourceId || (sourceId === wuId && r.source_id.startsWith(`${wuId}-`))))
   if (matches.length !== 1) throw new Error(`WU_CONTRACT_REQUIRED: expected one durable source for ${wuId}; record the existing WU or select its exact wu_artifact_id.`)
   const record = matches[0]
+  if (requireApproved && (record.declared_authority !== "APPROVED" || record.import_status !== "OWNER_APPROVED_ARTIFACT")) throw new Error("Contract correction requires an APPROVED WU source")
   if (record.source_id !== wuId && !record.source_id.startsWith(`${wuId}-`)) throw new Error("WU source identity mismatch")
   if (!(record.relationships ?? []).includes(epicId)) throw new Error("WU contract must be linked to the approved Epic")
   const path = resolve(root, record.archive_path)
@@ -954,5 +955,5 @@ export async function readWorkUnitDefinition(projectRoot, wuId, epicId, sourceId
   if (!info.isFile() || info.isSymbolicLink()) throw new Error("WU contract must be a regular file")
   const bytes = await readFile(path)
   if (sha256(bytes) !== record.sha256) throw new Error("WU contract integrity mismatch")
-  return { content: bytes.toString("utf8"), source_record_key: record.record_key, source_hash: record.sha256, source_revision: record.source_revision }
+  return { ...(requireApproved ? { source_authority: "APPROVED" } : {}), content: bytes.toString("utf8"), source_record_key: record.record_key, source_hash: record.sha256, source_revision: record.source_revision }
 }

@@ -1,3 +1,4 @@
+import { validateContractCorrection } from "./contract-correction.js"
 import { executionProgress } from "./progress.js"
 import { wuBudgetUsage } from "./wu-budget.js"
 // State projection. state is derived, never canonical: events.ndjson is the
@@ -49,6 +50,7 @@ export function canStartMerge(state) {
   const candidate = state.candidates[binding.candidate_id]
   if (!candidate) return { allowed: false, reason: "bound candidate not recorded" }
   if (candidate.wu_id !== state.wu.wu_id) return { allowed: false, reason: "bound candidate not in active WU" }
+  if (candidate.superseded_by_contract) return { allowed: false, reason: "candidate contract superseded; refreeze and review" }
   const review = state.reviews[binding.candidate_id]
   if (!review || review.verdict !== "PASS") return { allowed: false, reason: "no PASS review" }
   if (state.mandate?.merge_policy !== "governed_auto") return { allowed: false, reason: `merge policy is ${state.mandate?.merge_policy ?? "none"}, not governed_auto` }
@@ -82,6 +84,7 @@ export function canVerifyExternalMerge(state) {
   const candidate = state.candidates[binding.candidate_id]
   if (!candidate) return { allowed: false, reason: "bound candidate not recorded" }
   if (candidate.wu_id !== state.wu.wu_id) return { allowed: false, reason: "bound candidate not in active WU" }
+  if (candidate.superseded_by_contract) return { allowed: false, reason: "candidate contract superseded; refreeze and review" }
   const review = state.reviews[binding.candidate_id]
   if (!review || review.verdict !== "PASS") return { allowed: false, reason: "no PASS review" }
   if (state.mandate?.merge_policy !== "human") return { allowed: false, reason: `merge policy is ${state.mandate?.merge_policy ?? "none"}, not human` }
@@ -324,6 +327,19 @@ export function applyEvent(previous, event) {
       state.last_blocker_resolution = { class: state.blocker.class, blocked_at_revision: state.blocker.at_revision,
         resolution: `Owner-approved WU budget amendment ${body.source_artifact_id}`, source_hash: body.source_hash, at_revision: state.revision }
       state.blocker = null
+      break
+    }
+
+    case "WU_CONTRACT_CORRECT": {
+      validateContractCorrection(state, body)
+      state.contract_corrections ??= []
+      state.contract_corrections.push({ ...body, previous_contract: state.wu.contract, at_revision: state.revision })
+      for (const candidate of Object.values(state.candidates)) {
+        if (candidate.wu_id === state.wu.wu_id) candidate.superseded_by_contract = body.contract.contract_hash
+      }
+      state.wu.contract = body.contract
+      // Keep historical PR, CI and review receipts, but require a new binding.
+      state.pr_binding = null
       break
     }
 
@@ -608,6 +624,7 @@ export function applyEvent(previous, event) {
 
     case "RECORD_REVIEW": {
       const candidate = state.candidates[body.candidate_id]
+      if (candidate?.superseded_by_contract) throw new Error("Candidate contract superseded; refreeze and obtain fresh review")
       if (!candidate) throw new Error(`Cannot review unknown candidate ${body.candidate_id}.`)
       const hashes = body.candidate_hashes ?? {}
       if (hashes.manifest_hash !== candidate.manifest_hash || hashes.tree_hash !== candidate.tree_hash) {
@@ -701,6 +718,7 @@ export function applyEvent(previous, event) {
 
     case "BIND_PR": {
       const candidate = state.candidates[body.candidate_id]
+      if (candidate?.superseded_by_contract) throw new Error("Candidate contract superseded; refreeze and obtain fresh review")
       if (!candidate) throw new Error(`BIND_PR: unknown candidate ${body.candidate_id}.`)
       if (state.wu && candidate.wu_id !== state.wu.wu_id) {
         throw new Error(`BIND_PR: candidate ${body.candidate_id} belongs to ${candidate.wu_id}, not the active WU ${state.wu.wu_id}.`)
@@ -758,6 +776,7 @@ export function applyEvent(previous, event) {
 
     case "RECORD_CI": {
       const candidate = state.candidates[body.candidate_id]
+      if (candidate?.superseded_by_contract) throw new Error("Candidate contract superseded; refreeze and obtain fresh review")
       if (!candidate) throw new Error(`RECORD_CI: unknown candidate ${body.candidate_id}.`)
       if (!body.head_sha) throw new Error("RECORD_CI requires head_sha.")
       if (!body.check_identity) throw new Error("RECORD_CI requires check_identity.")
@@ -866,6 +885,7 @@ export function applyEvent(previous, event) {
       const candidateId = body.candidate_id
       if (!candidateId) throw new Error("WU_COMPLETE requires candidate_id.")
       const candidate = state.candidates[candidateId]
+      if (candidate?.superseded_by_contract) throw new Error("Candidate contract superseded; refreeze and obtain fresh review")
       if (!candidate) throw new Error(`WU_COMPLETE: unknown candidate ${candidateId}.`)
       if (candidate.wu_id !== state.wu.wu_id) {
         throw new Error(`WU_COMPLETE: candidate ${candidateId} belongs to ${candidate.wu_id}, not the active WU ${state.wu.wu_id}.`)
