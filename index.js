@@ -86,7 +86,7 @@ export default Plugin.define({
       return projectRoot
     }
 
-    const supervisor = createExecutionSupervisor(ctx, requireProjectRoot(), { enabled: process.env.HARNESS_SUPERVISOR_ENABLED === "1" })
+    const supervisor = createExecutionSupervisor(ctx, requireProjectRoot(), { enabled: process.env.HARNESS_SUPERVISOR_ENABLED !== "0" })
     const sessionRecovery = createSessionRecovery(ctx, requireProjectRoot())
     const workerBudget = createWorkerBudgetGuard(ctx, requireProjectRoot(), sessionRecovery)
     const readDispatchHandoff = createDispatchHandoffReader(ctx, requireProjectRoot())

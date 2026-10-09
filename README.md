@@ -427,10 +427,10 @@ an exact child identity is available. An expired reservation may be settled and
 remaining authorized WU allocation reused; exhaustion of that allocation still
 requires an actual approved extension.
 
-The durable root continuation supervisor is implemented behind
-`HARNESS_SUPERVISOR_ENABLED=1`. It reuses the existing root session, persists prompt
+The durable root continuation supervisor is **enabled by default**. Set
+`HARNESS_SUPERVISOR_ENABLED=0` only to explicitly disable automatic continuation. It reuses the existing root session, persists prompt
 intent and identity, preserves blockers/budget and avoids repeating unchanged
-progress. It is **off by default pending the real-provider canary**. It does not
+progress. It does not
 resume a user-interrupted or failed root automatically. Read readiness for its
 status and recorded subscription/continuation errors. A mocked host test is not
 proof of sustained real-provider operation.
@@ -450,7 +450,7 @@ See `docs/audits/2026-10-08/IMPLEMENTACION.md` for validation and remaining limi
 
 
 External CI waits now persist their retry schedule. Pending CI and typed transport
-failures use 15–300 second backoff, restored by the opt-in supervisor after restart.
+failures use 15–300 second backoff, restored by the supervisor after restart.
 The WU may declare `external_wait_seconds` (default 1800). An expired wait records
 one external-condition blocker; failed checks, permission errors and head drift
 are not transient retries. CI receipts can be refreshed directly from the bound

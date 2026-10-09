@@ -205,3 +205,17 @@ setup mapping compatibility and idempotent retry. The controller integration
 now exercises correction, new freeze, actual Node verification/receipt, review
 receipt, CI and a mock remote governed merge through WU completion. This is a
 local integration test, not proof of ALFRAN completion or real-provider review.
+
+## Supervisor default changed at owner's request
+
+Automatic root continuation is now enabled when HARNESS_SUPERVISOR_ENABLED is
+unset; only the explicit value `0` disables it. The constructor also defaults
+to enabled. This supersedes the earlier opt-in rollout notes. No export of `1`
+is needed after updating the plugin and restarting the OpenCode service.
+
+Existing scope, identity, interruption, blocker and budget gates remain active.
+The supervisor still cannot complete a WU without acceptance evidence or resume
+a user-interrupted/failed root. Existing unbound executions bind to the actual
+orchestrator on the next controller call. Readiness reports the effective flag.
+Regression coverage exercises default-enabled continuation/restart/waits and
+explicit disabled behavior, including the actual plugin registration.
