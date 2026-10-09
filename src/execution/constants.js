@@ -14,6 +14,12 @@ export const OPERATION_TYPES = Object.freeze([
   "SUPERVISOR_SENT",
   "MANDATE_APPROVE", // owner-approved Epic execution mandate (initial authority input)
   "MANDATE_AMEND", // versioned owner-approved policy amendment; budget/scope remain immutable
+  "PROCESS_POLICY_ADOPT",
+  "PROCESS_RECOVERY_START",
+  "PROCESS_EVIDENCE",
+  "PROCESS_RED_RECORD",
+  "PROCESS_REVIEW",
+  "EXTERNAL_OBSERVATION_RECOVER",
   "TIME_POLICY_ADOPT", // approved conversion of WU limits/reservations to planning estimates
   "WU_BUDGET_AMEND", // approved WU-only additional allocation and atomic budget-block recovery
   "WU_CONTRACT_CORRECT",
@@ -102,6 +108,7 @@ export const BLOCKER_CLASSES = Object.freeze([
   "BLOCKED_EXTERNAL_FACT",
   "BLOCKED_ARCHITECTURE",
   "BLOCKED_AUTHORITY",
+  "BLOCKED_PROCESS",
   "BLOCKED_SECURITY",
   "BLOCKED_SCOPE",
   "NO_PROGRESS",
@@ -116,6 +123,7 @@ export const BLOCKER_CLASSES = Object.freeze([
 export const TERMINAL_BLOCKER_CLASSES = new Set([
   "BLOCKED_PERMISSION",
   "BLOCKED_AUTHORITY",
+  "BLOCKED_PROCESS",
   "BLOCKED_SECURITY",
   "BLOCKED_SCOPE",
   "NO_PROGRESS",

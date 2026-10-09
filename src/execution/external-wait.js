@@ -1,3 +1,4 @@
+import { expiredWait, terminalObservation } from "./external-observation.js"
 import { usesPlanningEstimates } from "./time-policy.js"
 import { stableHash } from "./serialize.js"
 import { wuBudgetUsage } from "./wu-budget.js"
@@ -10,7 +11,7 @@ const view = wait => ({ status: "WAITING_EXTERNAL", wait_id: wait.wait_id, opera
 
 // Only explicitly typed runtime/remote transients can enter this path. Security,
 // permissions, head drift and failed checks remain ordinary errors.
-export async function runWithExternalWait({ controller, session_id, operation, run, observeExistingMerge = false, now = () => Date.now(), waitLimitMs }) {
+export async function runWithExternalWait({ controller, session_id, operation, run, observe, observeExistingMerge = false, now = () => Date.now(), waitLimitMs }) {
   const commit = async (type, body, key) => {
     const lease = await controller.acquire(session_id), { state } = await controller.snapshot()
     return controller.commit({ operation_type: type, operation_id: key, body },
@@ -20,19 +21,30 @@ export async function runWithExternalWait({ controller, session_id, operation, r
   if (state.completed || state.wu?.completed) return run() // allow read-only idempotent merge recovery
   if (state.blocker) {
     if (observeExistingMerge && ["STARTED", "RECORDED", "VERIFIED"].includes(state.merge?.status)) return run()
-    throw new Error(`Execution blocked: ${state.blocker.class}`)
+    const expired = expiredWait(state, operation)
+    if (!expired || !observe) throw new Error(`Execution blocked: ${state.blocker.class}`)
+    const observation = await observe()
+    if (!terminalObservation(state, operation, observation)) return { status: "BLOCKED_EXTERNAL_FACT", wait_id: expired.wait_id, reason: "Current remote observation is still pending", observation }
+    await commit("EXTERNAL_OBSERVATION_RECOVER", { wait_id: expired.wait_id, operation, blocked_at_revision: state.blocker.at_revision, observation }, `${expired.wait_id}:observed:${stableHash(observation)}`)
+    state = (await controller.snapshot()).state
   }
   const wu = state.wu && wuBudgetUsage(state, state.wu.wu_id)
   if (state.budget.total_seconds - state.budget.used_seconds <= 0 || (!usesPlanningEstimates(state) && wu?.ceiling_seconds != null && wu.used_seconds >= wu.ceiling_seconds))
     throw new Error("BUDGET_EXHAUSTED: no authorized execution budget remains")
   let wait = state.external_wait
   if (wait && wait.operation !== operation) throw new Error(`WAITING_EXTERNAL: pending operation ${wait.operation} must be resolved first`)
-  async function end(outcome) {
-    if (wait) await commit("EXTERNAL_WAIT_END", { wait_id: wait.wait_id, outcome }, `${wait.wait_id}:end:${outcome}`)
+  async function end(outcome, observation) {
+    if (wait) await commit("EXTERNAL_WAIT_END", { wait_id: wait.wait_id, outcome, recovery_version: 1, ...(observation ? { observation } : {}) }, `${wait.wait_id}:end:${outcome}`)
   }
   if (wait && now() >= Date.parse(wait.deadline_at)) {
-    await end("EXPIRED")
-    return { status: "BLOCKED_EXTERNAL_FACT", wait_id: wait.wait_id, reason: "External wait deadline reached; inspect the remote condition before recovery" }
+    const observation = observe ? await observe() : null
+    if (observation && terminalObservation(state, operation, observation)) {
+      await end("RESOLVED", observation)
+      wait = null
+    } else {
+      await end("EXPIRED", observation)
+      return { status: "BLOCKED_EXTERNAL_FACT", wait_id: wait.wait_id, reason: "External wait deadline reached; inspect the remote condition before recovery", ...(observation ? { observation } : {}) }
+    }
   }
   if (wait && now() < Date.parse(wait.next_retry_at)) return view(wait)
   try {

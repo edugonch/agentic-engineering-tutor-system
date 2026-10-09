@@ -112,3 +112,18 @@ test("supervisor resumes after WU estimate overrun while Epic budget remains", a
   assert.equal(await f.s.tick("E"), true)
   assert.equal(f.prompts.size, 1)
 })
+
+test('expired external wait schedules one observational continuation, survives restart and respects cancellation', async t => {
+  const f = await fixture(t)
+  const at = new Date(Date.now() - 1000).toISOString()
+  await f.commit('EXTERNAL_WAIT', { wait_id: 'expired', operation: 'harness_merge_candidate:candidate', kind: 'CI_PENDING', reason: 'running', attempt: 1, started_at: at, next_retry_at: at, deadline_at: at })
+  await f.commit('EXTERNAL_WAIT_END', { wait_id: 'expired', outcome: 'EXPIRED' })
+  f.ctx.session.get = async () => ({ id: 'ses_root', agent: 'harness-orchestrator', outcome: 'interrupted' })
+  assert.equal(await f.s.tick('E'), false)
+  f.ctx.session.get = async () => ({ id: 'ses_root', agent: 'harness-orchestrator', outcome: 'succeeded' })
+  assert.equal(await f.s.tick('E'), true)
+  assert.match([...f.prompts.values()][0].text, /Observe the remote condition for expired wait/)
+  assert.equal(await f.make().tick('E'), false)
+  assert.equal((await f.c.snapshot()).state.blocker.class, 'BLOCKED_EXTERNAL_FACT')
+  assert.equal(f.prompts.size, 1)
+})

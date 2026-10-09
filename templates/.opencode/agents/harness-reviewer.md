@@ -73,3 +73,23 @@ Epic allocation, command timeouts, owner cancellation, scope and acceptance
 requirements still apply. With `legacy_hard_limit`, preserve the current policy
 until the orchestrator records the owner-approved migration. This distinction
 qualifies all references to WU budget boundaries above.
+
+
+## Independent process recovery acceptance
+
+Read all `authority_resolutions`, `process_policy` and `process_recovery`.
+Evaluate retrospective evidence when the adopted policy covers the deviation;
+absence of historical RED is recorded process debt, not a new authority question.
+Require negative baseline/mutation receipts that demonstrate each relevant
+invariant, complete exact-candidate GREEN, honest deviation and no scope waiver.
+A missing-module failure alone does not demonstrate behavior. Inspect mutation
+diffs, actual failure output and restored code; report insufficient coverage as
+CHANGES_REQUIRED with concrete repair instructions.
+
+If and only if this assessment passes, put exactly one unindented JSON line at
+the beginning of your handoff:
+`process_review: {"verdict":"PASS","candidate_id":"cand-...","evidence_ids":["verify-..."],"assessment":"Specific invariants, negative controls and transparency assessed"}`
+Use the assigned exact candidate and every recorded recovery evidence ID. Never
+emit that line for a blocked/incomplete review. Follow it with the normal review
+and exact GREEN receipt IDs. The orchestrator records this attestation after
+reconciliation; it cannot replace it with its own verdict.

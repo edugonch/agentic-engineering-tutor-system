@@ -1,3 +1,6 @@
+import { expiredWait, terminalObservation } from "./external-observation.js"
+import { applyProcessEvent, activeRecovery, assertProcessAcceptance, requiresTdd, processPending } from "./process-recovery.js"
+import { stableHash } from "./serialize.js"
 import { PLANNING_ESTIMATES } from "./time-policy.js"
 import { validateContractCorrection } from "./contract-correction.js"
 import { executionProgress } from "./progress.js"
@@ -43,6 +46,7 @@ const setsEqual = (a, b) => {
 // review, exact-head CI evidence, and settled dispatches. Pure and exported so it
 // can be tested in isolation.
 export function canStartMerge(state) {
+  try { assertProcessAcceptance(state, state.pr_binding?.candidate_id) } catch (e) { return { allowed: false, reason: e.message } }
   if (state.verification_phase) return { allowed: false, reason: "verification is still running" }
   if (!state.wu) return { allowed: false, reason: "no active WU" }
   if (state.wu.completed) return { allowed: false, reason: "active WU already complete" }
@@ -78,6 +82,7 @@ export function canStartMerge(state) {
 // not required here (the side effect already happened); it is checked remotely
 // in the orchestration when the mandate declares required_ci_checks.
 export function canVerifyExternalMerge(state) {
+  try { assertProcessAcceptance(state, state.pr_binding?.candidate_id) } catch (e) { return { allowed: false, reason: e.message } }
   if (!state.wu) return { allowed: false, reason: "no active WU" }
   if (state.wu.completed) return { allowed: false, reason: "active WU already complete" }
   const binding = state.pr_binding
@@ -149,6 +154,21 @@ export function applyEvent(previous, event) {
   }
 
   switch (event.operation_type) {
+    case "PROCESS_POLICY_ADOPT":
+    case "PROCESS_RECOVERY_START":
+    case "PROCESS_EVIDENCE":
+    case "PROCESS_RED_RECORD":
+    case "PROCESS_REVIEW":
+      applyProcessEvent(state, event)
+      break
+
+    case "EXTERNAL_OBSERVATION_RECOVER": {
+      const wait = expiredWait(state, body.operation)
+      if (!wait || wait.wait_id !== body.wait_id || state.blocker.at_revision !== body.blocked_at_revision || !terminalObservation(state, body.operation, body.observation)) throw new Error("Exact expired wait and terminal remote observation required")
+      state.last_blocker_resolution = { ...state.blocker, resolution: "Remote condition observed; ordinary merge gates still apply", observation: body.observation, at_revision: state.revision }
+      state.blocker = null
+      break
+    }
     case "EXTERNAL_WAIT": {
       const old = state.external_wait
       if (state.completed || state.blocker || !state.wu || state.wu.completed) throw new Error("Execution cannot enter external wait")
@@ -170,7 +190,7 @@ export function applyEvent(previous, event) {
     case "EXTERNAL_WAIT_END": {
       if (state.external_wait?.wait_id !== body.wait_id || !["RESOLVED", "REJECTED", "EXPIRED"].includes(body.outcome)) throw new Error("External wait end mismatch")
       state.external_wait_history ??= []
-      state.external_wait_history.push({ ...state.external_wait, outcome: body.outcome, ended_at: event.timestamp })
+      state.external_wait_history.push({ ...state.external_wait, outcome: body.outcome, ended_at: event.timestamp, ...(body.recovery_version === 1 ? { ended_at_revision: state.revision } : {}), ...(body.observation ? { observation: body.observation } : {}) })
       if (body.outcome === "EXPIRED" && !state.blocker) state.blocker = { class: "BLOCKED_EXTERNAL_FACT", at_revision: state.revision,
         reason: `${state.external_wait.operation}: ${state.external_wait.kind} did not recover before ${state.external_wait.deadline_at}. Last observation: ${state.external_wait.reason}` }
       state.external_wait = null
@@ -182,7 +202,7 @@ export function applyEvent(previous, event) {
       break
     }
     case "SUPERVISOR_CONTINUE": {
-      if (!state.supervisor || state.blocker || state.completed || executionProgress(state) !== body.progress_hash) throw new Error("Continuation no longer eligible")
+      if (!state.supervisor || (state.blocker && !expiredWait(state)) || state.completed || executionProgress(state) !== body.progress_hash) throw new Error("Continuation no longer eligible")
       state.supervisor.intent = { ...body, sent: false }
       break
     }
@@ -374,6 +394,7 @@ export function applyEvent(previous, event) {
     }
 
     case "WU_ACTIVATE": {
+      if (processPending(state)) throw new Error("Finish process recovery before advancing WUs")
       if (!state.mandate) throw new Error("WU_ACTIVATE requires an approved mandate.")
       if (!body.wu_id) throw new Error("WU_ACTIVATE requires wu_id.")
       if (body.mandate_id !== state.mandate.mandate_id) {
@@ -466,6 +487,7 @@ export function applyEvent(previous, event) {
     case "DISPATCH_PREPARE": {
       const d = state.dispatches[body.dispatch_id]
       if (!d || d.status !== DISPATCH_STATUS.RESERVED) throw new Error(`Cannot prepare dispatch ${body.dispatch_id}: not reserved.`)
+      if (body.process_review_candidate_id) d.prepared_process_candidate_id = body.process_review_candidate_id
       d.status = DISPATCH_STATUS.PENDING_LAUNCH
       // Launch-intent binding (Wave B): when the orchestrator prepares a launch it
       // may record what it intends to launch so the runtime can claim the exact
@@ -487,6 +509,10 @@ export function applyEvent(previous, event) {
       if (d.claim_required !== true) throw new Error(`Cannot claim dispatch ${body.dispatch_id}: not prepared with claim_required.`)
       if (d.launch_call_id) throw new Error(`Cannot claim dispatch ${body.dispatch_id}: launch already claimed with call ${d.launch_call_id}.`)
       if (!body.call_id) throw new Error("DISPATCH_LAUNCH_CLAIM requires call_id.")
+      if (d.expected_agent === 'harness-reviewer' && activeRecovery(state)) {
+        d.process_review_candidate_id = d.prepared_process_candidate_id ?? null
+        d.process_evidence_hash = stableHash(activeRecovery(state).evidence)
+      }
       d.launch_call_id = body.call_id
       d.launch_claimed_at = event.timestamp
       break
@@ -639,6 +665,7 @@ export function applyEvent(previous, event) {
         verification_contract_hash: body.verification_contract_hash ?? null,
         required_check_ids: body.required_check_ids ?? [],
         wu_contract_hash: body.wu_contract_hash ?? null,
+        ...(requiresTdd(state) ? { process_recorded_revision: state.revision } : {}),
       }
       break
     }
@@ -654,6 +681,7 @@ export function applyEvent(previous, event) {
       const evidenceIds = body.verification_evidence_ids ?? []
       const verifiedCheckIds = body.verified_check_ids ?? []
       if (body.verdict === "PASS") {
+        assertProcessAcceptance(state, body.candidate_id)
         if (evidenceIds.length === 0) throw new Error("RECORD_REVIEW: a PASS verdict requires verification evidence.")
         if (new Set(evidenceIds).size !== evidenceIds.length) throw new Error("RECORD_REVIEW: duplicate evidence ids in a PASS verdict.")
         if (new Set(verifiedCheckIds).size !== verifiedCheckIds.length) throw new Error("RECORD_REVIEW: duplicate check coverage in a PASS verdict.")
@@ -691,7 +719,7 @@ export function applyEvent(previous, event) {
 
     case "BLOCK": {
       if (!BLOCKER_CLASSES.includes(body.class)) throw new Error(`Unknown blocker class: ${body.class}.`)
-      state.blocker = { class: body.class, reason: body.reason ?? null, at_revision: state.revision, ...(body.class === "NO_PROGRESS" ? { progress_hash: executionProgress(state) } : {}), ...(["reservation_expired", "epic_exhausted"].includes(body.budget_reason) ? { budget_reason: body.budget_reason, dispatch_id: body.dispatch_id } : {}) }
+      state.blocker = { ...(body.authority_question ? { authority_question: body.authority_question } : {}), ...(body.kind ? { kind: body.kind } : {}), class: body.class, reason: body.reason ?? null, at_revision: state.revision, ...(body.class === "NO_PROGRESS" ? { progress_hash: executionProgress(state) } : {}), ...(["reservation_expired", "epic_exhausted"].includes(body.budget_reason) ? { budget_reason: body.budget_reason, dispatch_id: body.dispatch_id } : {}) }
       break
     }
 
@@ -895,6 +923,7 @@ export function applyEvent(previous, event) {
     }
 
     case "WU_COMPLETE": {
+      assertProcessAcceptance(state, body.candidate_id)
       if (!state.wu) throw new Error("WU_COMPLETE requires an active WU.")
       if (state.wu.completed) throw new Error("WU_COMPLETE: the active WU is already complete.")
       if (state.blocker) {

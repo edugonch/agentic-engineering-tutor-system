@@ -1,3 +1,4 @@
+import { hasUnsettledIntegration } from "./process-recovery.js"
 import { stableHash } from "./serialize.js"
 import { verificationContractHash } from "./verification-contract.js"
 import { validateVerificationContract } from "./verification.js"
@@ -9,7 +10,7 @@ export function validateContractCorrection(state, body) {
     throw new Error("Contract correction requires the active compiled WU")
   if (body.expected_contract_hash !== old.contract_hash) throw new Error("Stale contract correction baseline")
   const authority = body.mode === "verification_only" ? next.correction_source : next
-  if (!body.reason?.trim() || authority?.source_authority !== "APPROVED" || !authority.source_record_key || !/^[a-f0-9]{64}$/.test(authority.source_hash ?? ""))
+  if (!body.reason?.trim() || (authority?.source_authority !== "APPROVED" && !(authority?.source_authority === "DELEGATED_TECHNICAL" && state.process_policy?.policy?.technical_verification && authority.policy_source_hash === state.process_policy.source_hash)) || !authority.source_record_key || !/^[a-f0-9]{64}$/.test(authority.source_hash ?? ""))
     throw new Error("Contract correction requires a reason and approved source provenance")
   const { contract_hash, ...unsigned } = next
   if (stableHash(unsigned) !== contract_hash) throw new Error("Invalid corrected contract hash")
@@ -19,7 +20,7 @@ export function validateContractCorrection(state, body) {
         stableHash(deriveVerificationCorrection(old, authority)) !== stableHash(next))
       throw new Error("Verification-only correction must retain the exact original contract and approved proposal")
   }
-  if (state.budget.active_phase || state.verification_phase || state.external_wait || state.merge ||
+  if (state.budget.active_phase || state.verification_phase || hasUnsettledIntegration(state) ||
       Object.values(state.dispatches).some(d => !["released", "result_reconciled"].includes(d.status)))
     throw new Error("Contract correction requires settled dispatches, phases and merge")
   if (state.blocker && state.blocker.class !== "BLOCKED_TOOLING") throw new Error("Resolve non-tooling authority before correcting verification")
@@ -39,6 +40,14 @@ export function validateContractCorrection(state, body) {
   if (verificationContractHash(next.verification_contract) !== next.verification_contract_hash ||
       next.verification_contract_hash === old.verification_contract_hash) throw new Error("Correction requires a changed valid verification contract")
   const before = old.verification_contract, after = next.verification_contract
+  if (authority.source_authority === "DELEGATED_TECHNICAL") {
+    // Automatically delegated edits can add checks, never replace/drop a gate,
+    // setup prerequisite or capability. Semantic substitutions need their own
+    // already-approved source, rather than a model's assertion of equivalence.
+    if (stableHash(before.setup ?? []) !== stableHash(after.setup ?? []) || stableHash(before.capabilities ?? []) !== stableHash(after.capabilities ?? []) ||
+        before.commands.some(check => !after.commands.some(nextCheck => stableHash(check) === stableHash(nextCheck))))
+      throw new Error("Delegated correction must preserve every existing check, setup and capability; add coverage or use an applicable approved substitution")
+  }
   if (stableHash(before.environment ?? {}) !== stableHash(after.environment ?? {})) throw new Error("Correction cannot change environment policy")
   const mapping = body.check_mapping ?? {}, ids = new Set(after.commands.map(c => c.id))
   if (Object.keys(mapping).length !== before.commands.length || before.commands.some(c =>
@@ -71,6 +80,7 @@ export function correctionCheckMapping(before, after, provided) {
   for (const check of before.commands) if (newIds.has(check.id)) mapping[check.id] = [check.id]
   const added = [...newIds].filter(id => !before.commands.some(c => c.id === id))
   if (missing.length === 1 && added.length) mapping[missing[0].id] = added
+  else if (!missing.length && added.length && before.commands.length) mapping[before.commands[0].id].push(...added)
   else if (missing.length || added.length) throw new Error("CHECK_MAPPING_REQUIRED: supply explicit old-to-new check IDs; multiple replacements are ambiguous. No owner approval is needed to describe the mapping.")
   return mapping
 }

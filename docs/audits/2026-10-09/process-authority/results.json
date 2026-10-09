@@ -1,0 +1,30 @@
+{
+  "baseline": "6cca3cfc22494678e3f69bdb4b2ef691f5812e05",
+  "results": [
+    {
+      "probe": "A1",
+      "confirmed": true,
+      "observation": "Public tool accepts a process-only authority classification and generic technical recovery is rejected."
+    },
+    {
+      "probe": "A2",
+      "confirmed": true,
+      "observation": "Ledger has two resolutions; automatic child context carries only the last one."
+    },
+    {
+      "probe": "A3",
+      "confirmed": true,
+      "observation": "Expired CI wait creates blocker with zero current remote observations."
+    },
+    {
+      "probe": "A4",
+      "confirmed": true,
+      "observation": "Process obligations accept a string and arbitrary objects without semantic/type validation."
+    },
+    {
+      "probe": "A5",
+      "confirmed": true,
+      "observation": "Reducer review gate has no RED-order receipt check. Synthetic reducer inputs are not proof that the public receipt/CI/merge gates can be bypassed."
+    }
+  ]
+}

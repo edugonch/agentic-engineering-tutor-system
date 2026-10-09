@@ -1,3 +1,4 @@
+import { validateProcessObligations } from "./process-recovery.js"
 import { validateVerificationContract } from "./verification.js"
 import { verificationContractHash } from "./verification-contract.js"
 import { stableHash } from "./serialize.js"
@@ -14,6 +15,7 @@ export function compileWuContract(wuId, definition) {
   const seconds = typed?.active_seconds ?? documented
   if (!Number.isSafeInteger(seconds) || seconds <= 0) throw new Error("WU contract requires a finite active_seconds or Active-time limit")
   if (documented !== null && documented !== seconds) throw new Error("WU documented and executable budgets disagree")
+  validateProcessObligations(typed?.process_obligations ?? [])
   const verification = typed?.verification_contract ?? null
   if (typed?.external_wait_seconds !== undefined && (!Number.isSafeInteger(typed.external_wait_seconds) || typed.external_wait_seconds <= 0)) throw new Error("external_wait_seconds must be a positive integer")
   if (verification) validateVerificationContract(verification)

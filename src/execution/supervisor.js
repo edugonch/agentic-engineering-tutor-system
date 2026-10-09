@@ -1,3 +1,4 @@
+import { expiredWait } from "./external-observation.js"
 import { usesPlanningEstimates } from "./time-policy.js"
 // Durable continuation outbox. Enabled by default; explicit opt-out remains available.
 // It wakes the existing root orchestrator; it never creates/finishes a worker,
@@ -53,7 +54,7 @@ export function createExecutionSupervisor(ctx, projectRoot, { enabled = true, no
       const c = await controller(execution)
       let { state } = await c.snapshot()
       const session = state.supervisor?.session_id
-      if (!session || state.completed || state.blocker || state.mandate?.authority_kind !== "OWNER_APPROVED_EPIC") { disarm(execution); return false }
+      if (!session || state.completed || (state.blocker && !expiredWait(state)) || state.mandate?.authority_kind !== "OWNER_APPROVED_EPIC") { disarm(execution); return false }
       const info = await identity(session)
       if (info.outcome !== "succeeded") { disarm(execution); return false } // never override cancellation or failure
       const budget = state.budget
@@ -83,7 +84,7 @@ export function createExecutionSupervisor(ctx, projectRoot, { enabled = true, no
       internal.add(intent.intent_id)
       await ctx.session.prompt({ sessionID: session, id: intent.intent_id, delivery: "queue", resume: true,
         metadata: { harness_continuation: intent.intent_id, execution_id: execution },
-        text: `Continue execution ${execution} from durable status and verify under its existing approved mandate. ${state.external_wait ? `The durable external wait is due: observe and retry ${state.external_wait.operation}; never assume remote success.` : unsettled ? "Inspect/recover the existing dispatch before any new work." : "Execute the next authorized transition."} Preserve budget, scope, permissions and all evidence. A runtime terminal result is not acceptance. Do not request approvals already applicable. Stop on a real unresolved blocker or completion.` })
+        text: `Continue execution ${execution} from durable status and verify under its existing approved mandate. ${expiredWait(state) ? `Observe the remote condition for expired wait ${expiredWait(state).operation}; recovery is read-only until terminal evidence is obtained. Never assume success.` : state.external_wait ? `The durable external wait is due: observe and retry ${state.external_wait.operation}; never assume remote success.` : unsettled ? "Inspect/recover the existing dispatch before any new work." : "Execute the next authorized transition."} Preserve budget, scope, permissions and all evidence. A runtime terminal result is not acceptance. Do not request approvals already applicable. Stop on a real unresolved blocker or completion.` })
       await commit(c, session, "SUPERVISOR_SENT", { intent_id: intent.intent_id }, `${execution}:sent:${intent.intent_id}`)
       return true
     } finally { running.delete(execution) }
