@@ -74,7 +74,7 @@ test("controller correction loads approved artifact, replays idempotently and ve
   t.after(() => rm(root, { recursive: true, force: true }))
   const run = (action, extra = {}) => runExecutionController(root, { action, execution_id: "E", session_id: "root", ...extra })
   await recordKnowledgeArtifact(root, { artifact_type: "epic", artifact_id: "epic-001", title: "Epic", status: "APPROVED", owner_confirmed: true,
-    source_refs: ["https://example.com/approval"], content: 'execution_mandate: {"max_wus":1,"total_seconds":200}' })
+    source_refs: ["https://example.com/approval"], content: 'execution_mandate: {"max_wus":1,"total_seconds":200,"merge_policy":"governed_auto","required_ci_checks":["verify"]}' })
   await seedWuContract(root, "WU-01", "epic-001", 200)
   await run("approve_mandate", { epic_artifact_id: "epic-001" })
   await run("activate_wu", { wu_id: "WU-01", mandate_id: "E-MANDATE-001" })
@@ -82,8 +82,8 @@ test("controller correction loads approved artifact, replays idempotently and ve
   const old = (await controller.snapshot()).state.wu.contract
   const typed = { active_seconds: old.active_seconds, process_obligations: old.process_obligations,
     verification_contract: { ...old.verification_contract, commands: [{ id: "new-check", program: "node", args: ["--version"] }] } }
-  const content = old.source_content.replace(/^execution_contract: .*$/m, 'execution_contract: '+JSON.stringify(typed))
-  const input = { wu_artifact_id: "WU-01-CORRECTED", expected_contract_hash: old.contract_hash, reason: "Correct command", check_mapping: { "check-1": ["new-check"] } }
+  const content = "# Additional normalization explanation\n" + old.source_content.replace(/^execution_contract: .*$/m, 'execution_contract: '+JSON.stringify(typed))
+  const input = { wu_artifact_id: "WU-01-CORRECTED", expected_contract_hash: old.contract_hash, reason: "Correct command" }
   await recordKnowledgeArtifact(root, { artifact_type: "work-unit", artifact_id: "WU-01-CORRECTED", title: "Corrected", status: "PROPOSED", owner_confirmed: true, parent_refs: ["epic-001"], content })
   await assert.rejects(run("correct_verification_contract", input), /APPROVED/)
   await recordKnowledgeArtifact(root, { artifact_type: "work-unit", artifact_id: "WU-01-APPROVED", title: "Corrected", status: "APPROVED", owner_confirmed: true, parent_refs: ["epic-001"], content })
@@ -95,4 +95,57 @@ test("controller correction loads approved artifact, replays idempotently and ve
   assert.deepEqual(afterReplay.state, beforeReplay.state)
   assert.deepEqual(afterReplay.events, beforeReplay.events)
   assert.equal((await run("verify")).passed, true)
+  // Exercise the next steps, not just acceptance of the correction event.
+  const { freezeCandidate } = await import("../../src/execution/candidate.js")
+  const { createCandidateRegistry } = await import("../../src/execution/candidate-registry.js")
+  const { runCandidateVerification } = await import("../../src/execution/verification.js")
+  const { createVerificationReceipt, writeVerificationReceipt } = await import("../../src/execution/verification-results.js")
+  const { candidateGitTree } = await import("../../src/execution/git-tree.js")
+  const { runMergeCandidate } = await import("../../src/execution/merge.js")
+  await run("block", { class: "BLOCKED_TOOLING", reason: "Original runner correction pending" })
+  await run("clear_blocker", { resolution: "Correction accepted; use effective checks" })
+  const effective = (await controller.snapshot()).state.wu.contract.verification_contract
+  const frozen = await freezeCandidate(root, { base: { kind: "snapshot", files: [] }, verification_contract: effective })
+  await createCandidateRegistry({ dir: join(root, ".harness/execution") }).store(frozen)
+  await run("record_candidate", { candidate_id: frozen.candidate_id })
+  const result = await runCandidateVerification(frozen, "new-check")
+  assert.equal(result.status, "PASS")
+  const receipt = createVerificationReceipt(result)
+  await writeVerificationReceipt(join(root, ".harness/execution/verification-results"), receipt)
+  await run("record_review", { candidate_id: frozen.candidate_id, verdict: "PASS", reviewer: "independent-test-reviewer", verification_evidence_ids: [receipt.evidence_id] })
+  await run("bind_pr", { candidate_id: frozen.candidate_id, repository: "test/repo", pr_number: 165, head_sha: "head", base_sha: "base", base_branch: "main" })
+  await run("record_ci", { candidate_id: frozen.candidate_id, head_sha: "head", check_identity: "verify", conclusion: "SUCCESS" })
+  let merged = false
+  const adapter = {
+    getCommitTree: async () => candidateGitTree(frozen),
+    getPullRequest: async () => ({ state: merged ? "closed" : "open", merged, head_sha: "head", base_sha: "base", base_branch: "main", merge_commit_sha: merged ? "merge" : null }),
+    getChecks: async () => [{ name: "verify", conclusion: "SUCCESS" }],
+    merge: async () => { merged = true; return { merged: true, merge_commit_sha: "merge" } },
+  }
+  await runMergeCandidate(root, { candidate_id: frozen.candidate_id, adapter, session_id: "root" })
+  await run("complete_wu", { candidate_id: frozen.candidate_id })
+  assert.equal((await controller.snapshot()).state.wu.completed, true)
+  assert.equal((await run("verify")).passed, true)
+})
+
+test("verification-only correction preserves original source despite proposal prose drift and derives split mapping", async () => {
+  const { deriveVerificationCorrection, correctionCheckMapping } = await import("../../src/execution/contract-correction.js")
+  const { state, body } = fixture()
+  const proposal = structuredClone(body.contract)
+  proposal.source_content = '# New normalization title\n' + proposal.source_content
+  const { stableHash } = await import("../../src/execution/serialize.js")
+  const { contract_hash: ignored, ...unsigned } = proposal
+  proposal.contract_hash = stableHash(unsigned)
+  const old = state.wu.contract
+  const next = deriveVerificationCorrection(old, proposal)
+  const mapping = correctionCheckMapping(old.verification_contract, next.verification_contract)
+  const corrected = applyEvent(state, { operation_type: "WU_CONTRACT_CORRECT", body: {
+    ...body, contract: next, check_mapping: mapping, mode: "verification_only" } })
+  assert.equal(corrected.wu.contract.source_content, old.source_content)
+  assert.equal(corrected.wu.contract.source_hash, old.source_hash)
+  assert.deepEqual(corrected.wu.contract.verification_contract, proposal.verification_contract)
+  assert.equal(corrected.wu.contract.correction_source.source_content, proposal.source_content)
+  assert.deepEqual(mapping, { types: ["types"], tests: ["commerce-tests", "api-tests", "crm-tests"] })
+  assert.deepEqual(correctionCheckMapping({ ...old.verification_contract, setup: [{ id: "install" }] }, next.verification_contract,
+    { ...mapping, install: ["install"] }), mapping)
 })
