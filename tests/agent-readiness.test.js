@@ -140,3 +140,18 @@ test("leaves unrelated subagent launches and ready Harness roles unchanged", asy
   assert.equal(result.blocked, false)
   assert.equal(ready.effect, "ask")
 })
+
+test("readiness exposes loaded terminal restrictions without inventing CLI access", async () => {
+  const permissions = [{ action: "shell", resource: "*", effect: "deny" }]
+  const api = { list: async () => roles, get: async () => ({ id: "harness-orchestrator", permissions }) }
+  let result = await checkWorkUnitAgentReadiness(api)
+  assert.equal(result.ready, true)
+  assert.equal(result.orchestrator_terminal.has_shell_deny, true)
+  assert.deepEqual(result.orchestrator_terminal.rules, permissions)
+  permissions[0].effect = "allow"
+  result = await checkWorkUnitAgentReadiness(api)
+  assert.equal(result.orchestrator_terminal.has_shell_deny, false)
+  assert.equal(result.orchestrator_terminal.session_access, "unverified")
+  const unknown = await checkWorkUnitAgentReadiness({ list: api.list })
+  assert.equal(unknown.orchestrator_terminal.status, "unknown")
+})
