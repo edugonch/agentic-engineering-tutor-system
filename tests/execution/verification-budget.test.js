@@ -67,3 +67,23 @@ test("dead verification owner has a supported conservative recovery without clai
   assert.equal(state.budget.active_phase, null)
   assert.equal((await recoverVerificationPhase({ controller: c, session_id: "root" })).status, "NO_VERIFICATION_TO_RECOVER")
 })
+
+test("reviewer with exact live launch evidence uses its reservation without acquiring parent lease", async t => {
+  const { c, commit, candidate } = await fixture(t)
+  await commit("DISPATCH_RESERVE", { dispatch_id: "review", reserved_seconds: 8 })
+  await commit("DISPATCH_PREPARE", { dispatch_id: "review", prepared_by_session_id: "root", expected_agent: "harness-reviewer", claim_required: true })
+  await commit("DISPATCH_LAUNCH_CLAIM", { dispatch_id: "review", call_id: "review-call" })
+  const runtimeSession = { id: "child", parentID: "root", agent: "harness-reviewer" }
+  const launchEvidence = [{ type: "assistant", content: [{ type: "tool", name: "subagent", id: "review-call",
+    state: { input: { agent: "harness-reviewer" }, metadata: { sessionID: "child" } } }] }]
+  const before = await c.snapshot()
+  const args = { controller: c, candidate, context: { sessionID: "child" }, runtimeSession, launchEvidence }
+  const result = await withVerificationBudget({ ...args, run: async ({ budgetMs }) => {
+    assert.ok(budgetMs > 0 && budgetMs <= 8000)
+    return { status: "PASS" }
+  } })
+  assert.equal(result.status, "PASS")
+  assert.deepEqual(await c.snapshot(), before)
+  await assert.rejects(withVerificationBudget({ ...args, launchEvidence: [], run: () => assert.fail() }), /DISPATCH_IDENTITY/)
+  await assert.rejects(withVerificationBudget({ ...args, runtimeSession: { ...runtimeSession, parentID: "other" }, run: () => assert.fail() }), /DISPATCH_IDENTITY/)
+})

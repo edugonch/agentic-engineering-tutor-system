@@ -681,7 +681,16 @@ export default Plugin.define({
             return json({ status: "BLOCKED_UNDECLARED_CHECK", check_id: input.verification_check_id })
           const execution = await findWuExecution(requireProjectRoot(), candidate.verification_contract?.source_wu_id)
           if (!execution) return json({ status: "BLOCKED_BUDGET", reason: "Verification requires its active WU execution" })
-          const result = await withVerificationBudget({ controller: execution.controller, candidate, check_id: input.verification_check_id, context,
+          // Runtime identities come from OpenCode, never from model input.
+          const sessionResponse = await ctx.session.get({ sessionID: context.sessionID })
+          const runtimeSession = sessionResponse?.data ?? sessionResponse
+          if (runtimeSession?.id !== context.sessionID) throw new Error("Verification runtime session identity unavailable")
+          let launchEvidence = []
+          if (runtimeSession.parentID && !Object.values(execution.state.dispatches).some(d => d.session_id === context.sessionID && d.status === "launched")) {
+            const response = await ctx.session.context({ sessionID: runtimeSession.parentID })
+            launchEvidence = response?.data ?? response
+          }
+          const result = await withVerificationBudget({ controller: execution.controller, candidate, check_id: input.verification_check_id, context, runtimeSession, launchEvidence,
             run: options => runCandidateVerification(candidate, input.verification_check_id, options) })
           // Persist an immutable evidence receipt for checks that actually ran,
           // so a later RECORD_REVIEW can cite durable evidence rather than a
