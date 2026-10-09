@@ -84,7 +84,10 @@ export async function checkWorkUnitAgentReadiness(agentApi) {
   }
 
   try {
-    return assessWorkUnitAgentReadiness(await agentApi.list())
+    return {
+      ...assessWorkUnitAgentReadiness(await agentApi.list()),
+      orchestrator_terminal: await inspectOrchestratorTerminal(agentApi),
+    }
   } catch (error) {
     return {
       status: "unknown",
@@ -110,4 +113,25 @@ export async function guardHarnessSubagentPermission(event, agentApi) {
   event.effect = "deny"
   event.message = readiness.blocker
   return { blocked: true, readiness }
+}
+
+/** Report configured rules, not a claim about effective session permissions. */
+export async function inspectOrchestratorTerminal(agentApi) {
+  try {
+    const response = await agentApi.get({ agentID: "harness-orchestrator" })
+    const agent = response?.data ?? response
+    if ((agent?.id ?? agent?.name) !== "harness-orchestrator" || !Array.isArray(agent.permissions)) {
+      throw new Error("Loaded orchestrator permissions unavailable")
+    }
+    const rules = agent.permissions.filter(rule => rule.action === "shell" || rule.action === "*")
+    return {
+      status: "profile_rules_observed",
+      rules,
+      has_shell_deny: rules.some(rule => rule.effect === "deny"),
+      session_access: "unverified",
+      note: "Profile rules only. Verify terminal exposure and the required CLI read in the actual session; project/session policies and credentials may differ.",
+    }
+  } catch (error) {
+    return { status: "unknown", session_access: "unverified", note: error?.message ?? "Cannot inspect terminal permissions" }
+  }
 }

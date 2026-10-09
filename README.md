@@ -471,3 +471,19 @@ node scripts/collect-continuity-canary.mjs /absolute/canary/project EXECUTION_ID
 This needs an already-running compatible local OpenCode service. The local JSON
 contains sanitized session exports and durable evidence for independent review.
 Neither elapsed time nor a successful export is an acceptance verdict.
+
+### Orchestrator terminal access
+
+The managed orchestrator permits shell access for authority retrieval (`gh`, the
+project's configured `one` CLI) and operational diagnostics. Implementation stays
+with specialists; controller transitions and governed merges stay on their
+supported Harness tools. Shell availability does not expand the owner mandate.
+
+After updating the plugin, restart the OpenCode service. Unmodified managed global
+profiles upgrade automatically. Customized or project-local profiles are preserved;
+a remaining shell denial must be diagnosed from the loaded profile rather than
+silently overridden. `harness_check_agent_readiness.orchestrator_terminal` exposes
+its configured shell rules, while `profile_provisioning.preserved` identifies
+preserved global profiles. This diagnostic does not certify terminal exposure or
+credentials: verify the required read in the actual session before declaring an
+authority inaccessible. Empty MCP resources alone do not establish missing access.

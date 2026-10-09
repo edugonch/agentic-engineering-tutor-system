@@ -83,3 +83,23 @@ test("refuses symlinked profile files", async (t) => {
   await assert.rejects(provisionGlobalHarnessAgents({ packageRoot, configDir }), /non-regular Harness agent file/)
   assert.equal(await readFile(outside, "utf8"), "leave me alone\n")
 })
+
+test("upgrades the shipped shell-denied orchestrator and preserves customized restrictions", async (t) => {
+  const { packageRoot, configDir } = await fixture(t)
+  const source = join(packageRoot, "templates", ".opencode", "agents", "harness-orchestrator.md")
+  const shipped = await readFile(new URL("../templates/.opencode/agents/harness-orchestrator.md", import.meta.url), "utf8")
+  assert.match(shipped, /action: shell\n    resource: "\*"\n    effect: allow/)
+  const legacy = shipped.replace(/(action: shell\n    resource: "\*"\n    effect:) allow/, "$1 deny")
+  await writeFile(source, legacy)
+  await provisionGlobalHarnessAgents({ packageRoot, configDir })
+  await writeFile(source, shipped)
+  const upgraded = await provisionGlobalHarnessAgents({ packageRoot, configDir })
+  assert.ok(upgraded.updated.includes("harness-orchestrator"))
+  const target = join(configDir, "agents", "harness-orchestrator.md")
+  assert.equal(await readFile(target, "utf8"), shipped)
+  const customized = legacy + "\nOwner-specific restriction\n"
+  await writeFile(target, customized)
+  const preserved = await provisionGlobalHarnessAgents({ packageRoot, configDir })
+  assert.ok(preserved.preserved.some(item => item.id === "harness-orchestrator"))
+  assert.equal(await readFile(target, "utf8"), customized)
+})
