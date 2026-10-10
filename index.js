@@ -254,8 +254,8 @@ export default Plugin.define({
             }
             if (["harness-builder", "harness-reviewer"].includes(agent)) {
               const current = await runExecutionController(requireProjectRoot(), { action: "status", execution_id: binding.execution_id, session_id: event.sessionID }, candidateRegistry)
-              const readiness = JSON.parse((await executionReadiness({ wu_id: current.wu.wu_id, phase: agent === "harness-reviewer" ? "REVIEW" : "BUILD" })).content)
-              if (readiness.status !== "READY" && readiness.status !== "BLOCKED_BUDGET") throw new Error(`LAUNCH_CAPABILITY_BLOCKED: ${JSON.stringify(readiness)}`)
+              const readiness = JSON.parse((await executionReadiness({ wu_id: current.wu.wu_id, phase: agent === "harness-reviewer" ? "REVIEW" : "BUILD" }, binding.dispatch_id)).content)
+              if (readiness.status !== "READY") throw new Error(`LAUNCH_CAPABILITY_BLOCKED: ${JSON.stringify(readiness)}`)
             }
             await claimDispatchLaunch(requireProjectRoot(), {
               execution_id: binding.execution_id,
@@ -772,7 +772,7 @@ export default Plugin.define({
           candidate_id: { type: "string", pattern: "^cand-[0-9a-f]{64}$" },
           remaining_budget: { type: "number", minimum: 0 },
         }, ["wu_id"]),
-        execute: (executionReadiness = async (input) => {
+        execute: (executionReadiness = async (input, launchDispatchId = null) => {
           const execution = await findWuExecution(requireProjectRoot(), input.wu_id)
           if (!execution?.state.wu.contract?.verification_contract) return json({ status: "BLOCKED", reason: "No active compiled WU contract. Normalize/bind the existing WU before starting work." })
           let contract = execution.state.wu.contract.verification_contract
@@ -851,7 +851,11 @@ export default Plugin.define({
 
           const b = execution.state.budget
           const wu = wuBudgetUsage(execution.state, input.wu_id)
-          const budget = { remaining: usesPlanningEstimates(execution.state) ? epicExecutionRemaining(execution.state) : Math.min(b.total_seconds - b.used_seconds - b.reserved_seconds, wu.available_seconds ?? Infinity) }
+          // Only the internal launch boundary supplies a dispatch ID. A normal
+          // tool invocation supplies a context object, never this credit.
+          const worker = typeof launchDispatchId === "string" ? execution.state.dispatches[launchDispatchId] : undefined
+          const credit = worker?.reservation_status === "reserved" ? worker.reserved_seconds : 0
+          const budget = { remaining: usesPlanningEstimates(execution.state) ? epicExecutionRemaining(execution.state, { worker }) : Math.min(b.total_seconds - b.used_seconds - b.reserved_seconds + credit, (wu.available_seconds ?? Infinity) + credit) }
           const info = {
             pluginRevision: packageRevision,
             opencodeVersion: ctx.app?.version ?? null,

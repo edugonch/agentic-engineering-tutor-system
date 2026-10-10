@@ -57,11 +57,12 @@ test("whole plugin: Build transfers ownership without executing the stale call; 
   await f.run({ action: "approve_mandate", epic_artifact_id: "epic-001" })
   await f.run({ action: "activate_wu", wu_id: "WU-01", mandate_id: "E-MANDATE-001" })
   for (const id of ["d1", "d2"]) {
-    await f.run({ action: "reserve", dispatch_id: id, reserved_seconds: 120 })
+    await f.run({ action: "reserve", dispatch_id: id, reserved_seconds: id === "d2" ? 200 : 120 })
     await f.run({ action: "prepare_launch", dispatch_id: id, launch_agent: "harness-builder" })
     if (id === "d1") await f.run({ action: "release", dispatch_id: id })
   }
   const launch = { tool: "subagent", id: "call-child", sessionID: "ses_root", agent: "harness-orchestrator", input: { agent: "harness-builder" } }
+  assert.equal((await f.invoke("harness_check_execution_readiness", { wu_id: "WU-01" })).status, "BLOCKED_BUDGET")
   const verificationTool = f.definitions.get("harness_run_verification")
   f.definitions.delete("harness_run_verification")
   await assert.rejects(f.hooks.get("tool:execute.before")(launch), /LAUNCH_CAPABILITY_BLOCKED/)
