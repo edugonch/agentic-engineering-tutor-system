@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, writeFile, readFile, rm, symlink } from "node:fs/promis
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { readProjectInstructions, projectInstructionContext } from "../src/project-instructions.js"
-import { oneReadArgs, ghReadArgs, assertReadPreview, readExternalSource } from "../src/external-source-reader.js"
+import { oneReadArgs, ghReadArgs, assertReadPreview, readExternalSource, runSourceProcess } from "../src/external-source-reader.js"
 import { specialistMayUse } from "../src/orchestrator-ownership.js"
 async function fixture(t) {
   const dir = await mkdtemp(join(tmpdir(), "source-test-"))
@@ -104,4 +104,10 @@ test("successful live observation includes hash and retains pagination, without 
   assert.equal(JSON.stringify(result).includes("fixture-secret"), false)
   assert.equal(typeof result.content_hash, "string")
   assert.match(result.completeness, /never automatic PASS/)
+})
+
+test("transport diagnoses auth/permissions without returning secret-bearing stderr", async () => {
+  for (const [message, expected] of [["401 unauthorized secret-fixture", "SOURCE_AUTH_REQUIRED"], ["403 forbidden secret-fixture", "SOURCE_PERMISSION_DENIED"], ["404 not found secret-fixture", "SOURCE_NOT_FOUND"]]) {
+    await assert.rejects(runSourceProcess(process.execPath, ["-e", `process.stderr.write(${JSON.stringify(message)});process.exit(1)`], { cwd: tmpdir(), env: {} }), error => error.message.includes(expected) && !error.message.includes("secret-fixture"))
+  }
 })

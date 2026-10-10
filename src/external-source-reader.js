@@ -41,7 +41,16 @@ export async function runSourceProcess(program, args, { cwd, env, signal }) {
   } catch (error) {
     // CLI stdout/stderr can contain credentials (notably dry-run headers).
     // Never reflect either on an error or persist a credential-bearing preview.
-    throw new Error(`SOURCE_TRANSPORT_FAILED: ${error.code ?? error.name}; no complete source evidence returned`)
+    const diagnostic = `${error.stdout ?? ""} ${error.stderr ?? ""}`
+    const kind = error.name === "AbortError" ? "SOURCE_CANCELLED"
+      : error.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" ? "SOURCE_OUTPUT_LIMIT"
+      : error.killed ? "SOURCE_TIMEOUT"
+      : /not configured|unauthorized|\b401\b|invalid api.key|authentication|not authenticated/i.test(diagnostic) ? "SOURCE_AUTH_REQUIRED"
+      : /\b403\b|not allowed|permission denied|forbidden/i.test(diagnostic) ? "SOURCE_PERMISSION_DENIED"
+      : /\b404\b|not found/i.test(diagnostic) ? "SOURCE_NOT_FOUND"
+      : /missing.*(?:parameter|field)|invalid.*(?:parameter|json|argument)/i.test(diagnostic) ? "SOURCE_REQUEST_INVALID"
+      : error instanceof SyntaxError ? "SOURCE_RESPONSE_INVALID" : "SOURCE_TRANSPORT_FAILED"
+    throw new Error(`${kind}: ${error.code ?? error.name}; no complete source evidence returned`)
   }
 }
 // One 2.6.0 config precedence, from withoneai/cli src/lib/config.ts:
@@ -91,7 +100,7 @@ export async function readExternalSource(root, input, { run = runSourceProcess, 
   const program = resolveProgram("npx")
   if (!program) throw new Error("SOURCE_CLI_MISSING: npx; orchestrator may bootstrap Node under project policy")
   const prefix = ["--yes", "--package", CLI, "one", "--agent"]
-  const env = { ...baseEnv, ONE_NO_AUTO_UPDATE: "1", ONE_NO_TELEMETRY: "1", ONE_AGENT: "1" }
+  const env = { ...baseEnv, ONE_NO_AUTO_UPDATE: "1", ONE_NO_TELEMETRY: "1", ONE_AGENT: "1", npm_config_cache: join(process.env.HOME ?? homedir(), ".npm") }
   const original = await loadOneConfig(root)
   let rc = {}
   try {

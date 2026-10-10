@@ -18,3 +18,4 @@ jobs:
       - run: npm ci --ignore-scripts
       - run: npm run check
       - run: npm run test:recovery:mutations
+      - run: npm run test:sources:mutations
