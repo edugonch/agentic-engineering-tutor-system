@@ -8,9 +8,10 @@
 //
 // Semantics: authority + READY ⇒ may begin. READY is never authorization.
 //
-// Two groups: STABLE (checked at BUILD; the runtime shape) and VOLATILE
-// (re-checked before REVIEW: binaries, browser, external resources).
+// Both phases recheck stable and volatile requirements; no cached BUILD receipt
+// proves the current runtime, credentials or role permissions.
 
+import { validateVerificationContract } from "./verification.js"
 import { createHash } from "node:crypto"
 
 const sha256 = (value) => createHash("sha256").update(value).digest("hex")
@@ -25,7 +26,7 @@ export function deriveRequirements(contract, { phase = "BUILD" } = {}) {
     }
   }
 
-  if (phase === "BUILD") {
+  { // No durable proof that stable requirements remain valid across phases.
     add({ capability: "contract.valid", volatility: "STABLE" })
     add({ capability: "builder.present", volatility: "STABLE" })
     add({ capability: "reviewer.present", volatility: "STABLE" })
@@ -43,7 +44,7 @@ export function deriveRequirements(contract, { phase = "BUILD" } = {}) {
   }
 
   // Volatile capabilities declared explicitly (shell.node overlaps the node binary).
-  for (const capability of contract?.capabilities ?? []) {
+  for (const capability of Array.isArray(contract?.capabilities) ? contract.capabilities : []) {
     if (capability !== "shell.node") add({ capability, volatility: "VOLATILE" })
   }
 
@@ -102,6 +103,9 @@ export function buildFingerprint(info = {}) {
 }
 
 export async function checkExecutionReadiness({ contract, phase = "BUILD", probe, budget, info = {} }) {
+  try { validateVerificationContract(contract) } catch (error) {
+    return { status: "BLOCKED_CAPABILITY", phase, requirements: [{ capability: "contract.valid", status: "BLOCKED", reason: error.message }], fingerprint: buildFingerprint(info) }
+  }
   const requirements = deriveRequirements(contract, { phase })
   const capability = await evaluateReadiness(requirements, probe)
   const budgetResult = budgetStatus(budget ?? { remaining: null })

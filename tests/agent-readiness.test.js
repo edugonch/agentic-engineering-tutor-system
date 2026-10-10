@@ -155,3 +155,10 @@ test("readiness exposes loaded terminal restrictions without inventing CLI acces
   const unknown = await checkWorkUnitAgentReadiness({ list: api.list })
   assert.equal(unknown.orchestrator_terminal.status, "unknown")
 })
+
+test("configured tool denial is distinguished from a shell-only denial", async () => {
+  const { configuredToolDenial } = await import("../src/agent-readiness.js")
+  assert.equal(configuredToolDenial({ permissions: [{ action: "shell", resource: "*", effect: "deny" }] }, "harness_run_verification"), false)
+  assert.equal(configuredToolDenial({ permissions: [{ action: "harness_*", resource: "*", effect: "deny" }] }, "harness_run_verification"), true)
+  assert.equal(configuredToolDenial({ permissions: [{ action: "tool", resource: "harness_run_verification", effect: "deny" }] }, "harness_run_verification"), true)
+})

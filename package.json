@@ -31,6 +31,8 @@
     "validate": "node scripts/validate-package.mjs",
     "check": "npm run validate && npm test",
     "test:recovery": "node --test tests/execution/process-recovery.test.js tests/execution/external-wait.test.js tests/execution/supervisor.test.js tests/execution/contract-correction.test.js tests/execution/retrospective-seed.test.js",
-    "test:recovery:mutations": "node scripts/check-recovery-mutations.mjs"
+    "test:recovery:mutations": "node scripts/check-recovery-mutations.mjs",
+    "test:sources": "node --test tests/project-source-access.test.js tests/execution/readiness.test.js tests/agent-readiness.test.js tests/plugin-wiring.test.js",
+    "test:sources:mutations": "node scripts/check-source-access-mutations.mjs"
   }
 }

@@ -135,3 +135,12 @@ export async function inspectOrchestratorTerminal(agentApi) {
     return { status: "unknown", session_access: "unverified", note: error?.message ?? "Cannot inspect terminal permissions" }
   }
 }
+
+// Conservative static preflight: do not override native session evaluation or
+// grant permissions. A matching deny is actionable; absence is not proof of
+// remote credentials or a session-specific allow.
+export function configuredToolDenial(agent, tool) {
+  const match = (pattern, value) => typeof pattern === "string" && new RegExp(`^${pattern.split("*").map(p => p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join(".*")}$`).test(value)
+  return (agent?.permissions ?? []).some(rule => rule.effect === "deny" &&
+    (match(rule.action, tool) || (rule.action === "tool" && match(rule.resource, tool))))
+}

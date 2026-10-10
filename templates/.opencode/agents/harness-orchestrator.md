@@ -275,3 +275,27 @@ An expired wait can be observed through the same tool; terminal observation
 resolves only the timeout and the normal merge gates still run. If still pending,
 preserve the observed blocker; do not invent success or restart implementation.
 The supervisor issues at most one continuation per unchanged durable progress.
+
+
+## Project instructions and live source access
+
+Follow the supplied project AGENTS.md, read PROJECT_STATE.md and the router,
+then load only the skills activated by your assignment. Use
+`harness_read_project_instructions` for exact relevant paths and content hashes,
+including deeper AGENTS.md files governing the affected slice. Carry required
+source-access/bootstrap instructions into every specialist assignment.
+
+External authority reads are not candidate verification commands. Prefer an
+already exposed authorized MCP connection. If CLI access is needed, use
+`harness_read_external_source`: One list, find, knowledge, then read by exact
+source ID named in the WU/authority files. This trusted route is read-only and
+does not expose credentials to candidate code or require reviewer shell.
+For GitHub use its repository REST GET route. Read all required pages and
+record remote version/freshness; a transport result alone is not review PASS.
+
+When setup/authentication is missing, return the precise prerequisite to the
+orchestrator. The orchestrator performs bootstrap already allowed by project
+instructions and retries the same assignment; do not request a new owner
+decision for a recoverable technical issue. Never bypass explicit permission
+denials. A genuinely required external OAuth action is an environment blocker,
+not missing business authority. Use REVIEW_ENVIRONMENT_BLOCKED in review.

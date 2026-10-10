@@ -1,6 +1,6 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { mkdtemp, rm } from "node:fs/promises"
+import { mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import plugin from "../index.js"
@@ -31,7 +31,7 @@ async function host(t, supervisorFlag) {
     agent: { list: async () => [...agents.values()], get: async ({ agentID }) => agents.get(agentID), reload: async () => {},
       transform: async fn => fn({ update: (id, fn) => { if (agents.has(id)) fn(agents.get(id)) } }) },
     session: { get: async ({ sessionID }) => sessions.get(sessionID), switchAgent: async ({ sessionID, agent }) => { sessions.get(sessionID).agent = agent },
-      hook: async (name, fn) => hooks.set(`session:${name}`, fn), context: async () => [], wait: async () => {}, prompt: async () => ({}) },
+      interrupt: async () => {}, hook: async (name, fn) => hooks.set(`session:${name}`, fn), context: async () => [], wait: async () => {}, prompt: async () => ({}) },
     tool: { hook: async (name, fn) => hooks.set(`tool:${name}`, fn), transform: async fn => fn({ add: definition => definitions.set(definition.name, definition), update: (id, update) => { if (definitions.has(id)) update(definitions.get(id)) } }), list: async () => [...definitions.values()] },
     permission: { hook: async () => {} }, command: { transform: async fn => fn({ add: () => {} }) },
     event: { async *subscribe() {} },
@@ -57,19 +57,28 @@ test("whole plugin: Build transfers ownership without executing the stale call; 
   await f.run({ action: "approve_mandate", epic_artifact_id: "epic-001" })
   await f.run({ action: "activate_wu", wu_id: "WU-01", mandate_id: "E-MANDATE-001" })
   for (const id of ["d1", "d2"]) {
-    await f.run({ action: "reserve", dispatch_id: id, reserved_seconds: 120 })
+    await f.run({ action: "reserve", dispatch_id: id, reserved_seconds: id === "d2" ? 200 : 120 })
     await f.run({ action: "prepare_launch", dispatch_id: id, launch_agent: "harness-builder" })
     if (id === "d1") await f.run({ action: "release", dispatch_id: id })
   }
   const launch = { tool: "subagent", id: "call-child", sessionID: "ses_root", agent: "harness-orchestrator", input: { agent: "harness-builder" } }
+  assert.equal((await f.invoke("harness_check_execution_readiness", { wu_id: "WU-01" })).status, "BLOCKED_BUDGET")
+  const verificationTool = f.definitions.get("harness_run_verification")
+  f.definitions.delete("harness_run_verification")
+  await assert.rejects(f.hooks.get("tool:execute.before")(launch), /LAUNCH_CAPABILITY_BLOCKED/)
+  assert.equal((await f.run({ action: "status" })).dispatches.find(d => d.dispatch_id === "d2").session_id, null)
+  f.definitions.set("harness_run_verification", verificationTool)
   await f.hooks.get("tool:execute.before")(launch)
   f.sessions.set("ses_child", { id: "ses_child", parentID: "ses_root", agent: "harness-builder" })
   // Parent context deliberately has no active call. Actual registered tool
   // progress must persist identity before the child's context hook runs.
   await f.definitions.get("subagent").execute(launch.input, { ...launch, progress: async () => {} })
+  await writeFile(join(f.root, "AGENTS.md"), "Use One CLI for live Drive authority.")
   const request = { sessionID: "ses_child", agent: "harness-builder", system: [], options: {} }
   await f.hooks.get("session:context")(request)
   assert.match(request.system[0].text, /process_obligations/)
+  assert.ok(request.system.some(part => part.text.includes("Use One CLI for live Drive authority.")))
+  assert.ok(f.definitions.has("harness_read_external_source"))
   assert.equal((await f.run({ action: "status" })).dispatches.find(d => d.dispatch_id === "d2").session_id, "ses_child")
   await f.hooks.get("tool:execute.after")({ ...launch, status: "completed", result: { content: "Partial work; tests still pending", metadata: { sessionID: "ses_child", status: "completed" } } })
   await f.run({ action: "record_finish", dispatch_id: "d2", result: "partial, not accepted" })
