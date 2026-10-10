@@ -18,6 +18,9 @@ export function validateVerificationContract(contract) {
   if (!Array.isArray(contract.commands) || contract.commands.length === 0) {
     throw new Error("verification contract must declare at least one command.")
   }
+  if (contract.capabilities !== undefined && (!Array.isArray(contract.capabilities) || contract.capabilities.some(value => typeof value !== "string" || !value.trim()))) {
+    throw new Error("capabilities must be an array of non-empty strings")
+  }
   const ids = new Set()
   if (contract.setup !== undefined && !Array.isArray(contract.setup)) throw new Error("setup must be an array of declared commands")
   for (const check of [...(contract.setup ?? []), ...contract.commands]) {

@@ -51,8 +51,8 @@ test("a volatile recheck before REVIEW catches a binary that vanished after BUIL
   const reviewProbe = (capability) => (capability === "binary.node" ? { status: "BLOCKED", reason: "node removed after build" } : { status: "READY" })
   const review = await checkExecutionReadiness({ contract, phase: "REVIEW", probe: reviewProbe, budget: { remaining: 100 } })
   assert.equal(review.status, "BLOCKED_CAPABILITY")
-  // REVIEW phase re-checks only VOLATILE requirements (no STABLE agent checks)
-  assert.equal(review.requirements.some((r) => r.capability === "builder.present"), false)
+  // REVIEW also revalidates roles after restart/profile changes.
+  assert.equal(review.requirements.some((r) => r.capability === "builder.present"), true)
   assert.equal(review.requirements.some((r) => r.capability === "binary.node"), true)
 })
 
@@ -78,4 +78,17 @@ test("budgetStatus and pathDigest are deterministic", async () => {
   assert.equal(budgetStatus({ remaining: 10, buildReserve: 5, reviewReserve: 5 }).status, "READY")
   assert.equal(pathDigest("/a:/b"), pathDigest("/a:/b"))
   assert.notEqual(pathDigest("/a:/b"), pathDigest("/a:/c"))
+})
+
+for (const capabilities of [null, {}, "drive", [null], [""], [12]]) {
+  test(`invalid capabilities are a structured diagnostic: ${JSON.stringify(capabilities)}`, async () => {
+    const result = await checkExecutionReadiness({ contract: { ...contract, capabilities }, probe: readyProbe, budget: { remaining: 100 } })
+    assert.equal(result.status, "BLOCKED_CAPABILITY")
+    assert.match(result.requirements[0].reason, /capabilities/)
+  })
+}
+test("REVIEW detects reviewer removed since BUILD", async () => {
+  const result = await checkExecutionReadiness({ contract, phase: "REVIEW", budget: { remaining: 100 },
+    probe: capability => ({ status: capability === "reviewer.present" ? "BLOCKED" : "READY" }) })
+  assert.equal(result.status, "BLOCKED_CAPABILITY")
 })

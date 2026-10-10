@@ -7,6 +7,7 @@ const READ_TOOLS = new Set([
   "harness_search_project_knowledge", "harness_read_project_knowledge",
   "harness_project_status", "harness_check_agent_readiness", "harness_validate_story",
   "harness_search_knowledge", "harness_check_execution_readiness",
+  "harness_read_project_instructions", "harness_read_external_source",
 ])
 const READ_ACTIONS = new Set(["status", "verify", "recover"])
 

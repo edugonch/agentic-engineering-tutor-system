@@ -1,3 +1,5 @@
+import { readProjectInstructions, projectInstructionContext } from "./src/project-instructions.js"
+import { readExternalSource } from "./src/external-source-reader.js"
 import { usesPlanningEstimates, epicExecutionRemaining } from "./src/execution/time-policy.js"
 import { observeSubagentProgress } from "./src/execution/launch-progress.js"
 import { withVerificationBudget, recoverVerificationPhase } from "./src/execution/verification-budget.js"
@@ -25,7 +27,7 @@ import { applyOutputTokenCap, createTurnGuard, readGuardSettings } from "./src/t
 import { getProjectStatus, initializeProject } from "./src/scaffold.js"
 import { analyzeExistingProject } from "./src/project-analysis.js"
 import { validateStoryFile } from "./src/story-validator.js"
-import { checkWorkUnitAgentReadiness, guardHarnessSubagentPermission } from "./src/agent-readiness.js"
+import { checkWorkUnitAgentReadiness, guardHarnessSubagentPermission, configuredToolDenial } from "./src/agent-readiness.js"
 import { recordArtifactWithActivationGate } from "./src/activation-gate.js"
 import { provisionGlobalHarnessAgents, resolveOpenCodeConfigDir } from "./src/global-agent-provisioner.js"
 import { searchKnowledge } from "./src/knowledge-search.js"
@@ -80,6 +82,7 @@ export default Plugin.define({
     // lost and the durable dispatch remains unclaimed (releasable). It never
     // replaces the durable log.
     const launchBindings = createLaunchBindingRegistry()
+    let executionReadiness
     const eventSubscription = new AbortController()
     const projectRoot = ctx.location?.project?.canonical
     const requireProjectRoot = () => {
@@ -204,6 +207,10 @@ export default Plugin.define({
         event.system ??= []
         event.system.push({ type: "text", text: `Durable Harness execution context. Follow this WU contract, all applicable authority_resolutions and the scoped process_policy/process_recovery; preserve role permissions and functional verification. Do not reopen an authority question already resolved by this decision.\n${JSON.stringify(executionContext)}` })
       }
+      if (String(event.agent ?? "").startsWith("harness-")) {
+        const instructions = projectInstructionContext(await readProjectInstructions(requireProjectRoot()))
+        if (instructions) { event.system ??= []; event.system.push({ type: "text", text: instructions }) }
+      }
       applyOutputTokenCap(event.options, settings.maxOutputTokens)
       continuation.onContext(event)
     })
@@ -244,6 +251,11 @@ export default Plugin.define({
             const callId = String(event.id ?? "")
             if (!callId) {
               throw new Error("Launch claim requires a tool call identity (event.id); the subagent launch is blocked.")
+            }
+            if (["harness-builder", "harness-reviewer"].includes(agent)) {
+              const current = await runExecutionController(requireProjectRoot(), { action: "status", execution_id: binding.execution_id, session_id: event.sessionID }, candidateRegistry)
+              const readiness = JSON.parse((await executionReadiness({ wu_id: current.wu.wu_id, phase: agent === "harness-reviewer" ? "REVIEW" : "BUILD" })).content)
+              if (readiness.status !== "READY" && readiness.status !== "BLOCKED_BUDGET") throw new Error(`LAUNCH_CAPABILITY_BLOCKED: ${JSON.stringify(readiness)}`)
             }
             await claimDispatchLaunch(requireProjectRoot(), {
               execution_id: binding.execution_id,
@@ -729,8 +741,30 @@ export default Plugin.define({
       })
 
       editor.add({
+        name: "harness_read_project_instructions",
+        description: "Read applicable repository instructions and selected router skills with content hashes. Supply only task-relevant relative paths; includes AGENTS.md and the skills router by default. Does not grant permissions.",
+        input: objectInput({ paths: { type: "array", items: { type: "string" } } }),
+        execute: async input => json(await readProjectInstructions(requireProjectRoot(), input.paths)),
+      })
+      editor.add({
+        name: "harness_read_external_source",
+        permission: "harness_read_external_source",
+        description: "Read live project authority independently without shell or candidate credentials. Prefer existing MCP. One: list -> find -> knowledge -> read; uses pinned CLI and a private GET-only credential context, preserves original connection/action restrictions. Supply authority_paths naming the provider and exact source_id. GitHub: repository REST GET only. Returns one response plus observation/hash; follow pagination and record remote revision, never infer completeness or PASS. Setup/auth errors go to orchestrator for authorized bootstrap, not a new business decision.",
+        input: objectInput({
+          provider: { type: "string", enum: ["one", "github"] },
+          operation: { type: "string", enum: ["list", "find", "knowledge", "read"] },
+          authority_paths: { type: "array", items: { type: "string" } },
+          platform: { type: "string" }, intent: { type: "string" }, action_id: { type: "string" },
+          connection_key: { type: "string" }, source_id: { type: "string" },
+          path_variables: { type: "object", additionalProperties: true },
+          query_params: { type: "object", additionalProperties: true }, endpoint: { type: "string" },
+        }, ["provider", "operation"]),
+        execute: async (input, context) => json(await readExternalSource(requireProjectRoot(), input, { signal: context?.signal })),
+      })
+
+      editor.add({
         name: "harness_check_execution_readiness",
-        description: "Diagnostic preflight, never authority. Evaluates the concrete capabilities a Work Unit's frozen verification contract requires (builder/reviewer, verification runner, binaries, browser, network policy, budget) and returns READY or BLOCKED_CAPABILITY/BLOCKED_BUDGET with every requirement. Requirements are derived from the contract; the caller cannot invent capabilities. BUILD checks stable+volatile; REVIEW re-checks only volatile.",
+        description: "Diagnostic preflight, never authority. Evaluates the concrete capabilities a Work Unit's frozen verification contract requires (builder/reviewer, verification runner, binaries, browser, network policy, budget) and returns READY or BLOCKED_CAPABILITY/BLOCKED_BUDGET with every requirement. Requirements are derived from the contract; the caller cannot invent capabilities. BUILD and REVIEW both revalidate stable and volatile requirements. Source authentication and exact-document access require a live read; tool inventory alone does not prove them.",
         input: objectInput({
           wu_id: { type: "string", minLength: 1 },
           phase: { type: "string", enum: ["BUILD", "REVIEW"], default: "BUILD" },
@@ -738,11 +772,13 @@ export default Plugin.define({
           candidate_id: { type: "string", pattern: "^cand-[0-9a-f]{64}$" },
           remaining_budget: { type: "number", minimum: 0 },
         }, ["wu_id"]),
-        execute: async (input) => {
+        execute: (executionReadiness = async (input) => {
           const execution = await findWuExecution(requireProjectRoot(), input.wu_id)
           if (!execution?.state.wu.contract?.verification_contract) return json({ status: "BLOCKED", reason: "No active compiled WU contract. Normalize/bind the existing WU before starting work." })
           let contract = execution.state.wu.contract.verification_contract
+          try { validateVerificationContract(contract) } catch (error) { return json({ status: "BLOCKED_CAPABILITY", reason: error.message }) }
           const profiles = {}
+          const agentProfiles = new Map()
           if (input.candidate_id) {
             const candidate = await candidateRegistry.load(input.candidate_id)
             if (!candidate) return json({ status: "BLOCKED", reason: `unknown candidate ${input.candidate_id}` })
@@ -762,6 +798,7 @@ export default Plugin.define({
             const records = Array.isArray(response) ? response : Array.isArray(response?.data) ? response.data : Array.isArray(response?.agents) ? response.agents : []
             const ids = new Set()
             for (const agent of records) {
+              agentProfiles.set(agent.name ?? agent.id, agent)
               for (const key of ["name", "id", "agentID", "identifier"]) {
                 const value = agent?.[key]
                 if (typeof value === "string" && value) { if (!agent.disabled && ["subagent", "all"].includes(agent.mode)) ids.add(value); profiles[value] = stableHash(agent) }
@@ -787,7 +824,7 @@ export default Plugin.define({
               case "verification.runner":
                 return tools.has("harness_run_verification") ? { status: "READY" } : { status: "BLOCKED", reason: "harness_run_verification is not registered." }
               case "reviewer.execute_declared_checks":
-                return (agents.has("harness-reviewer") && tools.has("harness_run_verification")) ? { status: "READY" } : { status: "BLOCKED", reason: "reviewer cannot execute declared checks." }
+                return (agents.has("harness-reviewer") && tools.has("harness_run_verification") && !configuredToolDenial(agentProfiles.get("harness-reviewer"), "harness_run_verification")) ? { status: "READY" } : { status: "BLOCKED", reason: "reviewer cannot execute declared checks." }
               case "workspace.supported": {
                 try {
                   const path = await mkdtemp(join(tmpdir(), "harness-preflight-"))
@@ -829,8 +866,9 @@ export default Plugin.define({
           const readinessContract = { ...contract, capabilities: [...(contract.capabilities ?? []),
             ...(execution.state.mandate?.merge_policy === "governed_auto" ? ["github.governed_merge"] : [])] }
           return json({ ...(await checkExecutionReadiness({ contract: readinessContract, phase: input.phase ?? "BUILD", probe, budget, info })),
+            readiness_scope: "Declared verification capabilities; external authority requires a successful live source read with pagination and revision evidence",
             limitations: ["Dynamic session permission rules and remote branch policies are enforced at execution; registry presence is not an authorization grant."] })
-        },
+        }),
       })
     })
 
