@@ -2,11 +2,13 @@ import test from "node:test"
 import assert from "node:assert/strict"
 import { applyEvent, project, canStartMerge, canVerifyExternalMerge } from "../../src/execution/state.js"
 import { findApprovedEpic, recordKnowledgeArtifact } from "../../src/project-knowledge.js"
-import { mkdtemp, rm, writeFile } from "node:fs/promises"
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { stableHash } from "../../src/execution/serialize.js"
 import { createExecutionController } from "../../src/execution/execution.js"
+import { findPendingLaunchBinding } from "../../src/execution/launch-binding.js"
+import { findWuExecution } from "../../src/execution/execution-query.js"
 
 function makeBuilder() {
   let seq = 0
@@ -150,6 +152,24 @@ test("legacy receiptless PASS replays byte-identically but cannot authorize new 
     await writeFile(join(root, "events.ndjson"), priorCompleted.map(event => JSON.stringify(event)).join("\n") + "\n")
     const controller = await createExecutionController({ dir: root })
     assert.deepEqual((await controller.snapshot()).state, historic)
+
+    // Launch discovery scans every execution; a legacy log must not poison
+    // delegation for a different, valid and still-active WU.
+    const executionRoot = join(root, ".harness/execution/controller")
+    const oldDir = join(executionRoot, "completed-old")
+    const activeDir = join(executionRoot, "active-new")
+    await mkdir(oldDir, { recursive: true })
+    await mkdir(activeDir, { recursive: true })
+    await writeFile(join(oldDir, "events.ndjson"), priorCompleted.map(event => JSON.stringify(event)).join("\\n") + "\\n")
+    const currentEv = makeBuilder()
+    const currentEvents = [
+      currentEv("MANDATE_APPROVE", { mandate_id: "M2", max_wus: 1, total_seconds: 100 }),
+      currentEv("WU_ACTIVATE", { wu_id: "WU-NEW", mandate_id: "M2" }),
+    ]
+    await writeFile(join(activeDir, "events.ndjson"), currentEvents.map(event => JSON.stringify(event)).join("\\n") + "\\n")
+    const active = await findWuExecution(root, "WU-NEW")
+    assert.equal(active.execution_id, "active-new")
+    assert.equal(await findPendingLaunchBinding(root, "root", "harness-builder"), null)
   } finally {
     await rm(root, { recursive: true, force: true })
   }
