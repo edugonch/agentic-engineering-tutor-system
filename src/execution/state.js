@@ -843,6 +843,44 @@ export function applyEvent(previous, event) {
       break
     }
 
+    case "MERGE_SUPERSEDE": {
+      // Append-only reconciliation of a defect left by an older projection: when a
+      // WU completed, its settled merge pointer could survive into the next WU if
+      // the intermediate binding was invalidated (a contract correction clears
+      // `pr_binding` without touching `state.merge`). That stale pointer makes the
+      // successor candidate's merge/verify fail closed with "merge belongs to a
+      // different candidate". This event retires ONLY a settled VERIFIED merge
+      // that belongs to a *completed predecessor* WU, for the candidate currently
+      // bound. It never performs a merge, never invents ownership and never
+      // touches an unresolved attempt.
+      const stale = state.merge
+      if (!stale) throw new Error("MERGE_SUPERSEDE requires an existing merge pointer.")
+      if (stale.status !== "VERIFIED") throw new Error(`MERGE_SUPERSEDE refused: merge ${stale.status} is not settled; resolve the attempt instead.`)
+      const binding = state.pr_binding
+      if (!binding) throw new Error("MERGE_SUPERSEDE requires a current PR binding.")
+      if (binding.candidate_id === stale.candidate_id) throw new Error("MERGE_SUPERSEDE refused: the merge already belongs to the bound candidate.")
+      if (body.superseded_candidate_id !== stale.candidate_id || body.bound_candidate_id !== binding.candidate_id ||
+          body.merge_commit_sha !== stale.merge_commit_sha) {
+        throw new Error("MERGE_SUPERSEDE target does not match the current merge pointer and binding.")
+      }
+      const bound = state.candidates[binding.candidate_id]
+      if (!bound || bound.wu_id !== state.wu?.wu_id) throw new Error("MERGE_SUPERSEDE refused: bound candidate is not in the active WU.")
+      const priorWu = state.candidates[stale.candidate_id]?.wu_id
+      if (!priorWu || priorWu === state.wu.wu_id || state.completed_wus?.[priorWu]?.candidate_id !== stale.candidate_id) {
+        throw new Error("MERGE_SUPERSEDE refused: the existing merge is not a settled merge of a completed predecessor WU.")
+      }
+      state.merge_history ??= []
+      state.merge_history.push({
+        ...stale,
+        status: "SUPERSEDED",
+        superseded_at_revision: state.revision,
+        superseded_by_candidate_id: binding.candidate_id,
+        superseded_by_wu_id: state.wu.wu_id,
+      })
+      state.merge = null
+      break
+    }
+
     case "MERGE_ABORT": {
       if (state.merge?.status !== "STARTED" || body.candidate_id !== state.merge.candidate_id ||
           body.observed_state !== "closed" || body.observed_merged !== false || !body.evidence_ref) throw new Error("MERGE_ABORT requires a confirmed closed, unmerged PR for the exact attempt")
