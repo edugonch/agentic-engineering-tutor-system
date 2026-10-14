@@ -22,7 +22,7 @@ async function fixture(t, required_ci_checks = []) {
 }
 
 test("external wait backoff survives reconstruction and success settles the same wait", async t => {
-  const { c, root } = await fixture(t)
+  const { c, root } = await fixture(t, ['verify'])
   let clock = Date.now(), calls = 0
   const input = { controller: c, session_id: "root", operation: "merge:candidate", now: () => clock,
     run: async () => { calls++; throw new ExternalWaitError("CI_PENDING", "CI still running") } }
@@ -69,7 +69,7 @@ test("expired external wait records one diagnosable blocker without repeated req
 })
 
 test("scheduled transient retries do not trigger the repeated mutation breaker", async t => {
-  const { c } = await fixture(t), guard = createTurnGuard()
+  const { c } = await fixture(t, ['verify']), guard = createTurnGuard()
   let now = Date.now()
   for (let attempt = 0; attempt < 4; attempt++) {
     const result = await runWithExternalWait({ controller: c, session_id: "root", operation: "merge:candidate", now: () => now,
@@ -102,7 +102,7 @@ for (const conclusion of ['SUCCESS', 'FAILURE', 'PENDING']) test(`deadline obser
 })
 
 test('expired timeout recovery is read-only until terminal observation and never clears another blocker', async t => {
-  const { c, commit } = await fixture(t)
+  const { c, commit } = await fixture(t, ['verify'])
   await commit('FREEZE_CANDIDATE', { candidate_id: 'candidate', wu_id: 'WU1', manifest_hash: 'm', tree_hash: 't' })
   await commit('BIND_PR', { candidate_id: 'candidate', repository: 'test/repo', pr_number: 1, head_sha: 'head', base_sha: 'base', base_branch: 'main' })
   let clock = Date.now(), mutations = 0
