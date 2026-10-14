@@ -91,6 +91,27 @@ test("happy path: governed_auto merge reaches merged", async () => {
   })
 })
 
+test("no-CI governed merge never fetches checks and retains local verification", async () => {
+  for (const conclusion of ["PENDING", "FAILURE", null]) {
+    await withRoot(async root => {
+      const candidate = await setupReady(root, "ses-1", { requiredCiChecks: [] })
+      const adapter = fakeAdapter({ checks: { "check-1": conclusion } })
+      adapter.getChecks = async () => { assert.fail("CI checks are disabled") }
+      const result = await runMergeCandidate(root, {
+        candidate_id: candidate.candidate_id, adapter, session_id: "ses-1",
+      })
+      assert.equal(result.status, "merged")
+      const controller = await createExecutionController({ dir: join(root, ".harness/execution/controller/E1") })
+      assert.deepEqual((await controller.snapshot()).state.ci_evidence, {})
+    })
+  }
+})
+
+test("empty check list performs zero GitHub requests", async () => {
+  const adapter = createGitHubAdapter({ fetchImpl: async () => { assert.fail("unexpected HTTP request") } })
+  assert.deepEqual(await adapter.getChecks({ repository: "owner/repo", head_sha: "sha", check_names: [] }), [])
+})
+
 test("head drift fails closed", async () => {
   await withRoot(async (root) => {
     const candidate = await setupReady(root, "ses-1")
