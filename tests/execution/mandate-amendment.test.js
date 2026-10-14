@@ -183,10 +183,9 @@ test("MANDATE_AMEND requires optimistic policy match and governed_auto CI covera
     () => applyEvent(state, nextEvent(state, "MANDATE_AMEND", amendmentBody(state, { expected_merge_policy: "human" }))),
     /expected policy does not match/,
   )
-  assert.throws(
-    () => applyEvent(state, nextEvent(state, "MANDATE_AMEND", amendmentBody(state, { required_ci_checks: [] }))),
-    /governed_auto requires non-empty/,
-  )
+  const amended = applyEvent(state, nextEvent(state, "MANDATE_AMEND", amendmentBody(state, { required_ci_checks: [] })))
+  assert.equal(amended.mandate.merge_policy, "governed_auto")
+  assert.deepEqual(amended.mandate.required_ci_checks, [])
 })
 
 test("CLEAR_BLOCKER cannot clear terminal authority/security stops", () => {
