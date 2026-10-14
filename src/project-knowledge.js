@@ -955,7 +955,7 @@ function parseExecutionMandate(content) {
       if (!["none", "human", "governed_auto"].includes(mergePolicy)) return null
       // CI is optional: [] disables remote checks; malformed/duplicate IDs fail closed.
       let requiredCiChecks = []
-      if (mandate.required_ci_checks !== undefined && mandate.required_ci_checks !== null) {
+      if (mandate.required_ci_checks !== undefined) {
         if (!Array.isArray(mandate.required_ci_checks)) return null
         const seen = new Set()
         for (const c of mandate.required_ci_checks) {
