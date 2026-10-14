@@ -188,6 +188,30 @@ test("MANDATE_AMEND requires optimistic policy match and governed_auto CI covera
   assert.deepEqual(amended.mandate.required_ci_checks, [])
 })
 
+test("CI opt-out retires a matching scheduled wait without erasing review evidence", () => {
+  const state = readyLegacyState()
+  const withCi = applyEvent(state, nextEvent(state, "MANDATE_AMEND", amendmentBody(state)))
+  const clear = applyEvent(withCi, nextEvent(withCi, "CLEAR_BLOCKER", {
+    blocker_class: "BLOCKED_TOOLING", blocked_at_revision: withCi.blocker.at_revision, resolution: "repaired",
+  }))
+  const pending = applyEvent(clear, nextEvent(clear, "EXTERNAL_WAIT", {
+    wait_id: "wait-ci-1", operation: "harness_merge_candidate:cand-1",
+    kind: "CI_PENDING", reason: "verify pending", attempt: 1,
+    started_at: "2026-10-14T12:00:00.000Z",
+    next_retry_at: "2026-10-14T12:02:00.000Z",
+    deadline_at: "2026-10-14T12:30:00.000Z",
+  }))
+  const done = applyEvent(pending, nextEvent(pending, "MANDATE_AMEND", {
+    ...amendmentBody(pending), expected_merge_policy: "governed_auto",
+    expected_required_ci_checks: ["verify"], required_ci_checks: [],
+    source_artifact_id: "epic-no-ci", source_record_key: "rk-no-ci", source_hash: "hash-no-ci",
+  }))
+  assert.equal(done.external_wait, null)
+  assert.equal(done.external_wait_history.at(-1).outcome, "SUPERSEDED_BY_POLICY")
+  assert.deepEqual(done.ci_evidence, pending.ci_evidence)
+  assert.equal(canStartMerge(done).allowed, true)
+})
+
 test("CLEAR_BLOCKER cannot clear terminal authority/security stops", () => {
   const ev = makeBuilder()
   const state = project([
