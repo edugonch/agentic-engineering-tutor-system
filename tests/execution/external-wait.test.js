@@ -111,12 +111,12 @@ for (const conclusion of ['SUCCESS', 'FAILURE', 'PENDING']) test(`deadline obser
 })
 
 test('expired timeout recovery is read-only until terminal observation and never clears another blocker', async t => {
-  const { c, commit } = await fixture(t, ['verify'])
+  const { c, commit } = await fixture(t)
   await commit('FREEZE_CANDIDATE', { candidate_id: 'candidate', wu_id: 'WU1', manifest_hash: 'm', tree_hash: 't' })
   await commit('BIND_PR', { candidate_id: 'candidate', repository: 'test/repo', pr_number: 1, head_sha: 'head', base_sha: 'base', base_branch: 'main' })
   let clock = Date.now(), mutations = 0
   const args = { controller: c, session_id: 'root', operation: 'harness_merge_candidate:candidate', now: () => clock, waitLimitMs: 1 }
-  await runWithExternalWait({ ...args, run: async () => { throw new ExternalWaitError('CI_PENDING', 'running') } })
+  await runWithExternalWait({ ...args, run: async () => { throw new ExternalWaitError('REMOTE_TRANSIENT', 'running') } })
   clock++
   await runWithExternalWait({ ...args, run: async () => assert.fail('no premature mutation') })
   const before = await c.snapshot()
