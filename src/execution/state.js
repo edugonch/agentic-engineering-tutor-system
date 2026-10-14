@@ -58,6 +58,9 @@ export function canStartMerge(state) {
   if (candidate.superseded_by_contract) return { allowed: false, reason: "candidate contract superseded; refreeze and review" }
   const review = state.reviews[binding.candidate_id]
   if (!review || review.verdict !== "PASS") return { allowed: false, reason: "no PASS review" }
+  if (!Array.isArray(review.verification_evidence_ids) || review.verification_evidence_ids.length === 0) {
+    return { allowed: false, reason: "PASS review lacks verification evidence; reverify and review the candidate" }
+  }
   if (state.mandate?.merge_policy !== "governed_auto") return { allowed: false, reason: `merge policy is ${state.mandate?.merge_policy ?? "none"}, not governed_auto` }
   if (state.blocker) return { allowed: false, reason: `unresolved blocker ${state.blocker.class}` }
   const settled = new Set([DISPATCH_STATUS.RESULT_RECONCILED, DISPATCH_STATUS.RELEASED])
@@ -92,6 +95,9 @@ export function canVerifyExternalMerge(state) {
   if (candidate.superseded_by_contract) return { allowed: false, reason: "candidate contract superseded; refreeze and review" }
   const review = state.reviews[binding.candidate_id]
   if (!review || review.verdict !== "PASS") return { allowed: false, reason: "no PASS review" }
+  if (!Array.isArray(review.verification_evidence_ids) || review.verification_evidence_ids.length === 0) {
+    return { allowed: false, reason: "PASS review lacks verification evidence; reverify and review the candidate" }
+  }
   if (state.mandate?.merge_policy !== "human") return { allowed: false, reason: `merge policy is ${state.mandate?.merge_policy ?? "none"}, not human` }
   if (state.blocker) return { allowed: false, reason: `unresolved blocker ${state.blocker.class}` }
   const settled = new Set([DISPATCH_STATUS.RESULT_RECONCILED, DISPATCH_STATUS.RELEASED])
@@ -133,12 +139,14 @@ export function project(events) {
     if (event.next_revision !== state.revision + 1) {
       throw new Error(`State projection conflict at event ${event.sequence}: non-sequential revision ${event.next_revision} after ${state.revision}.`)
     }
-    state = applyEvent(state, event)
+    // Historical logs must remain replayable under the validation semantics at
+    // the time of their recording. Fresh commits still use strict admission.
+    state = applyEvent(state, event, { historicalReplay: true })
   }
   return state
 }
 
-export function applyEvent(previous, event) {
+export function applyEvent(previous, event, { historicalReplay = false } = {}) {
   if (!OPERATION_TYPES.includes(event.operation_type)) {
     throw new Error(`Unknown operation type: ${event.operation_type}.`)
   }
@@ -705,7 +713,9 @@ export function applyEvent(previous, event) {
       const verifiedCheckIds = body.verified_check_ids ?? []
       if (body.verdict === "PASS") {
         assertProcessAcceptance(state, body.candidate_id)
-        if (evidenceIds.length === 0) throw new Error("RECORD_REVIEW: a PASS verdict requires verification evidence.")
+        // Older logs may contain PASS reviews without receipts. Preserve the
+        // exact historical projection, but never accept a NEW receiptless PASS.
+        if (!historicalReplay && evidenceIds.length === 0) throw new Error("RECORD_REVIEW: a PASS verdict requires verification evidence.")
         if (new Set(evidenceIds).size !== evidenceIds.length) throw new Error("RECORD_REVIEW: duplicate evidence ids in a PASS verdict.")
         if (new Set(verifiedCheckIds).size !== verifiedCheckIds.length) throw new Error("RECORD_REVIEW: duplicate check coverage in a PASS verdict.")
         if (!setsEqual(verifiedCheckIds, candidate.required_check_ids ?? [])) {
@@ -1005,6 +1015,9 @@ export function applyEvent(previous, event) {
       if (!review) throw new Error(`WU_COMPLETE: no review recorded for candidate ${candidateId}.`)
       if (review.verdict !== "PASS") {
         throw new Error(`WU_COMPLETE: review verdict is ${review.verdict}, not PASS.`)
+      }
+      if (!historicalReplay && (!Array.isArray(review.verification_evidence_ids) || review.verification_evidence_ids.length === 0)) {
+        throw new Error("WU_COMPLETE: PASS review lacks verification evidence; reverify and review the candidate.")
       }
       const settled = new Set([DISPATCH_STATUS.RESULT_RECONCILED, DISPATCH_STATUS.RELEASED])
       const unsettled = Object.entries(state.dispatches).filter(([, d]) => !settled.has(d.status))
