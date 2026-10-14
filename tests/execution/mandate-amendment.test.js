@@ -212,6 +212,34 @@ test("CI opt-out retires a matching scheduled wait without erasing review eviden
   assert.equal(canStartMerge(done).allowed, true)
 })
 
+test("expired CI timeout blocker is resolved by the exact approved opt-out", () => {
+  const initial = readyLegacyState()
+  const governed = applyEvent(initial, nextEvent(initial, "MANDATE_AMEND", amendmentBody(initial)))
+  const active = applyEvent(governed, nextEvent(governed, "CLEAR_BLOCKER", {
+    blocker_class: "BLOCKED_TOOLING", blocked_at_revision: governed.blocker.at_revision, resolution: "repaired",
+  }))
+  const waiting = applyEvent(active, nextEvent(active, "EXTERNAL_WAIT", {
+    wait_id: "expired-ci", operation: "harness_merge_candidate:cand-1",
+    kind: "CI_PENDING", reason: "verify pending", attempt: 1,
+    started_at: "2026-10-14T12:00:00.000Z",
+    next_retry_at: "2026-10-14T12:02:00.000Z",
+    deadline_at: "2026-10-14T12:30:00.000Z",
+  }))
+  const expired = applyEvent(waiting, nextEvent(waiting, "EXTERNAL_WAIT_END", {
+    wait_id: "expired-ci", outcome: "EXPIRED", recovery_version: 1,
+  }))
+  assert.equal(expired.blocker.class, "BLOCKED_EXTERNAL_FACT")
+  const corrected = applyEvent(expired, nextEvent(expired, "MANDATE_AMEND", {
+    ...amendmentBody(expired), expected_merge_policy: "governed_auto",
+    expected_required_ci_checks: ["verify"], required_ci_checks: [],
+    source_artifact_id: "epic-no-ci", source_record_key: "rk-no-ci", source_hash: "hash-no-ci",
+  }))
+  assert.equal(corrected.blocker, null)
+  assert.equal(corrected.last_blocker_resolution.source_artifact_id, "epic-no-ci")
+  assert.equal(corrected.external_wait_history.at(-1).outcome, "EXPIRED")
+  assert.equal(canStartMerge(corrected).allowed, true)
+})
+
 test("CLEAR_BLOCKER cannot clear terminal authority/security stops", () => {
   const ev = makeBuilder()
   const state = project([
