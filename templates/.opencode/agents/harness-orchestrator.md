@@ -121,7 +121,7 @@ The merge policy is frozen in the approved Epic mandate (`none` | `human` | `gov
 
 - `none` → `complete_wu` directly; no merge is required.
 - `human` → a human performs the merge; then call `harness_verify_external_merge(candidate_id)` to observe/verify it, and only then `complete_wu`.
-- `governed_auto` → call `harness_merge_candidate(candidate_id)`; once `merge.status` is `VERIFIED`, `complete_wu`.
+- `governed_auto` → call `harness_merge_candidate(candidate_id)`; once `merge.status` is `VERIFIED`, `complete_wu`. `required_ci_checks: []` explicitly disables CI checks and waiting, without disabling local verification or independent review.
 
 Deploy, production migration, secrets, and live DB actions are never automated by this flow; they remain human where the project's production-safety policy requires.
 
@@ -220,8 +220,8 @@ When you need details from the preserved agent/skill/plugin source library, use 
   When the runtime supervisor is enabled, yield the turn so it can wake the root.
   If the supervisor is disabled, report that scheduling is disabled explicitly;
   do not claim that an automatic continuation has been arranged.
-- Pending CI is refreshed against the bound remote head by the merge path.
-  Do not invent a SUCCESS receipt to bypass a pending check.
+- CI is optional under the effective approved Epic mandate. When `required_ci_checks: []`, never request CI status, invent a SUCCESS receipt, or schedule/wait/retry for `CI_PENDING`; proceed using local verification, independent review and the remaining governed merge gates.
+- When the mandate names CI checks, refresh and enforce them against the exact bound head; never invent a SUCCESS receipt. An approved amendment removing the checks retires only the matching obsolete CI wait, with an audit trail.
 - If status exposes `verification_phase`, inspect its owner before another run.
   Use `harness_recover_verification` only for a dead owner; preserve its conservative
   charge and UNKNOWN result. Recovery does not prove verification PASS.
