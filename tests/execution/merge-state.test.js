@@ -1,11 +1,12 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { applyEvent, project, canStartMerge } from "../../src/execution/state.js"
+import { applyEvent, project, canStartMerge, canVerifyExternalMerge } from "../../src/execution/state.js"
 import { findApprovedEpic, recordKnowledgeArtifact } from "../../src/project-knowledge.js"
-import { mkdtemp, rm } from "node:fs/promises"
+import { mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { stableHash } from "../../src/execution/serialize.js"
+import { createExecutionController } from "../../src/execution/execution.js"
 
 function makeBuilder() {
   let seq = 0
@@ -49,7 +50,7 @@ function readyState(overrides = {}) {
     mandate: { merge_policy: "governed_auto", required_ci_checks: ["check-1"] },
     pr_binding: { repository: "o/r", pr_number: 158, candidate_id: "cand-1", head_sha: "head-a", base_sha: "base-1", base_branch: "main" },
     candidates: { "cand-1": { wu_id: "WU-01" } },
-    reviews: { "cand-1": { verdict: "PASS" } },
+    reviews: { "cand-1": { verdict: "PASS", verification_evidence_ids: ["verified-receipt"] } },
     ci_evidence: { "cand-1": { "check-1": { head_sha: "head-a", conclusion: "SUCCESS" } } },
     dispatches: {},
     blocker: null,
@@ -103,6 +104,55 @@ test("canStartMerge rejects missing/failed/stale CI", () => {
 test("canStartMerge rejects candidate/binding mismatch and unsettled dispatches", () => {
   assert.equal(canStartMerge(readyState({ pr_binding: { ...readyState().pr_binding, candidate_id: "cand-other" } })).allowed, false)
   assert.equal(canStartMerge(readyState({ dispatches: { d1: { status: "launched" } } })).allowed, false)
+})
+
+test("legacy receiptless PASS replays byte-identically but cannot authorize new work", async () => {
+  const ev = makeBuilder()
+  const events = readyEvents(ev)
+  const oldReview = events.find(event => event.operation_type === "RECORD_REVIEW")
+  oldReview.body.verification_evidence_ids = []
+  oldReview.operation_hash = stableHash(oldReview.body)
+  const originalLog = JSON.stringify(events)
+  const state = project(events)
+  assert.equal(state.reviews["cand-1"].verdict, "PASS")
+  assert.deepEqual(state.reviews["cand-1"].verification_evidence_ids, [])
+  assert.deepEqual(project(events), state)
+  assert.equal(JSON.stringify(events), originalLog)
+  assert.match(canStartMerge(state).reason, /lacks verification evidence/)
+  assert.match(canVerifyExternalMerge({
+    ...state, mandate: { merge_policy: "human", required_ci_checks: [] },
+  }).reason, /lacks verification evidence/)
+
+  const beforeReview = project(events.slice(0, 3))
+  assert.throws(
+    () => applyEvent(beforeReview, nextEvent(beforeReview, "RECORD_REVIEW", oldReview.body)),
+    /PASS verdict requires verification evidence/,
+  )
+  assert.throws(() => applyEvent(state, nextEvent(state, "WU_COMPLETE", {
+    candidate_id: "cand-1",
+  })), /PASS review lacks verification evidence/)
+
+  // An already merged/completed historical WU remains fully replayable.
+  const priorCompleted = [...events,
+    ev("MERGE_START", { attempt_id: "legacy-attempt" }),
+    ev("MERGE_RECORD", { merge_commit_sha: "merged-1", merged_head_sha: "head-a" }),
+    ev("MERGE_VERIFY", {}),
+    ev("WU_COMPLETE", { candidate_id: "cand-1" }),
+  ]
+  const historic = project(priorCompleted)
+  assert.equal(historic.wu.completed, true)
+  assert.equal(historic.merge.status, "VERIFIED")
+  assert.deepEqual(project(priorCompleted), historic)
+
+  // Reproduce the controller's real snapshot() path with a V1 event log.
+  const root = await mkdtemp(join(tmpdir(), "harness-legacy-review-"))
+  try {
+    await writeFile(join(root, "events.ndjson"), priorCompleted.map(event => JSON.stringify(event)).join("\n") + "\n")
+    const controller = await createExecutionController({ dir: root })
+    assert.deepEqual((await controller.snapshot()).state, historic)
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
 })
 
 // --- state machine: MERGE_START / RECORD / VERIFY ---
