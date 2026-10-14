@@ -49,6 +49,7 @@ export const OPERATION_TYPES = Object.freeze([
   "BIND_PR", // immutably bind a GitHub PR to the active WU's frozen candidate (repository, pr_number, head/base SHA)
   "RECORD_CI", // record exact-head CI evidence for one check, bound to a candidate (multiple checks per candidate)
   "MERGE_ABORT", // abandon only a remotely closed, unmerged attempt
+  "MERGE_SUPERSEDE", // retire a settled merge pointer left behind by a completed predecessor; append-only reconciliation, never a merge
   "MERGE_START", // governed merge: evaluate structural gates and mark the merge started (no external side effect)
   "MERGE_EXTERNAL_RECORD", // human policy: record an already-performed external merge (source=HUMAN_EXTERNAL), never executes a merge
   "MERGE_RECORD", // record the remote merge result (merge_commit_sha + merged head) after the side effect

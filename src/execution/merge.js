@@ -26,6 +26,33 @@ async function commitMerge(controller, session_id, operation_id, operation_type,
   return res
 }
 
+// Retire a settled merge pointer that a completed predecessor WU left behind and
+// that the current binding no longer owns (e.g. a contract correction invalidated
+// the predecessor's binding without retiring its VERIFIED merge). This is
+// committed as an append-only `MERGE_SUPERSEDE` event through the governed
+// controller, which re-validates every condition. A merge that is not a settled
+// merge of a completed predecessor is never retired here, so genuine ownership
+// conflicts still fail closed with "merge belongs to a different candidate".
+async function supersedeStalePredecessorMerge(controller, session_id, execution_id, state, candidate_id) {
+  const stale = state.merge
+  if (!stale || stale.candidate_id === candidate_id) return false
+  if (stale.status !== "VERIFIED") return false
+  const binding = state.pr_binding
+  if (!binding || binding.candidate_id !== candidate_id) return false
+  const bound = state.candidates[candidate_id]
+  if (!bound || bound.wu_id !== state.wu?.wu_id) return false
+  const priorWu = state.candidates[stale.candidate_id]?.wu_id
+  if (!priorWu || priorWu === state.wu.wu_id) return false
+  if (state.completed_wus?.[priorWu]?.candidate_id !== stale.candidate_id) return false
+  await commitMerge(controller, session_id,
+    `${execution_id}:merge-supersede:${stale.candidate_id}:${stale.merge_commit_sha ?? "none"}`, "MERGE_SUPERSEDE", {
+      superseded_candidate_id: stale.candidate_id,
+      bound_candidate_id: candidate_id,
+      merge_commit_sha: stale.merge_commit_sha ?? null,
+    })
+  return true
+}
+
 // Find the execution whose durable state records this candidate. Merge is a rare,
 // explicit operation, so scanning controller directories is acceptable here
 // (unlike the per-tool-call launch-claim boundary).
@@ -63,15 +90,30 @@ export async function runMergeCandidate(projectRoot, { candidate_id, adapter, se
   const execution = await findExecutionForCandidate(projectRoot, candidate_id)
   const { controller, execution_id } = execution
   let state = execution.state
-  const binding = state.pr_binding
+  let binding = state.pr_binding
   if (!binding) throw new Error("merge blocked: no PR binding.")
   if (binding.candidate_id !== candidate_id) {
     throw new Error(`merge blocked: candidate ${candidate_id} is not the bound candidate ${binding.candidate_id}.`)
   }
 
-  // Already verified → idempotent no-op.
-  if (state.merge && state.merge.candidate_id !== candidate_id) throw new Error("merge blocked: merge belongs to a different candidate.")
-  if (state.merge?.status === "VERIFIED") return { status: "already_verified", execution_id }
+  // A settled merge inherited from a completed predecessor is reconciled through
+  // an append-only MERGE_SUPERSEDE event; a merge that truly belongs to another
+  // candidate still fails closed. Already verified for THIS candidate is a no-op.
+  let superseded_stale_merge = false
+  if (state.merge && state.merge.candidate_id !== candidate_id) {
+    if (!(await supersedeStalePredecessorMerge(controller, session_id, execution_id, state, candidate_id))) {
+      throw new Error("merge blocked: merge belongs to a different candidate.")
+    }
+    superseded_stale_merge = true
+    state = (await controller.snapshot()).state
+    // Re-read the binding: the supersede commit is a fresh revision, and the
+    // binding must still target this candidate before any external effect.
+    binding = state.pr_binding
+    if (!binding || binding.candidate_id !== candidate_id) {
+      throw new Error("merge blocked: the PR binding changed while reconciling a stale predecessor merge.")
+    }
+  }
+  if (state.merge?.status === "VERIFIED") return { status: "already_verified", execution_id, ...(superseded_stale_merge ? { superseded_stale_merge } : {}) }
 
   // A fresh start must pass the durable gate.
   if (!state.merge || (state.merge.status === "STARTED" && !state.blocker)) {
@@ -132,7 +174,7 @@ export async function runMergeCandidate(projectRoot, { candidate_id, adapter, se
         throw new Error(`merge verify failed: remote merge commit ${pr.merge_commit_sha} differs from recorded ${state.merge.merge_commit_sha}.`)
       }
       await commitMerge(controller, session_id, `${attemptKey}:verify`, "MERGE_VERIFY", {})
-      return { status: "recovered_existing_merge", execution_id, merge_commit_sha: pr.merge_commit_sha }
+      return { status: "recovered_existing_merge", execution_id, merge_commit_sha: pr.merge_commit_sha, ...(superseded_stale_merge ? { superseded_stale_merge } : {}) }
     }
     // STARTED (or a fresh run that just committed MERGE_START above): record the
     // existing remote merge, then verify.
@@ -141,7 +183,7 @@ export async function runMergeCandidate(projectRoot, { candidate_id, adapter, se
       merged_head_sha: binding.head_sha,
     })
     await commitMerge(controller, session_id, `${attemptKey}:verify`, "MERGE_VERIFY", {})
-    return { status: "recovered_existing_merge", execution_id, merge_commit_sha: pr.merge_commit_sha }
+    return { status: "recovered_existing_merge", execution_id, merge_commit_sha: pr.merge_commit_sha, ...(superseded_stale_merge ? { superseded_stale_merge } : {}) }
   }
 
   // PR is not merged; it must still be open.
@@ -208,7 +250,7 @@ export async function runMergeCandidate(projectRoot, { candidate_id, adapter, se
   // 9. MERGE_VERIFY (durable).
   await commitMerge(controller, session_id, `${attemptKey}:verify`, "MERGE_VERIFY", {})
 
-  return { status: "merged", execution_id, merge_commit_sha: merged.merge_commit_sha }
+  return { status: "merged", execution_id, merge_commit_sha: merged.merge_commit_sha, ...(superseded_stale_merge ? { superseded_stale_merge } : {}) }
 }
 
 // Human-policy external merge verification. The Harness observes an already-
@@ -221,16 +263,31 @@ export async function runVerifyExternalMerge(projectRoot, { candidate_id, adapte
   }
   if (!session_id) throw new Error("runVerifyExternalMerge requires a session_id.")
 
-  const { controller, execution_id, state } = await findExecutionForCandidate(projectRoot, candidate_id)
-  const binding = state.pr_binding
+  const execution = await findExecutionForCandidate(projectRoot, candidate_id)
+  const { controller, execution_id } = execution
+  let state = execution.state
+  let binding = state.pr_binding
   if (!binding) throw new Error("external merge blocked: no PR binding.")
   if (binding.candidate_id !== candidate_id) {
     throw new Error(`external merge blocked: candidate ${candidate_id} is not the bound candidate ${binding.candidate_id}.`)
   }
 
-  // Already verified → idempotent no-op.
-  if (state.merge && state.merge.candidate_id !== candidate_id) throw new Error("merge blocked: merge belongs to a different candidate.")
-  if (state.merge?.status === "VERIFIED") return { status: "already_verified", execution_id }
+  // A settled merge inherited from a completed predecessor is reconciled through
+  // an append-only MERGE_SUPERSEDE event; a merge that truly belongs to another
+  // candidate still fails closed. Already verified for THIS candidate is a no-op.
+  let superseded_stale_merge = false
+  if (state.merge && state.merge.candidate_id !== candidate_id) {
+    if (!(await supersedeStalePredecessorMerge(controller, session_id, execution_id, state, candidate_id))) {
+      throw new Error("merge blocked: merge belongs to a different candidate.")
+    }
+    superseded_stale_merge = true
+    state = (await controller.snapshot()).state
+    binding = state.pr_binding
+    if (!binding || binding.candidate_id !== candidate_id) {
+      throw new Error("external merge blocked: the PR binding changed while reconciling a stale predecessor merge.")
+    }
+  }
+  if (state.merge?.status === "VERIFIED") return { status: "already_verified", execution_id, ...(superseded_stale_merge ? { superseded_stale_merge } : {}) }
 
   // A fresh start must pass the human gate.
   if (!state.merge) {
@@ -271,7 +328,7 @@ export async function runVerifyExternalMerge(projectRoot, { candidate_id, adapte
       throw new Error(`external merge verify failed: remote merge commit ${pr.merge_commit_sha} differs from recorded ${state.merge.merge_commit_sha}.`)
     }
     await commitMerge(controller, session_id, `${execution_id}:${candidate_id}:merge-verify`, "MERGE_VERIFY", {})
-    return { status: "verified_external_merge", execution_id, merge_commit_sha: pr.merge_commit_sha }
+    return { status: "verified_external_merge", execution_id, merge_commit_sha: pr.merge_commit_sha, ...(superseded_stale_merge ? { superseded_stale_merge } : {}) }
   }
 
   // 5. null → MERGE_EXTERNAL_RECORD → MERGE_VERIFY (never STARTED, never merge()).
@@ -282,7 +339,7 @@ export async function runVerifyExternalMerge(projectRoot, { candidate_id, adapte
   })
   await commitMerge(controller, session_id, `${execution_id}:${candidate_id}:merge-verify`, "MERGE_VERIFY", {})
 
-  return { status: "verified_external_merge", execution_id, merge_commit_sha: pr.merge_commit_sha }
+  return { status: "verified_external_merge", execution_id, merge_commit_sha: pr.merge_commit_sha, ...(superseded_stale_merge ? { superseded_stale_merge } : {}) }
 }
 
 async function verifyCandidateTree(projectRoot, candidateId, adapter, binding) {
