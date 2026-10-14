@@ -177,7 +177,7 @@ test("MANDATE_AMEND rejects budget and WU-ceiling changes", () => {
   )
 })
 
-test("MANDATE_AMEND requires optimistic policy match and governed_auto CI coverage", () => {
+test("MANDATE_AMEND enforces optimistic policy match and permits explicit no-CI", () => {
   const state = readyLegacyState()
   assert.throws(
     () => applyEvent(state, nextEvent(state, "MANDATE_AMEND", amendmentBody(state, { expected_merge_policy: "human" }))),
