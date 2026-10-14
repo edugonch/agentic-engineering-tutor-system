@@ -57,6 +57,8 @@ export function createGitHubAdapter({ token = process.env.HARNESS_GITHUB_TOKEN ?
 
     // GET /repos/{repository}/commits/{head_sha}/check-runs → conclusion per named check
     async getChecks({ repository, head_sha, check_names }) {
+      // A no-CI mandate must not consume GitHub API quota for check-runs.
+      if (check_names.length === 0) return []
       const groups = new Map()
       for (let page = 1; ; page++) {
         const data = await request("GET", `/repos/${repository}/commits/${head_sha}/check-runs?per_page=100&page=${page}`)
