@@ -45,7 +45,7 @@ const setsEqual = (a, b) => {
 // input; this evaluates durable state against the immutable PR binding, the PASS
 // review, exact-head CI evidence, and settled dispatches. Pure and exported so it
 // can be tested in isolation.
-export function canStartMerge(state) {
+export function canStartMerge(state, { historicalReplay = false } = {}) {
   try { assertProcessAcceptance(state, state.pr_binding?.candidate_id) } catch (e) { return { allowed: false, reason: e.message } }
   if (state.verification_phase) return { allowed: false, reason: "verification is still running" }
   if (!state.wu) return { allowed: false, reason: "no active WU" }
@@ -58,7 +58,7 @@ export function canStartMerge(state) {
   if (candidate.superseded_by_contract) return { allowed: false, reason: "candidate contract superseded; refreeze and review" }
   const review = state.reviews[binding.candidate_id]
   if (!review || review.verdict !== "PASS") return { allowed: false, reason: "no PASS review" }
-  if (!Array.isArray(review.verification_evidence_ids) || review.verification_evidence_ids.length === 0) {
+  if (!historicalReplay && (!Array.isArray(review.verification_evidence_ids) || review.verification_evidence_ids.length === 0)) {
     return { allowed: false, reason: "PASS review lacks verification evidence; reverify and review the candidate" }
   }
   if (state.mandate?.merge_policy !== "governed_auto") return { allowed: false, reason: `merge policy is ${state.mandate?.merge_policy ?? "none"}, not governed_auto` }
@@ -926,7 +926,7 @@ export function applyEvent(previous, event, { historicalReplay = false } = {}) {
     }
 
     case "MERGE_START": {
-      const gate = canStartMerge(state)
+      const gate = canStartMerge(state, { historicalReplay })
       if (!gate.allowed) throw new Error(`MERGE_START blocked: ${gate.reason}.`)
       if (state.merge) throw new Error("MERGE_START: a merge is already in progress.")
       const binding = state.pr_binding
