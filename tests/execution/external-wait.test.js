@@ -80,6 +80,15 @@ test("scheduled transient retries do not trigger the repeated mutation breaker",
   }
 })
 
+test("CI disabled by policy cannot create a CI_PENDING wait", async t => {
+  const { c } = await fixture(t, [])
+  await assert.rejects(runWithExternalWait({
+    controller: c, session_id: "root", operation: "merge:candidate",
+    run: async () => { throw new ExternalWaitError("CI_PENDING", "irrelevant pending check") },
+  }), /CI_PENDING cannot be scheduled/)
+  assert.equal((await c.snapshot()).state.external_wait, undefined)
+})
+
 // A read-only boundary is essential: a deadline never licenses a merge.
 for (const conclusion of ['SUCCESS', 'FAILURE', 'PENDING']) test(`deadline observes current exact-head CI ${conclusion} before deciding`, async t => {
   const { c, commit } = await fixture(t, ['verify'])
