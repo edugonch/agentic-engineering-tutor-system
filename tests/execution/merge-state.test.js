@@ -160,13 +160,13 @@ test("legacy receiptless PASS replays byte-identically but cannot authorize new 
     const activeDir = join(executionRoot, "active-new")
     await mkdir(oldDir, { recursive: true })
     await mkdir(activeDir, { recursive: true })
-    await writeFile(join(oldDir, "events.ndjson"), priorCompleted.map(event => JSON.stringify(event)).join("\\n") + "\\n")
+    await writeFile(join(oldDir, "events.ndjson"), priorCompleted.map(event => JSON.stringify(event)).join("\n") + "\n")
     const currentEv = makeBuilder()
     const currentEvents = [
       currentEv("MANDATE_APPROVE", { mandate_id: "M2", max_wus: 1, total_seconds: 100 }),
       currentEv("WU_ACTIVATE", { wu_id: "WU-NEW", mandate_id: "M2" }),
     ]
-    await writeFile(join(activeDir, "events.ndjson"), currentEvents.map(event => JSON.stringify(event)).join("\\n") + "\\n")
+    await writeFile(join(activeDir, "events.ndjson"), currentEvents.map(event => JSON.stringify(event)).join("\n") + "\n")
     const active = await findWuExecution(root, "WU-NEW")
     assert.equal(active.execution_id, "active-new")
     assert.equal(await findPendingLaunchBinding(root, "root", "harness-builder"), null)
