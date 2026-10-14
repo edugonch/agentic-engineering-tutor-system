@@ -291,12 +291,12 @@ export function applyEvent(previous, event) {
       }
 
       const nextPolicy = body.merge_policy ?? "none"
-      const nextChecks = body.required_ci_checks ?? []
+      const nextChecks = body.required_ci_checks
       if (!MERGE_POLICIES.includes(nextPolicy)) {
         throw new Error(`MANDATE_AMEND: unknown merge_policy ${nextPolicy}.`)
       }
       if (!Array.isArray(nextChecks) || nextChecks.some((check) => typeof check !== "string" || check.length === 0)) {
-        throw new Error("MANDATE_AMEND requires required_ci_checks to be non-empty strings.")
+        throw new Error("MANDATE_AMEND requires an array of non-empty required_ci_checks identifiers.")
       }
       if (new Set(nextChecks).size !== nextChecks.length) {
         throw new Error("MANDATE_AMEND required_ci_checks cannot contain duplicates.")
