@@ -449,12 +449,17 @@ event is emitted; do not downgrade to an older reader over a live execution.
 See `docs/audits/2026-10-08/IMPLEMENTACION.md` for validation and remaining limits.
 
 
-External CI waits now persist their retry schedule. Pending CI and typed transport
-failures use 15–300 second backoff, restored by the supervisor after restart.
-The WU may declare `external_wait_seconds` (default 1800). An expired wait records
-one external-condition blocker; failed checks, permission errors and head drift
-are not transient retries. CI receipts can be refreshed directly from the bound
-remote head instead of requiring the model to translate remote status.
+CI is an optional governed merge gate. An approved `governed_auto` mandate with
+explicit `required_ci_checks: []` never queries, waits for, or retries CI, and
+never represents it as PASS. Local candidate verification, independent review,
+SHA binding, budget, and merge gates remain mandatory. A policy-only
+`MANDATE_AMEND` disables an exact-candidate `CI_PENDING` wait atomically and
+records its supersession in audit history.
+
+When CI checks are explicitly required, pending CI uses durable 15–300 second
+backoff, restored by the supervisor after restart. Typed transport failures
+still use that backoff independently. The WU may declare `external_wait_seconds`
+(default 1800). Failed checks, permission errors and head drift are not transients.
 
 Root verification now charges a measured ACTIVE phase even on failure/cancellation.
 Worker verification remains within its worker envelope. A command guardian reaps

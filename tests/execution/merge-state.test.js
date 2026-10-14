@@ -74,9 +74,12 @@ test("canStartMerge allows a fully-gated governed_auto merge", () => {
   assert.deepEqual(canStartMerge(readyState()), { allowed: true })
 })
 
-test("canStartMerge rejects governed_auto with empty required_ci_checks", () => {
-  assert.equal(canStartMerge(readyState({ mandate: { merge_policy: "governed_auto", required_ci_checks: [] } })).allowed, false)
-  assert.match(canStartMerge(readyState({ mandate: { merge_policy: "governed_auto", required_ci_checks: [] } })).reason, /non-empty required_ci_checks/)
+test("canStartMerge permits explicit no-CI while retaining local review and dispatch gates", () => {
+  const noCI = readyState({ mandate: { merge_policy: "governed_auto", required_ci_checks: [] }, ci_evidence: {} })
+  assert.deepEqual(canStartMerge(noCI), { allowed: true })
+  assert.equal(canStartMerge({ ...noCI, reviews: {} }).allowed, false)
+  assert.equal(canStartMerge({ ...noCI, dispatches: { pending: { status: "launched" } } }).allowed, false)
+  assert.equal(canStartMerge({ ...noCI, pr_binding: null }).allowed, false)
 })
 
 test("canStartMerge rejects non-governed_auto policies", () => {
@@ -220,13 +223,14 @@ test("merge_policy + required_ci_checks parsing (valid, default, and rejections)
     assert.equal(dflt.mandate.merge_policy, "none")
     assert.deepEqual(dflt.mandate.required_ci_checks, [])
 
-    // governed_auto with empty required_ci_checks → rejected (fail closed)
+    // Explicit empty required_ci_checks must be accepted as CI disabled.
     await recordKnowledgeArtifact(root, {
       artifact_type: "epic", artifact_id: "epic-empty", status: "APPROVED", owner_confirmed: true,
       title: "Test Epic empty", content: 'epic\nexecution_mandate: {"max_wus": 4, "total_seconds": 100, "merge_policy": "governed_auto", "required_ci_checks": []}',
       source_refs: ["https://example.com/epic-source"],
     })
-    await assert.rejects(findApprovedEpic(root, "epic-empty"), /missing a machine-readable execution_mandate/)
+    const noCI = await findApprovedEpic(root, "epic-empty")
+    assert.deepEqual(noCI.mandate.required_ci_checks, [])
 
     // non-string/empty entry → rejected (not silently filtered)
     await recordKnowledgeArtifact(root, {
@@ -234,7 +238,7 @@ test("merge_policy + required_ci_checks parsing (valid, default, and rejections)
       title: "Test Epic badtype", content: 'epic\nexecution_mandate: {"max_wus": 4, "total_seconds": 100, "merge_policy": "governed_auto", "required_ci_checks": [""]}',
       source_refs: ["https://example.com/epic-source"],
     })
-    await assert.rejects(findApprovedEpic(root, "epic-badtype"), /missing a machine-readable execution_mandate/)
+    await assert.rejects(findApprovedEpic(root, "epic-badtype"), /missing or invalid machine-readable execution_mandate/)
 
     // duplicate entry → rejected
     await recordKnowledgeArtifact(root, {
@@ -242,7 +246,7 @@ test("merge_policy + required_ci_checks parsing (valid, default, and rejections)
       title: "Test Epic dup", content: 'epic\nexecution_mandate: {"max_wus": 4, "total_seconds": 100, "merge_policy": "governed_auto", "required_ci_checks": ["check-1","check-1"]}',
       source_refs: ["https://example.com/epic-source"],
     })
-    await assert.rejects(findApprovedEpic(root, "epic-dup"), /missing a machine-readable execution_mandate/)
+    await assert.rejects(findApprovedEpic(root, "epic-dup"), /missing or invalid machine-readable execution_mandate/)
   } finally {
     await rm(root, { recursive: true, force: true })
   }

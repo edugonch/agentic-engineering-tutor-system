@@ -177,16 +177,67 @@ test("MANDATE_AMEND rejects budget and WU-ceiling changes", () => {
   )
 })
 
-test("MANDATE_AMEND requires optimistic policy match and governed_auto CI coverage", () => {
+test("MANDATE_AMEND enforces optimistic policy match and permits explicit no-CI", () => {
   const state = readyLegacyState()
   assert.throws(
     () => applyEvent(state, nextEvent(state, "MANDATE_AMEND", amendmentBody(state, { expected_merge_policy: "human" }))),
     /expected policy does not match/,
   )
-  assert.throws(
-    () => applyEvent(state, nextEvent(state, "MANDATE_AMEND", amendmentBody(state, { required_ci_checks: [] }))),
-    /governed_auto requires non-empty/,
-  )
+  const amended = applyEvent(state, nextEvent(state, "MANDATE_AMEND", amendmentBody(state, { required_ci_checks: [] })))
+  assert.equal(amended.mandate.merge_policy, "governed_auto")
+  assert.deepEqual(amended.mandate.required_ci_checks, [])
+})
+
+test("CI opt-out retires a matching scheduled wait without erasing review evidence", () => {
+  const state = readyLegacyState()
+  const withCi = applyEvent(state, nextEvent(state, "MANDATE_AMEND", amendmentBody(state)))
+  const clear = applyEvent(withCi, nextEvent(withCi, "CLEAR_BLOCKER", {
+    blocker_class: "BLOCKED_TOOLING", blocked_at_revision: withCi.blocker.at_revision, resolution: "repaired",
+  }))
+  const pending = applyEvent(clear, nextEvent(clear, "EXTERNAL_WAIT", {
+    wait_id: "wait-ci-1", operation: "harness_merge_candidate:cand-1",
+    kind: "CI_PENDING", reason: "verify pending", attempt: 1,
+    started_at: "2026-10-14T12:00:00.000Z",
+    next_retry_at: "2026-10-14T12:02:00.000Z",
+    deadline_at: "2026-10-14T12:30:00.000Z",
+  }))
+  const done = applyEvent(pending, nextEvent(pending, "MANDATE_AMEND", {
+    ...amendmentBody(pending), expected_merge_policy: "governed_auto",
+    expected_required_ci_checks: ["verify"], required_ci_checks: [],
+    source_artifact_id: "epic-no-ci", source_record_key: "rk-no-ci", source_hash: "hash-no-ci",
+  }))
+  assert.equal(done.external_wait, null)
+  assert.equal(done.external_wait_history.at(-1).outcome, "SUPERSEDED_BY_POLICY")
+  assert.deepEqual(done.ci_evidence, pending.ci_evidence)
+  assert.equal(canStartMerge(done).allowed, true)
+})
+
+test("expired CI timeout blocker is resolved by the exact approved opt-out", () => {
+  const initial = readyLegacyState()
+  const governed = applyEvent(initial, nextEvent(initial, "MANDATE_AMEND", amendmentBody(initial)))
+  const active = applyEvent(governed, nextEvent(governed, "CLEAR_BLOCKER", {
+    blocker_class: "BLOCKED_TOOLING", blocked_at_revision: governed.blocker.at_revision, resolution: "repaired",
+  }))
+  const waiting = applyEvent(active, nextEvent(active, "EXTERNAL_WAIT", {
+    wait_id: "expired-ci", operation: "harness_merge_candidate:cand-1",
+    kind: "CI_PENDING", reason: "verify pending", attempt: 1,
+    started_at: "2026-10-14T12:00:00.000Z",
+    next_retry_at: "2026-10-14T12:02:00.000Z",
+    deadline_at: "2026-10-14T12:30:00.000Z",
+  }))
+  const expired = applyEvent(waiting, nextEvent(waiting, "EXTERNAL_WAIT_END", {
+    wait_id: "expired-ci", outcome: "EXPIRED", recovery_version: 1,
+  }))
+  assert.equal(expired.blocker.class, "BLOCKED_EXTERNAL_FACT")
+  const corrected = applyEvent(expired, nextEvent(expired, "MANDATE_AMEND", {
+    ...amendmentBody(expired), expected_merge_policy: "governed_auto",
+    expected_required_ci_checks: ["verify"], required_ci_checks: [],
+    source_artifact_id: "epic-no-ci", source_record_key: "rk-no-ci", source_hash: "hash-no-ci",
+  }))
+  assert.equal(corrected.blocker, null)
+  assert.equal(corrected.last_blocker_resolution.source_artifact_id, "epic-no-ci")
+  assert.equal(corrected.external_wait_history.at(-1).outcome, "EXPIRED")
+  assert.equal(canStartMerge(corrected).allowed, true)
 })
 
 test("CLEAR_BLOCKER cannot clear terminal authority/security stops", () => {
@@ -309,6 +360,26 @@ test("controller applies an approved policy-only amendment idempotently and clea
 
     const verified = await runExecutionController(root, { action: "verify", execution_id: "E1" })
     assert.equal(verified.passed, true)
+  })
+})
+
+test("APPROVED Epic accepts explicit no-CI governed_auto and refuses implicit opt-out", async () => {
+  await withRoot(async root => {
+    await seedEpic(root, "epic-no-ci", {
+      max_wus: 2, total_seconds: 100, merge_policy: "governed_auto", required_ci_checks: [],
+    })
+    const approved = await runExecutionController(root, {
+      action: "approve_mandate", execution_id: "E2", session_id: "ses-2", epic_artifact_id: "epic-no-ci",
+    })
+    assert.deepEqual(approved.mandate.required_ci_checks, [])
+
+    await seedEpic(root, "epic-implicit-optout", {
+      max_wus: 2, total_seconds: 100, merge_policy: "governed_auto",
+    })
+    await assert.rejects(runExecutionController(root, {
+      action: "approve_mandate", execution_id: "E3", session_id: "ses-2",
+      epic_artifact_id: "epic-implicit-optout",
+    }), /missing or invalid machine-readable execution_mandate/)
   })
 })
 

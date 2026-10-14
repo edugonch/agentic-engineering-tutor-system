@@ -55,6 +55,9 @@ export async function runWithExternalWait({ controller, session_id, operation, r
     if (!(error instanceof ExternalWaitError)) { await end("REJECTED"); throw error }
     state = (await controller.snapshot()).state
     if (state.completed || state.blocker) throw error
+    if (error.kind === "CI_PENDING" && (state.mandate?.required_ci_checks ?? []).length === 0) {
+      throw new Error("CI_PENDING cannot be scheduled when CI is disabled by approved policy")
+    }
     // A race must not replace another operation's wait.
     wait = state.external_wait
     if (wait && wait.operation !== operation) throw new Error("Concurrent external wait conflict")

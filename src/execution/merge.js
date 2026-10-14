@@ -361,7 +361,9 @@ export async function observeMergeProgress(projectRoot, candidate_id, adapter) {
   return {
     binding, blocker: state.blocker, review: state.reviews[candidate_id],
     pr: await adapter.getPullRequest({ repository: binding.repository, pr_number: binding.pr_number }),
-    checks: await adapter.getChecks({ repository: binding.repository, head_sha: binding.head_sha, check_names: state.mandate?.required_ci_checks ?? [] }),
+    checks: (state.mandate?.required_ci_checks ?? []).length > 0
+      ? await adapter.getChecks({ repository: binding.repository, head_sha: binding.head_sha, check_names: state.mandate.required_ci_checks })
+      : [],
   }
 }
 
@@ -377,7 +379,10 @@ export async function runRebindPR(projectRoot, { candidate_id, adapter, session_
   const lease = await controller.acquire(session_id)
   await controller.commit({ operation_id: `${execution_id}:rebind:${state.revision}`, operation_type: "BIND_PR",
     body: { ...next, revalidated: true, tree_sha } }, { holder_session_id: session_id, expected_revision: state.revision, lease_fencing_token: lease.fencing_token })
-  return { status: "rebound", binding: next, tree_sha, next_action: "Record fresh exact-head CI evidence before merge" }
+  return { status: "rebound", binding: next, tree_sha,
+    next_action: (state.mandate?.required_ci_checks ?? []).length > 0
+      ? "Record fresh exact-head CI evidence before merge"
+      : "Continue mandatory non-CI gates; CI disabled by policy" }
 }
 
 export async function runAbortMerge(projectRoot, { candidate_id, adapter, session_id }) {

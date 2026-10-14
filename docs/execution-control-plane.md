@@ -28,6 +28,10 @@ Two questions must never collapse into one field:
   only `merge_policy` and `required_ci_checks` from a new **APPROVED Epic
   artifact** while keeping the same execution, mandate identity, WU ceiling,
   budget ledger, dispatches, candidates, reviews, PR/CI bindings, and history.
+  An explicit `governed_auto` mandate with `required_ci_checks: []` disables
+  CI checks and waits without fabricating CI PASS or changing independent review.
+  Matching obsolete CI waits are retired by the approved amendment, with
+  immutable event-log provenance; unrelated waits or blockers remain intact.
   The original authority event remains in `events.ndjson`; the amendment is a
   new auditable event, never an overwrite.
 
@@ -193,7 +197,8 @@ For an existing execution stuck at the second PR:
 3. If a recoverable tooling blocker is active, clear it with evidence that the
    corrected plugin is loaded. Never clear terminal blockers or change policy.
 4. Retry `bind_pr` for the existing new candidate and exact PR/head/base. Record
-   its actual CI evidence, use the mandate's merge/verification tool, then
+   CI evidence only for checks named by the effective mandate. With `[]`,
+   skip CI and use the remaining governed merge/verification gates, then
    `complete_wu`. Continue only through the approved WU sequence.
 
 Do not recreate the WU, candidate, or PR just to bypass stale integration state.

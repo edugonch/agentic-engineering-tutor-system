@@ -772,7 +772,7 @@ export async function findApprovedEpic(projectRoot, epicArtifactId) {
   }
   const mandate = parseExecutionMandate(bytes.toString("utf8"))
   if (!mandate) {
-    throw new Error(`Approved Epic ${record.source_id} is missing a machine-readable execution_mandate (max_wus + total_seconds).`)
+    throw new Error(`Approved Epic ${record.source_id} has a missing or invalid machine-readable execution_mandate (max_wus + total_seconds).`)
   }
   return {
     source_id: record.source_id,
@@ -953,10 +953,9 @@ function parseExecutionMandate(content) {
     if (Number.isSafeInteger(mandate.max_wus) && mandate.max_wus >= 1 && Number.isFinite(mandate.total_seconds) && mandate.total_seconds > 0) {
       const mergePolicy = mandate.merge_policy ?? "none"
       if (!["none", "human", "governed_auto"].includes(mergePolicy)) return null
-      // required_ci_checks: reject empty/non-string/duplicate entries — fail
-      // closed, never silently filter.
+      // CI is optional: [] disables remote checks; malformed/duplicate IDs fail closed.
       let requiredCiChecks = []
-      if (mandate.required_ci_checks !== undefined && mandate.required_ci_checks !== null) {
+      if (mandate.required_ci_checks !== undefined) {
         if (!Array.isArray(mandate.required_ci_checks)) return null
         const seen = new Set()
         for (const c of mandate.required_ci_checks) {
@@ -966,8 +965,9 @@ function parseExecutionMandate(content) {
         }
         requiredCiChecks = mandate.required_ci_checks
       }
-      // governed_auto requires non-empty required_ci_checks (no legacy CI fallback).
-      if (mergePolicy === "governed_auto" && requiredCiChecks.length === 0) return null
+      // New governed_auto mandates must explicitly declare checks, including [].
+      // An omitted property is not an implicit opt-out.
+      if (mergePolicy === "governed_auto" && !Object.prototype.hasOwnProperty.call(mandate, "required_ci_checks")) return null
 
       // Optional frozen WU sequence. New full-Epic mandates should provide this;
       // omission remains readable for legacy executions but grants no structural

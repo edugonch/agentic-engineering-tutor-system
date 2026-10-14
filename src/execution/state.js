@@ -64,9 +64,8 @@ export function canStartMerge(state) {
   const unsettled = Object.values(state.dispatches).filter((d) => !settled.has(d.status))
   if (unsettled.length > 0) return { allowed: false, reason: `${unsettled.length} unsettled dispatch(es)` }
   const required = state.mandate?.required_ci_checks ?? []
-  // governed_auto must have explicit, non-empty governance coverage. The legacy
-  // "any recorded CI" fallback never applies to governed_auto.
-  if (required.length === 0) return { allowed: false, reason: "governed_auto requires non-empty required_ci_checks" }
+  // [] disables CI by approved mandate, never implying that CI passed.
+  // The review, process, dispatch and exact-binding gates above still apply.
   const evidence = state.ci_evidence[binding.candidate_id]
   for (const check of required) {
     const e = evidence?.[check]
@@ -292,18 +291,15 @@ export function applyEvent(previous, event) {
       }
 
       const nextPolicy = body.merge_policy ?? "none"
-      const nextChecks = body.required_ci_checks ?? []
+      const nextChecks = body.required_ci_checks
       if (!MERGE_POLICIES.includes(nextPolicy)) {
         throw new Error(`MANDATE_AMEND: unknown merge_policy ${nextPolicy}.`)
       }
       if (!Array.isArray(nextChecks) || nextChecks.some((check) => typeof check !== "string" || check.length === 0)) {
-        throw new Error("MANDATE_AMEND requires required_ci_checks to be non-empty strings.")
+        throw new Error("MANDATE_AMEND requires an array of non-empty required_ci_checks identifiers.")
       }
       if (new Set(nextChecks).size !== nextChecks.length) {
         throw new Error("MANDATE_AMEND required_ci_checks cannot contain duplicates.")
-      }
-      if (nextPolicy === "governed_auto" && nextChecks.length === 0) {
-        throw new Error("MANDATE_AMEND governed_auto requires non-empty required_ci_checks.")
       }
       if (!body.source_artifact_id || !body.source_record_key || !body.source_hash) {
         throw new Error("MANDATE_AMEND requires source_artifact_id, source_record_key, and source_hash.")
@@ -326,6 +322,33 @@ export function applyEvent(previous, event) {
         source_hash: body.source_hash,
         source_revision: body.source_revision ?? null,
         at_revision: state.revision,
+      }
+
+      // Retire the exact bound candidate's obsolete CI wait when an owner-
+      // approved amendment explicitly removes all required checks. The
+      // original event remains in the append-only log; no CI PASS is invented.
+      if (currentChecks.length > 0 && nextPolicy === "governed_auto" && nextChecks.length === 0) {
+        const candidateId = state.pr_binding?.candidate_id
+        const isBoundCiWait = wait => Boolean(candidateId && wait?.kind === "CI_PENDING" &&
+          ["harness_merge_candidate:", "harness_verify_external_merge:"].some(prefix => wait.operation === prefix + candidateId))
+        if (isBoundCiWait(state.external_wait)) {
+          state.external_wait_history ??= []
+          state.external_wait_history.push({ ...state.external_wait, outcome: "SUPERSEDED_BY_POLICY",
+            ended_at: event.timestamp, ended_at_revision: state.revision,
+            source_artifact_id: body.source_artifact_id, source_hash: body.source_hash })
+          state.external_wait = null
+        }
+        // Recover only an expired blocker proven to be the same obsolete CI wait.
+        const expired = expiredWait(state)
+        if (isBoundCiWait(expired)) {
+          state.last_blocker_resolution = {
+            class: state.blocker.class, blocked_at_revision: state.blocker.at_revision,
+            resolution: "Bound CI wait superseded by approved no-CI mandate",
+            source_artifact_id: body.source_artifact_id, source_hash: body.source_hash,
+            at_revision: state.revision,
+          }
+          state.blocker = null
+        }
       }
       break
     }
