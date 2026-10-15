@@ -3,7 +3,7 @@ import { applyProcessEvent, activeRecovery, assertProcessAcceptance, requiresTdd
 import { stableHash } from "./serialize.js"
 import { PLANNING_ESTIMATES } from "./time-policy.js"
 import { validateContractCorrection } from "./contract-correction.js"
-import { executionProgress } from "./progress.js"
+import { executionProgress, supervisorProgress } from "./progress.js"
 import { wuBudgetUsage } from "./wu-budget.js"
 // State projection. state is derived, never canonical: events.ndjson is the
 // source of truth and every read replays it. This makes divergence between a
@@ -209,7 +209,10 @@ export function applyEvent(previous, event, { historicalReplay = false } = {}) {
       break
     }
     case "SUPERVISOR_CONTINUE": {
-      if (!state.supervisor || (state.blocker && !expiredWait(state)) || state.completed || executionProgress(state) !== body.progress_hash) throw new Error("Continuation no longer eligible")
+      // Only an exact recoverable tooling blocker permits one read-only diagnostic
+      // continuation; authority/scope/security blockers remain hard stops.
+      const toolingTriage = state.blocker?.class === "BLOCKED_TOOLING" && !expiredWait(state)
+      if (!state.supervisor || (state.blocker && !expiredWait(state) && !toolingTriage) || state.completed || supervisorProgress(state) !== body.progress_hash) throw new Error("Continuation no longer eligible")
       state.supervisor.intent = { ...body, sent: false }
       break
     }

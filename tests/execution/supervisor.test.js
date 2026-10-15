@@ -127,3 +127,37 @@ test('expired external wait schedules one observational continuation, survives r
   assert.equal((await f.c.snapshot()).state.blocker.class, 'BLOCKED_EXTERNAL_FACT')
   assert.equal(f.prompts.size, 1)
 })
+
+test("tooling blocker receives one non-billable diagnostic wake, then ordinary continuation only after verified clearance", async t => {
+  const f = await fixture(t)
+  await f.commit("BLOCK", { class: "BLOCKED_TOOLING", reason: "historical COMPLETE replay failed" })
+  const before = (await f.c.snapshot()).state
+  assert.equal(await f.s.tick("E"), true)
+  const diagnostic = [...f.prompts.values()][0]
+  assert.match(diagnostic.text, /One-time read-only tooling diagnosis/)
+  assert.match(diagnostic.text, /Never start a new WU, reserve or launch a dispatch/)
+  assert.equal(await f.s.tick("E"), false)
+  await f.commit("CHECKPOINT", { note: "diagnosis only, not a new recovery" })
+  assert.equal(await f.s.tick("E"), false)
+  const blocked = (await f.c.snapshot()).state
+  assert.equal(blocked.blocker.class, "BLOCKED_TOOLING")
+  assert.equal(blocked.wu.completed, false)
+  assert.equal(blocked.budget.reserved_seconds, before.budget.reserved_seconds)
+  assert.equal(blocked.budget.used_seconds, before.budget.used_seconds)
+  assert.deepEqual(blocked.dispatches, before.dispatches)
+  await f.commit("CLEAR_BLOCKER", { blocker_class: "BLOCKED_TOOLING",
+    blocked_at_revision: blocked.blocker.at_revision, resolution: "Exact upstream repair verified in updated runtime" })
+  assert.equal(await f.s.tick("E"), true)
+  const prompts = [...f.prompts.values()]
+  assert.equal(prompts.length, 2)
+  assert.match(prompts[1].text, /Continue execution E from durable status/)
+})
+
+test("authority and scope blockers never receive autonomous diagnostic wake", async t => {
+  for (const cls of ["BLOCKED_AUTHORITY", "BLOCKED_SCOPE", "BLOCKED_SECURITY"]) {
+    const f = await fixture(t)
+    await f.commit("BLOCK", { class: cls, reason: "human decision required" })
+    assert.equal(await f.s.tick("E"), false)
+    assert.equal(f.prompts.size, 0)
+  }
+})
