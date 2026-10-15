@@ -7,7 +7,7 @@ import { readdir } from "node:fs/promises"
 import { join } from "node:path"
 import { createExecutionController } from "./execution.js"
 import { isValidatedHistoricalTerminal } from "./historical-terminal.js"
-import { executionProgress } from "./progress.js"
+import { supervisorProgress } from "./progress.js"
 import { wuBudgetUsage } from "./wu-budget.js"
 import { stableHash } from "./serialize.js"
 
@@ -74,11 +74,8 @@ export function createExecutionSupervisor(ctx, projectRoot, { enabled = true, no
       const unsettled = Object.values(state.dispatches).some(d => ["reserved", "pending_launch", "launched", "ambiguous"].includes(d.status))
       // The root may inspect/recover existing work but cannot start duplicates;
       // public controller admission enforces those limits.
-      // One diagnostic wake per exact tooling blocker, independent of normal WU progress.
-      // A checkpoint or repeated model message cannot create another wake.
-      const progress = toolingTriage
-        ? stableHash({ phase: "TOOLING_TRIAGE", progress: executionProgress(state), blocked_at_revision: state.blocker.at_revision })
-        : executionProgress(state)
+      // One diagnostic wake per exact tooling blocker; checkpoints cannot retrigger it.
+      const progress = supervisorProgress(state)
       let intent = state.supervisor.intent
       if (intent?.sent && intent.progress_hash === progress) return false
       if (!intent || intent.sent) {
