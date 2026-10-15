@@ -9,7 +9,7 @@ import { seedWuContract } from "./execution/wu-fixture.js"
 
 // Loads the actual package entry point/SDK and runs its registered hooks/tools.
 // The host is controlled; this is not a real-provider canary.
-async function host(t, supervisorFlag) {
+async function host(t, supervisorFlag, { agentReload = async () => {} } = {}) {
   const previousSupervisor = process.env.HARNESS_SUPERVISOR_ENABLED
   if (supervisorFlag === undefined) delete process.env.HARNESS_SUPERVISOR_ENABLED
   else process.env.HARNESS_SUPERVISOR_ENABLED = supervisorFlag
@@ -28,7 +28,7 @@ async function host(t, supervisorFlag) {
   const ctx = {
     app: { version: "2.0.25-fixture" }, location: { project: { canonical: root } },
     storage: { get: async key => storage.get(key), set: async (key, value) => storage.set(key, value) },
-    agent: { list: async () => [...agents.values()], get: async ({ agentID }) => agents.get(agentID), reload: async () => {},
+    agent: { list: async () => [...agents.values()], get: async ({ agentID }) => agents.get(agentID), reload: agentReload,
       transform: async fn => fn({ update: (id, fn) => { if (agents.has(id)) fn(agents.get(id)) } }) },
     session: { get: async ({ sessionID }) => sessions.get(sessionID), switchAgent: async ({ sessionID, agent }) => { sessions.get(sessionID).agent = agent },
       interrupt: async () => {}, hook: async (name, fn) => hooks.set(`session:${name}`, fn), context: async () => [], wait: async () => {}, prompt: async () => ({}) },
@@ -95,4 +95,20 @@ test("whole plugin: explicit supervisor zero disables automatic continuation", a
   const f = await host(t, "0")
   const readiness = JSON.parse((await f.definitions.get("harness_check_agent_readiness").execute({})).content)
   assert.equal(readiness.supervisor.enabled, false)
+})
+
+test("plugin setup completes without waiting for a hung agent.reload", async t => {
+  let timeout
+  try {
+    const fixture = await Promise.race([
+      host(t, "0", { agentReload: () => new Promise(() => {}) }),
+      new Promise((_, reject) => {
+        timeout = setTimeout(() => reject(new Error("Location plugin setup blocked on agent.reload")), 3000)
+      }),
+    ])
+    assert.ok(fixture.definitions.has("harness_execution_controller"))
+    assert.ok(fixture.definitions.has("harness_check_agent_readiness"))
+  } finally {
+    clearTimeout(timeout)
+  }
 })
