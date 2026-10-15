@@ -22,3 +22,10 @@ export function recoveryAction(state) {
       cls === "BUDGET_EXHAUSTED" ? "Existing owner approval to adopt planning estimates; legacy finite WU extensions use amend_wu_budget. Epic exhaustion requires separate owner authority." :
       cls === "BLOCKED_AUTHORITY" ? "An applicable approved decision; reuse existing authorization" : "Resolve and verify the actual cause; preserve permissions and scope" }
 }
+
+export function supervisorProgress(state) {
+  const toolingTriage = state.blocker?.class === "BLOCKED_TOOLING" && !expiredWait(state)
+  return toolingTriage
+    ? stableHash({ phase: "TOOLING_TRIAGE", progress: executionProgress(state), blocked_at_revision: state.blocker.at_revision })
+    : executionProgress(state)
+}
