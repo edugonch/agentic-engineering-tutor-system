@@ -55,7 +55,8 @@ export function createExecutionSupervisor(ctx, projectRoot, { enabled = true, no
       const c = await controller(execution)
       let { state } = await c.snapshot()
       const session = state.supervisor?.session_id
-      if (!session || state.completed || (state.blocker && !expiredWait(state)) || state.mandate?.authority_kind !== "OWNER_APPROVED_EPIC") { disarm(execution); return false }
+      const toolingTriage = state.blocker?.class === "BLOCKED_TOOLING" && !expiredWait(state)
+      if (!session || state.completed || (state.blocker && !expiredWait(state) && !toolingTriage) || state.mandate?.authority_kind !== "OWNER_APPROVED_EPIC") { disarm(execution); return false }
       const info = await identity(session)
       if (info.outcome !== "succeeded") { disarm(execution); return false } // never override cancellation or failure
       const budget = state.budget
@@ -73,7 +74,11 @@ export function createExecutionSupervisor(ctx, projectRoot, { enabled = true, no
       const unsettled = Object.values(state.dispatches).some(d => ["reserved", "pending_launch", "launched", "ambiguous"].includes(d.status))
       // The root may inspect/recover existing work but cannot start duplicates;
       // public controller admission enforces those limits.
-      const progress = executionProgress(state)
+      // One diagnostic wake per exact tooling blocker, independent of normal WU progress.
+      // A checkpoint or repeated model message cannot create another wake.
+      const progress = toolingTriage
+        ? stableHash({ phase: "TOOLING_TRIAGE", progress: executionProgress(state), blocked_at_revision: state.blocker.at_revision })
+        : executionProgress(state)
       let intent = state.supervisor.intent
       if (intent?.sent && intent.progress_hash === progress) return false
       if (!intent || intent.sent) {
@@ -85,7 +90,8 @@ export function createExecutionSupervisor(ctx, projectRoot, { enabled = true, no
       internal.add(intent.intent_id)
       await ctx.session.prompt({ sessionID: session, id: intent.intent_id, delivery: "queue", resume: true,
         metadata: { harness_continuation: intent.intent_id, execution_id: execution },
-        text: `Continue execution ${execution} from durable status and verify under its existing approved mandate. ${expiredWait(state) ? `Observe the remote condition for expired wait ${expiredWait(state).operation}; recovery is read-only until terminal evidence is obtained. Never assume success.` : state.external_wait ? `The durable external wait is due: observe and retry ${state.external_wait.operation}; never assume remote success.` : unsettled ? "Inspect/recover the existing dispatch before any new work." : "Execute the next authorized transition."} Preserve budget, scope, permissions and all evidence. A runtime terminal result is not acceptance. Do not request approvals already applicable. Stop on a real unresolved blocker or completion.` })
+        text: toolingTriage ? `One-time read-only tooling diagnosis for execution ${execution}, blocker at revision ${state.blocker.at_revision}. Inspect exact runtime/source facts once. If the exact blocker cause is already demonstrably repaired, clear only that recoverable blocker using its exact revision and concrete verification evidence, then return; ordinary authorized continuation will be scheduled separately. Never start a new WU, reserve or launch a dispatch, run billable implementation, change authority, alter the journal, or bypass review during this diagnosis. If repair is outside the frozen mandate, state one narrowly scoped owner decision with the exact failure and proposed repair; do not repeat the request.`
+          : `Continue execution ${execution} from durable status and verify under its existing approved mandate. ${expiredWait(state) ? `Observe the remote condition for expired wait ${expiredWait(state).operation}; recovery is read-only until terminal evidence is obtained. Never assume success.` : state.external_wait ? `The durable external wait is due: observe and retry ${state.external_wait.operation}; never assume remote success.` : unsettled ? "Inspect/recover the existing dispatch before any new work." : "Execute the next authorized transition."} Preserve budget, scope, permissions and all evidence. A runtime terminal result is not acceptance. Do not request approvals already applicable. Stop on a real unresolved blocker or completion.` })
       await commit(c, session, "SUPERVISOR_SENT", { intent_id: intent.intent_id }, `${execution}:sent:${intent.intent_id}`)
       return true
     } finally { running.delete(execution) }
