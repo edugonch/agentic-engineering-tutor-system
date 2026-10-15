@@ -1053,10 +1053,15 @@ export function applyEvent(previous, event, { historicalReplay = false } = {}) {
     }
 
     case "COMPLETE": {
-      if (state.wu && !state.wu.completed) {
+      // An older event log may already contain COMPLETE from before WU-level
+      // completion was enforced. Replay that durable terminal fact verbatim;
+      // only a newly committed COMPLETE must satisfy today's strict gates.
+      // project() validates event sequence/revisions; the controller separately
+      // validates integrity hashes before replay. Never forge WU_COMPLETE.
+      if (!historicalReplay && state.wu && !state.wu.completed) {
         throw new Error(`COMPLETE blocked: active WU ${state.wu.wu_id} is not complete.`)
       }
-      if (Array.isArray(state.mandate?.wu_sequence)) {
+      if (!historicalReplay && Array.isArray(state.mandate?.wu_sequence)) {
         if (state.activated_wu_ids.length !== state.mandate.wu_sequence.length) {
           const remaining = state.mandate.wu_sequence.slice(state.activated_wu_ids.length)
           throw new Error(`COMPLETE blocked: frozen Epic WU sequence is incomplete; remaining WUs: ${remaining.join(", ")}.`)
