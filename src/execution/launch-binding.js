@@ -58,6 +58,7 @@ export async function findPendingLaunchBinding(projectRoot, sessionID, agent) {
   const { readdir } = await import("node:fs/promises")
   const { join } = await import("node:path")
   const { createExecutionController } = await import("./execution.js")
+  const { isValidatedHistoricalTerminal } = await import("./historical-terminal.js")
   const root = join(projectRoot, ".harness/execution/controller")
   let entries
   try { entries = await readdir(root, { withFileTypes: true }) }
@@ -65,7 +66,12 @@ export async function findPendingLaunchBinding(projectRoot, sessionID, agent) {
   const matches = []
   for (const entry of entries.filter(e => e.isDirectory())) {
     const c = await createExecutionController({ dir: join(root, entry.name) })
-    const { state } = await c.snapshot()
+    let state
+    try { ({ state } = await c.snapshot()) }
+    catch (error) {
+      if (await isValidatedHistoricalTerminal(join(root, entry.name), error)) continue
+      throw error
+    }
     if (state.completed) continue
     for (const [dispatch_id, d] of Object.entries(state.dispatches)) {
       if (d.prepared_by_session_id !== sessionID || d.expected_agent !== agent || d.status !== "pending_launch") continue
