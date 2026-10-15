@@ -6,6 +6,7 @@ import { withVerificationBudget, recoverVerificationPhase } from "./src/executio
 import { packageFingerprint } from "./src/package-fingerprint.js"
 import { createWorkerBudgetGuard } from "./src/execution/worker-budget.js"
 import { createExecutionSupervisor } from "./src/execution/supervisor.js"
+import { deferPluginStartup } from "./src/plugin-startup.js"
 import { runWithExternalWait } from "./src/execution/external-wait.js"
 import { findExecutionForCandidate, runRebindPR, runAbortMerge } from "./src/execution/merge.js"
 import { findWuExecution } from "./src/execution/execution-query.js"
@@ -106,7 +107,6 @@ export default Plugin.define({
         packageRoot: fileURLToPath(new URL(".", import.meta.url)),
         configDir: resolveOpenCodeConfigDir(process.env),
       })
-      if (agentProvisioning.changed) await ctx.agent.reload()
     } catch (error) {
       agentProvisioning = {
         status: "failed",
@@ -121,9 +121,13 @@ export default Plugin.define({
     // project copies that the file provisioner correctly leaves untouched.
     await registerOrchestratorSteps(ctx.agent, process.env)
     await registerSpecialistSteps(ctx.agent, process.env)
-    await ctx.agent.reload()
+    // Agent transforms are registered during setup. Re-materializing the
+    // registry or resuming historical sessions here can re-enter the Location
+    // bootstrap and prevent providers/models from ever becoming available.
 
+    const agentRuntimeRefresh = { status: agentProvisioning.changed ? "SCHEDULED" : "NOT_REQUIRED", error: null }
     const currentWorkUnitAgentReadiness = async () => ({
+      agent_runtime_refresh: { ...agentRuntimeRefresh },
       ...(await checkWorkUnitAgentReadiness(ctx.agent)),
       profile_provisioning: agentProvisioning,
       orchestrator_steps: await inspectOrchestratorSteps(ctx.agent),
@@ -889,10 +893,34 @@ export default Plugin.define({
       })().catch((error) => continuation.recordSubscriptionError(error?.message ?? String(error)))
     }
 
-    await supervisor.resume()
     await registerHarnessCommand(ctx, ownership)
 
+    // Do not make server Location activation depend on runtime registry reload
+    // or historical execution scans. They are recoverable background work, not
+    // permission to start WUs, and errors remain visible in readiness diagnostics.
+    const cancelStartup = deferPluginStartup({
+      tasks: [
+        ...(agentProvisioning.changed ? [{
+          name: "agent.reload",
+          run: async () => {
+            agentRuntimeRefresh.status = "RUNNING"
+            await ctx.agent.reload()
+            agentRuntimeRefresh.status = "READY"
+          },
+        }] : []),
+        { name: "supervisor.resume", run: () => supervisor.resume() },
+      ],
+      onError: (name, error) => {
+        if (name === "agent.reload") {
+          agentRuntimeRefresh.status = "FAILED"
+          agentRuntimeRefresh.error = error?.message ?? String(error)
+        }
+        continuation.recordSubscriptionError(`Harness deferred ${name}: ${error?.message ?? String(error)}`)
+      },
+    })
+
     return () => {
+      cancelStartup()
       eventSubscription.abort()
       workerBudget.dispose()
       supervisor.dispose()
