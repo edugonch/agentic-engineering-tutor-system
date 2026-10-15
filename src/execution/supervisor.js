@@ -6,6 +6,7 @@ import { usesPlanningEstimates } from "./time-policy.js"
 import { readdir } from "node:fs/promises"
 import { join } from "node:path"
 import { createExecutionController } from "./execution.js"
+import { isValidatedHistoricalTerminal } from "./historical-terminal.js"
 import { executionProgress } from "./progress.js"
 import { wuBudgetUsage } from "./wu-budget.js"
 import { stableHash } from "./serialize.js"
@@ -100,6 +101,7 @@ export function createExecutionSupervisor(ctx, projectRoot, { enabled = true, no
         const { state } = await c.snapshot()
         if (!sessionID || state.supervisor?.session_id === sessionID) await tick(entry.name)
       } catch (error) {
+        if (await isValidatedHistoricalTerminal(join(root, entry.name), error)) continue
         errors.push({ execution_id: entry.name, message: error.message })
         if (errors.length > 20) errors.shift()
       }
