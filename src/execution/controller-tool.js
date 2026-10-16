@@ -21,7 +21,8 @@ import { recoveryAction } from "./progress.js"
 
 import { join } from "node:path"
 import { compileWuContract } from "./wu-contract.js"
-import { inspectStaleWorktreeScope, isStaleWorktreeScopeBlocker } from "./scope-recovery.js"
+import { inspectStaleWorktreeScope, isStaleWorktreeScopeBlocker, classifyScopeBlocker } from "./scope-recovery.js"
+import { verifyScopeCheckoutRoots } from "./scope-checkout.js"
 import { compileMandateDerivedWu, inspectMandateDerivedWu, isTechnicalWuContractBlocker } from "./jit-contract.js"
 import { inspectAuthorityGap } from "./authority-triage.js"
 import { wuBudgetUsage } from "./wu-budget.js"
@@ -204,7 +205,7 @@ export async function claimDispatchLaunch(projectRoot, { execution_id, dispatch_
   return res
 }
 
-export async function runExecutionController(projectRoot, input, candidateRegistry) {
+export async function runExecutionController(projectRoot, input, candidateRegistry, options = {}) {
   const executionId = sanitizeId(input.execution_id, "execution_id")
   const dir = join(projectRoot, ".harness", "execution", "controller", executionId)
   const controller = await createExecutionController({ dir, lease_ttl_ms: 30000 })
@@ -785,15 +786,23 @@ export async function runExecutionController(projectRoot, input, candidateRegist
 
   if (action === "inspect_scope_worktree") {
     const snap = await controller.snapshot()
-    if (!isStaleWorktreeScopeBlocker(snap.state.blocker)) {
+    const classification = classifyScopeBlocker(snap.state.blocker)
+    if (classification.kind === "SCOPE_CONFLICT" || classification.kind === "NOT_SCOPE") {
       return { action, status: "NOT_ELIGIBLE", revision: snap.state.revision,
-        blocker: snap.state.blocker, note: "Genuine scope changes remain blocked" }
+        blocker: snap.state.blocker, classification, reason: classification.reason }
+    }
+    if (classification.kind === "EVIDENCE_REQUIRED") {
+      return { action, status: "EVIDENCE_REQUIRED", revision: snap.state.revision,
+        blocker: snap.state.blocker, classification, reason: classification.reason }
     }
     try {
-      const proof = await inspectStaleWorktreeScope(projectRoot, snap.state, registry)
-      return { action, status: "VERIFIED_RECONCILABLE", revision: snap.state.revision, proof }
+      const roots = await verifyScopeCheckoutRoots(projectRoot, options.checkoutRoot ?? projectRoot)
+      const proof = await inspectStaleWorktreeScope(roots.checkoutRoot, snap.state, registry)
+      return { action, status: "VERIFIED_RECONCILABLE", revision: snap.state.revision,
+        canonical_root: roots.canonicalRoot, classification, proof }
     } catch (error) {
-      return { action, status: "NOT_VERIFIED", revision: snap.state.revision, reason: error.message }
+      return { action, status: "NOT_VERIFIED", revision: snap.state.revision,
+        classification, reason: error.message }
     }
   }
 
@@ -819,7 +828,8 @@ export async function runExecutionController(projectRoot, input, candidateRegist
         !isStaleWorktreeScopeBlocker(snap.state.blocker)) {
       throw new Error("Scope reconciliation cannot target a different or genuine scope blocker")
     }
-    const proof = await inspectStaleWorktreeScope(projectRoot, snap.state, registry)
+    const roots = await verifyScopeCheckoutRoots(projectRoot, options.checkoutRoot ?? projectRoot)
+    const proof = await inspectStaleWorktreeScope(roots.checkoutRoot, snap.state, registry)
     const body = { expected_revision: expectedRevision, blocked_at_revision: blockedAt,
       wu_id: snap.state.wu.wu_id, proof }
     const result = await controller.commit({ operation_id, operation_type: "SCOPE_WORKTREE_RECONCILE", body }, {
