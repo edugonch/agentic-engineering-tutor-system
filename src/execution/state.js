@@ -215,7 +215,8 @@ export function applyEvent(previous, event, { historicalReplay = false } = {}) {
       // continuation; authority/scope/security blockers remain hard stops.
       const toolingTriage = state.blocker?.class === "BLOCKED_TOOLING" && !expiredWait(state)
       const contractTriage = isTechnicalWuContractBlocker(state.blocker) && (!state.wu || state.wu.completed)
-      if (!state.supervisor || (state.blocker && !expiredWait(state) && !toolingTriage && !contractTriage) ||
+      const scopeTriage = isStaleWorktreeScopeBlocker(state.blocker)
+      if (!state.supervisor || (state.blocker && !expiredWait(state) && !toolingTriage && !contractTriage && !scopeTriage) ||
           state.completed || supervisorProgress(state) !== body.progress_hash) throw new Error("Continuation no longer eligible")
       const previous = state.supervisor.intent
       const attempt = body.attempt ?? 1
