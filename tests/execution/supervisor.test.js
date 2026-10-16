@@ -135,7 +135,8 @@ test("tooling blocker receives one non-billable diagnostic wake, then ordinary c
   const before = (await f.c.snapshot()).state
   assert.equal(await f.s.tick("E"), true)
   const diagnostic = [...f.prompts.values()][0]
-  assert.match(diagnostic.text, /One-time read-only tooling diagnosis/)
+  assert.match(diagnostic.text, /One-time tooling diagnosis/)
+  assert.match(diagnostic.text, /harness_retry_blocked_verification/)
   assert.match(diagnostic.text, /Never start a new WU, reserve or launch a dispatch/)
   assert.equal(await f.s.tick("E"), false)
   await f.commit("CHECKPOINT", { note: "diagnosis only, not a new recovery" })
