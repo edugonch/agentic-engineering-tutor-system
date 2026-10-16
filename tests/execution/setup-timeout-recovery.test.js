@@ -8,6 +8,7 @@ import { verificationContractHash } from "../../src/execution/verification-contr
 import { treeHash } from "../../src/execution/candidate.js"
 import { createVerificationReceipt, writeVerificationReceipt } from "../../src/execution/verification-results.js"
 import { retryBlockedFrozenVerification } from "../../src/execution/setup-timeout-recovery.js"
+import { recoveryAction } from "../../src/execution/progress.js"
 
 async function fixture(t, { blockClass = "BLOCKED_TOOLING", reason = "Frozen npm ci setup verification timed out after 120 s", receiptMode = "timeout", actualCheck = false } = {}) {
   const root = await mkdtemp(join(tmpdir(), "harness-retry-"))
@@ -65,6 +66,7 @@ async function fixture(t, { blockClass = "BLOCKED_TOOLING", reason = "Frozen npm
 test("setup retry with a historical immutable timed-out receipt clears only the matched tooling stop after full-check PASS", async t => {
   const f = await fixture(t)
   const before = (await f.c.snapshot()).state
+  assert.equal(recoveryAction(before).action, "harness_retry_blocked_verification")
   const result = await retryBlockedFrozenVerification({
     ...f.params,
     run: async (_candidate, check, { budgetMs }) => {
@@ -95,6 +97,7 @@ test("failed full check leaves tooling stop, preserves budget charging and disal
   assert.equal(result.status, "FAIL")
   assert.equal(result.recovery, "UNRESOLVED_SETUP_RETRY_FAILED")
   assert.equal((await f.c.snapshot()).state.blocker.class, "BLOCKED_TOOLING")
+  assert.equal(recoveryAction((await f.c.snapshot()).state).action, "clear_blocker", "a failed one-shot retry must not be suggested again")
   await assert.rejects(retryBlockedFrozenVerification({ ...f.params, run: async () => assert.fail() }),
     /ALREADY_ATTEMPTED/)
   const state = (await f.c.snapshot()).state
