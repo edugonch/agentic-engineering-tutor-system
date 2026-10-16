@@ -160,6 +160,12 @@ This is a conservative liveness bound, not a guarantee that an external
 provider will run every queued prompt. Actual root-turn execution and
 end-to-end builder-to-merge behavior require a real OpenCode canary.
 
+### Auditable recovery diagnostics and typed new scope stops
+
+`harness_execution_controller(action="audit_recovery")` is a strictly read-only trace of the exact existing blocker event (including its operation identity, **previous** controller revision `blocker.at_revision`, source body and stable hash), frozen Work Unit, predecessor completion and verified merge receipts, open dispatches, and current budget ledger. It performs no new authorization and does not clear blockers. Historical BLOCK events may lack typed scope provenance and retain their original contents.
+
+New `BLOCKED_SCOPE` reports through the public controller must include `scope_cause: {"kind":"FUNCTIONAL_SCOPE_CHANGE","authority_ref":"..."}`. Worktree-only conditions must use tooling/environment classification rather than creating a terminal scope stop. The structured cause is preserved in the BLOCK event, replayed in the state and interpreted as requiring separate owner scope authority regardless of free-text wording. Existing historical scope blockers remain governed by the narrow evidence-based legacy path. The event's `at_revision` represents its *previous* revision before applying BLOCK, not the next state revision.
+
 ### Stale-worktree scope reconciliation (fail-closed)
 
 A `BLOCKED_SCOPE` caused by a checkout disagreement is not itself evidence
