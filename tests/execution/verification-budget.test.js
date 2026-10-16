@@ -113,3 +113,52 @@ test("planning estimates allow verification after WU and reviewer reservation ov
   } })).status, "PASS")
   assert.deepEqual(await c.snapshot(), before, "reviewer does not acquire parent lease or double-charge its interval")
 })
+
+
+test("RED: a verified prior setup timeout permits one budgeted unchanged frozen check retry under BLOCKED_TOOLING", async t => {
+  const { c, commit, candidate } = await fixture(t, true)
+  await commit("BLOCK", { class: "BLOCKED_TOOLING", reason: "Frozen verification setup npm ci timed out after 120000 ms" })
+  const before = (await c.snapshot()).state
+  let executed = 0
+  await assert.rejects(withVerificationBudget({
+    controller: c, candidate, check_id: "check", context: { sessionID: "root" },
+    run: async () => { executed++; return { status: "PASS" } },
+  }), /BLOCKED_TOOLING/)
+  assert.equal(executed, 0)
+  await assert.rejects(withVerificationBudget({
+    controller: c, candidate, check_id: "check", context: { sessionID: "root" },
+    setupRecovery: { kind: "VERIFIED_SETUP_TIMEOUT", blocked_at_revision: before.blocker.at_revision - 1, check_id: "check", source_wu_id: "WU1" },
+    run: async () => { executed++; return { status: "PASS" } },
+  }), /BLOCKED_TOOLING|recovery/i)
+  assert.equal(executed, 0)
+  const result = await withVerificationBudget({
+    controller: c, candidate, check_id: "check", context: { sessionID: "root" },
+    setupRecovery: { kind: "VERIFIED_SETUP_TIMEOUT", blocked_at_revision: before.blocker.at_revision, check_id: "check", source_wu_id: "WU1" },
+    run: async ({ budgetMs }) => {
+      executed++
+      assert.ok(budgetMs > 0)
+      assert.ok(budgetMs <= 30000)
+      return { status: "PASS" }
+    },
+  })
+  assert.equal(result.status, "PASS")
+  assert.equal(executed, 1)
+  const after = (await c.snapshot()).state
+  assert.equal(after.blocker.class, "BLOCKED_TOOLING", "execution alone never clears a blocker")
+  assert.equal(after.budget.active_phase, null)
+  assert.equal(after.verification_phase, undefined)
+  assert.equal((await c.snapshot()).events.filter(e => e.operation_type === "PHASE_END").length, 1)
+})
+
+test("RED: no recovery admission for authority/security blockers or a subagent without an active dispatch", async t => {
+  for (const blockClass of ["BLOCKED_AUTHORITY", "BLOCKED_SECURITY"]) {
+    const { c, commit, candidate } = await fixture(t, true)
+    await commit("BLOCK", { class: blockClass, reason: "not a tooling setup failure" })
+    const blocker = (await c.snapshot()).state.blocker
+    await assert.rejects(withVerificationBudget({
+      controller: c, candidate, check_id: "check", context: { sessionID: "root" },
+      setupRecovery: { kind: "VERIFIED_SETUP_TIMEOUT", blocked_at_revision: blocker.at_revision, check_id: "check", source_wu_id: "WU1" },
+      run: async () => assert.fail("no execution permitted"),
+    }), /BLOCKED_AUTHORITY|BLOCKED_SECURITY/)
+  }
+})
