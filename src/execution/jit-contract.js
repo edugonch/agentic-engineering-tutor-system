@@ -46,7 +46,7 @@ export async function compileMandateDerivedWu(root, state, wuId, definition) {
   const active_seconds = Math.floor(remaining / remainingWus)
   if (active_seconds < 1) throw new Error("JIT_BUDGET_EXHAUSTED: insufficient remaining Epic allocation")
   const verification_contract = await deriveVerificationContract(root)
-  const appendix = `\n\n## Mandate-derived technical execution contract\n\nPlanning estimate only; technical authority is the approved Epic, not an individually owner-approved WU. Preserve all original scope, acceptance and exclusions.\nexecution_contract: ${JSON.stringify({ active_seconds, verification_contract, process_obligations: /\\bTDD\\b/i.test(definition.content) ? [{ kind: "tdd", required: true }] : [] })}\n`
+  const appendix = `\n\n## Mandate-derived technical execution contract\n\nPlanning estimate only; technical authority is the approved Epic, not an individually owner-approved WU. Preserve all original scope, acceptance and exclusions.\nexecution_contract: ${JSON.stringify({ active_seconds, verification_contract, process_obligations: /\bTDD\b/i.test(definition.content) ? [{ kind: "tdd", required: true }] : [] })}\n`
   const compiled = compileWuContract(wuId, {
     ...definition, content: definition.content + appendix,
     source_authority: "MANDATE_DERIVED",
