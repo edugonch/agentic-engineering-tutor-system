@@ -48,6 +48,7 @@ export const OPERATION_TYPES = Object.freeze([
   "BLOCK", // record a governed stop (typed blocker class)
   "AUTHORITY_RESOLVE", // apply an explicit approved decision to an exact authority stop
   "CLEAR_BLOCKER", // resolve one explicitly recoverable blocker after its cause is repaired
+  "SCOPE_WORKTREE_RECONCILE", // verified prior-merge worktree recovery for one historical stale scope blocker
   "COMPLETE", // record EPIC_EXECUTION_VERIFIED (technical completion, not owner acceptance)
   "BIND_PR", // immutably bind a GitHub PR to the active WU's frozen candidate (repository, pr_number, head/base SHA)
   "RECORD_CI", // record exact-head CI evidence for one check, bound to a candidate (multiple checks per candidate)
