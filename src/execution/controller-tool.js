@@ -21,6 +21,7 @@ import { recoveryAction } from "./progress.js"
 
 import { join } from "node:path"
 import { compileWuContract } from "./wu-contract.js"
+import { compileMandateDerivedWu, isTechnicalWuContractBlocker } from "./jit-contract.js"
 import { wuBudgetUsage } from "./wu-budget.js"
 import { stableHash } from "./serialize.js"
 import { readLog, validateLog } from "./event-log.js"
@@ -473,6 +474,35 @@ export async function runExecutionController(projectRoot, input, candidateRegist
       return { action, status: "SOURCE_NORMALIZATION_OR_SELECTION_REQUIRED", next_wu_id: next,
         reason: error.message, revision: state.revision }
     }
+  }
+
+  if (action === "derive_and_stage_next_wu_contract") {
+    // The frozen Epic, not a fabricated per-WU APPROVED label, authorizes
+    // technical normalization of exactly the next predeclared DRAFT.
+    const wuId = String(input.wu_id ?? "")
+    const sourceId = String(input.wu_artifact_id ?? "")
+    if (!wuId || !sourceId || !Number.isSafeInteger(input.expected_revision)) {
+      throw new Error("JIT requires wu_id, exact source and expected_revision")
+    }
+    const snap = await controller.snapshot()
+    const previous = snap.events.find(e => e.operation_type === "WU_CONTRACT_STAGE" &&
+      e.body.wu_id === wuId && e.body.source_artifact_id === sourceId && e.body.derived_technical === true)
+    if (previous) {
+      if (previous.body.expected_revision !== input.expected_revision) throw new Error("JIT replay revision mismatch")
+      const res = await commitAction(controller, holder, previous.operation_id, "WU_CONTRACT_STAGE", previous.body)
+      return { action, commit_status: res.status, ...(await summary(controller)) }
+    }
+    if (snap.state.revision !== input.expected_revision) throw new Error("JIT stale revision")
+    if (snap.state.mandate?.authority_kind !== MANDATE_AUTHORITY.OWNER_APPROVED_EPIC) throw new Error("JIT requires an owner-approved Epic")
+    if (snap.state.blocker && !isTechnicalWuContractBlocker(snap.state.blocker)) throw new Error("JIT refuses unrelated authority or security blockers")
+    if (snap.state.staged_wu_contract) throw new Error("JIT contract already staged")
+    const source = await readWorkUnitDefinition(projectRoot, wuId, snap.state.mandate.source_artifact_id, sourceId)
+    const contract = await compileMandateDerivedWu(projectRoot, snap.state, wuId, source)
+    const body = { wu_id: wuId, source_artifact_id: sourceId, expected_revision: snap.state.revision,
+      derived_technical: true, blocker_at_revision: snap.state.blocker?.at_revision ?? null, contract }
+    const res = await commitAction(controller, holder,
+      `${executionId}:jit-wu-stage:${wuId}:${contract.contract_hash}`, "WU_CONTRACT_STAGE", body)
+    return { action, commit_status: res.status, ...(await summary(controller)) }
   }
 
   if (action === "stage_wu_contract") {
