@@ -199,7 +199,7 @@ test("audit_recovery returns exact historical BLOCK event and does not modify du
   assert.equal(result.active_wu_id, "WU-CURRENT")
   assert.equal(result.blocker.at_revision, before.state.blocker.at_revision)
   assert.equal(result.blocker_event.operation_type, "BLOCK")
-  assert.equal(result.blocker_event.next_revision, before.state.blocker.at_revision)
+  assert.equal(result.blocker_event.previous_revision, before.state.blocker.at_revision)
   assert.equal(result.blocker_event.body.reason, before.state.blocker.reason)
   assert.match(result.blocker_event.body_hash, /^[a-f0-9]{64}$/)
   assert.deepEqual(result.completed_predecessors.map(x => x.wu_id), ["WU-PREV"])
