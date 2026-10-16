@@ -1,8 +1,10 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { mkdtemp, rm, writeFile } from "node:fs/promises"
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { execFileSync } from "node:child_process"
+import { createCandidateRegistry } from "../src/execution/candidate-registry.js"
 import plugin from "../index.js"
 import { recordKnowledgeArtifact } from "../src/project-knowledge.js"
 import { seedWuContract } from "./execution/wu-fixture.js"
@@ -126,4 +128,39 @@ test("plugin exposes loaded fingerprint and injects autonomy guard into root con
   assert.match(guidance, /WU_PLANNING_ESTIMATES/)
   assert.match(guidance, /inspect_authority_gap/)
   assert.match(guidance, /Do not ask the owner to create the technical design/)
+})
+
+
+test("RED plugin: freeze candidate captures the moved root session worktree, not stale canonical files", async t => {
+  const f = await host(t)
+  const git = (...args) => execFileSync("git", args, { cwd: f.root, encoding: "utf8" }).trim()
+  git("init", "-q")
+  git("config", "user.name", "Harness plugin test")
+  git("config", "user.email", "harness@example.invalid")
+  await writeFile(join(f.root, "README.md"), "# Canonical checkout\\n")
+  git("add", "README.md")
+  git("commit", "-qm", "canonical")
+  const linked = join(f.root, "moved-session-wt")
+  git("worktree", "add", "-q", "--detach", linked, "HEAD")
+
+  await assert.rejects(f.run({ action: "status" }), /HARNESS_HANDOFF_REQUIRED/)
+  await recordKnowledgeArtifact(f.root, { artifact_type: "epic", artifact_id: "epic-moved",
+    title: "Approved fixture", status: "APPROVED", owner_confirmed: true,
+    source_refs: ["https://example.com/harness-owner"], content:
+    'execution_mandate: {"max_wus":1,"total_seconds":3600,"merge_policy":"none","required_ci_checks":[],"wu_sequence":["WU-MOVED"]}',
+  })
+  await seedWuContract(f.root, "WU-MOVED", "epic-moved", 3600)
+  await f.run({ action: "approve_mandate", epic_artifact_id: "epic-moved" })
+  await f.run({ action: "activate_wu", wu_id: "WU-MOVED", mandate_id: "E-MANDATE-001" })
+  await mkdir(join(linked, "docs"), { recursive: true })
+  await writeFile(join(linked, "docs/ONLY-IN-MOVED-SESSION.md"), "# The actual WU output\\n")
+  f.sessions.get("ses_root").location = { directory: linked }
+  const result = JSON.parse((await f.definitions.get("harness_freeze_candidate").execute({
+    wu_id: "WU-MOVED", overlay_paths: ["docs/ONLY-IN-MOVED-SESSION.md"],
+  }, { sessionID: "ses_root" })).content)
+  const registry = createCandidateRegistry({ dir: join(f.root, ".harness/execution") })
+  const candidate = await registry.load(result.candidate_id)
+  assert.ok(candidate.overlay.some(entry => entry.path === "docs/ONLY-IN-MOVED-SESSION.md"))
+  assert.equal(candidate.overlay.find(entry => entry.path === "docs/ONLY-IN-MOVED-SESSION.md").type, "file")
+  assert.equal(candidate.base?.commit ?? null, null)
 })
