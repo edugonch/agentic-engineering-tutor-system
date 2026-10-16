@@ -158,6 +158,7 @@ test("RED incident: historical scope blocker says predecessor file UNTRACKED, no
 
 test("RED classification: a new BLOCKED_SCOPE cannot be created for a mere untracked previous artifact", async t => {
   const f = await setup(t, { blockerClass: "BLOCKED_TOOLING", reason: "worktree recovery pending" })
+  await f.run("clear_blocker", { resolution: "Initial tooling-only fixture stop was repaired" })
   const snapshot = await f.controller.snapshot()
   await assert.rejects(f.run("block", {
     class: "BLOCKED_SCOPE",
@@ -174,5 +175,15 @@ test("adversarial safety: a real expansion mentioning worktree evidence is never
   await assert.rejects(f.run("reconcile_stale_worktree_scope", {
     expected_revision: now.revision, blocked_at_revision: now.blocker.at_revision,
   }), /genuine scope blocker/)
+  assert.equal((await f.run("status")).blocker.class, "BLOCKED_SCOPE")
+})
+
+
+test("RED diagnosis: unknown legacy BLOCKED_SCOPE cause is EVIDENCE_REQUIRED, not proven genuine scope drift", async t => {
+  const f = await setup(t, { reason: "Historical scope stop, original classification details unavailable" })
+  const out = await f.run("inspect_scope_worktree")
+  assert.equal(out.status, "EVIDENCE_REQUIRED")
+  assert.equal(out.blocker.class, "BLOCKED_SCOPE")
+  assert.match(out.reason, /cause/i)
   assert.equal((await f.run("status")).blocker.class, "BLOCKED_SCOPE")
 })
