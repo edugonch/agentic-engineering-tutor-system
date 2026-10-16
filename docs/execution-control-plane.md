@@ -35,6 +35,39 @@ Two questions must never collapse into one field:
   The original authority event remains in `events.ndjson`; the amendment is a
   new auditable event, never an overwrite.
 
+### Frozen successor preactivation recovery
+
+If an owner-approved Epic has completed its current WU but is blocked on
+`BLOCKED_AUTHORITY` before the next frozen WU can activate, **do not** call
+`bind_wu_contract` (active-WU only), clear the authority blocker generically,
+edit `events.ndjson`, or reactivate a completed predecessor.
+
+Use this governed sequence:
+
+1. Read `harness_execution_controller(status)` and `verify` for the existing
+   execution, including the exact `revision`, `blocker.at_revision`, mandate,
+   and next `wu_sequence` entry.
+2. Find the approved, fully executable successor WU artifact in the knowledge
+   index. The source must link to the approved Epic, pass content-hash checks,
+   and contain its exact `execution_contract` with verification commands.
+3. Call `stage_wu_contract` with the **next frozen** `wu_id`, exact
+   `wu_artifact_id` (prefer its record key), and `expected_revision`.
+   This commits an append-only `WU_CONTRACT_STAGE` event. The original authority
+   blocker stays active; no WU or dispatch becomes active.
+4. Apply the previously approved decision using
+   `resolve_authority_blocker(decision_artifact_id)`. Its execution, mandate,
+   next WU and blocked-at revision must match. The resulting authority receipt
+   includes the staged contract hash.
+5. Call `activate_wu` for precisely that WU and staged source. Activation
+   consumes the staged contract, rejects drift/reordering, and continues using
+   existing verification/review/merge policy.
+
+This repair does not manufacture approval. A DRAFT with incomplete acceptance,
+budget, or verification metadata must first obtain an executable normalized
+source through the project's existing authorized JIT normalization/approval
+procedure. The original DRAFT and frozen sequence remain intact. Apply this
+per WU; never promote the entire future backlog as a batch.
+
 ## 2. Durability target
 
 - **v1 guarantee:** survive process crash, OpenCode restart, and an orderly
