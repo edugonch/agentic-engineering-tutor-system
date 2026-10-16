@@ -3,6 +3,8 @@ import assert from "node:assert/strict"
 import { mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { sha256 } from "../../src/execution/serialize.js"
+import { isTechnicalWuContractBlocker } from "../../src/execution/jit-contract.js"
 import { runExecutionController } from "../../src/execution/controller-tool.js"
 import { createExecutionController } from "../../src/execution/execution.js"
 import { recordKnowledgeArtifact } from "../../src/project-knowledge.js"
@@ -202,6 +204,7 @@ test("mandate-derived JIT stages the exact DRAFT, resolves only technical blocke
   assert.equal(stageEvent.body.derived_technical, true)
   assert.equal(stageEvent.body.contract.source_hash, draft.sha256)
   assert.equal(stageEvent.body.contract.origin_source_hash, draft.sha256)
+  assert.equal(sha256(stageEvent.body.contract.source_content), draft.sha256)
   assert.equal(stageEvent.body.contract.process_obligations[0].kind, "tdd")
   assert.ok(stageEvent.body.contract.verification_contract.commands.some(x => x.args[1] === "format:check"))
   assert.ok(stageEvent.body.contract.verification_contract.commands.every(x => x.args[1] !== "deploy:production"))
@@ -244,4 +247,26 @@ test("mandate JIT refuses unrelated security blockers, out-of-order work and abs
     wu_id: "WU-03", wu_artifact_id: securityDraft.record_key, expected_revision: security.blocked.revision,
   }), /unrelated authority or security/)
   assert.equal((await security.run("status")).blocker.class, "BLOCKED_SECURITY")
+})
+
+
+test("mandate-derived contract cannot invent missing acceptance, scope or a product decision", async t => {
+  const f = await setup(t)
+  await writeFile(join(f.root, "package.json"), JSON.stringify({ scripts: { lint: "node --check index.js" } }))
+  const noAcceptance = await recordKnowledgeArtifact(f.root, {
+    artifact_type: "work-unit", artifact_id: "WU-03-EMPTY-PLANNING", title: "Insufficient plan",
+    status: "DRAFT", owner_confirmed: true, parent_refs: ["EPIC-1"],
+    content: "A work unit whose outcome has not been defined.",
+  })
+  await assert.rejects(f.run("derive_and_stage_next_wu_contract", {
+    wu_id: "WU-03", wu_artifact_id: noAcceptance.record_key, expected_revision: f.blocked.revision,
+  }), /JIT_SOURCE_INCOMPLETE/)
+  assert.equal((await f.run("status")).blocker.class, "BLOCKED_AUTHORITY")
+  assert.equal(isTechnicalWuContractBlocker({
+    class: "BLOCKED_AUTHORITY", reason: "no executable approved contract",
+    authority_question: { domain: "product" },
+  }), false)
+  assert.equal(isTechnicalWuContractBlocker({
+    class: "BLOCKED_AUTHORITY", reason: "security authorization required",
+  }), false)
 })
