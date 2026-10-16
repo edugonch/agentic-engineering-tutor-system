@@ -11,6 +11,7 @@ import { supervisorProgress } from "./progress.js"
 import { wuBudgetUsage } from "./wu-budget.js"
 import { stableHash } from "./serialize.js"
 import { isTechnicalWuContractBlocker } from "./jit-contract.js"
+import { isStaleWorktreeScopeBlocker } from "./scope-recovery.js"
 
 export function createExecutionSupervisor(ctx, projectRoot, { enabled = true, now = () => Date.now(), schedule = setTimeout, cancel = clearTimeout } = {}) {
   const running = new Set()
@@ -58,7 +59,8 @@ export function createExecutionSupervisor(ctx, projectRoot, { enabled = true, no
       const session = state.supervisor?.session_id
       const toolingTriage = state.blocker?.class === "BLOCKED_TOOLING" && !expiredWait(state)
       const contractTriage = isTechnicalWuContractBlocker(state.blocker) && (!state.wu || state.wu.completed)
-      if (!session || state.completed || (state.blocker && !expiredWait(state) && !toolingTriage && !contractTriage) || state.mandate?.authority_kind !== "OWNER_APPROVED_EPIC") { disarm(execution); return false }
+      const scopeTriage = isStaleWorktreeScopeBlocker(state.blocker)
+      if (!session || state.completed || (state.blocker && !expiredWait(state) && !toolingTriage && !contractTriage && !scopeTriage) || state.mandate?.authority_kind !== "OWNER_APPROVED_EPIC") { disarm(execution); return false }
       const info = await identity(session)
       if (info.outcome !== "succeeded") { disarm(execution); return false } // never override cancellation or failure
       const budget = state.budget
@@ -104,7 +106,8 @@ export function createExecutionSupervisor(ctx, projectRoot, { enabled = true, no
       try {
       await ctx.session.prompt({ sessionID: session, id: intent.intent_id, delivery: "queue", resume: true,
         metadata: { harness_continuation: intent.intent_id, execution_id: execution },
-        text: contractTriage ? `Next frozen Work Unit technical contract is incomplete for execution ${execution}; blocker revision ${state.blocker.at_revision}. Read status/verify and inspect_next_wu_contract, then derive_and_stage_next_wu_contract using the exact DRAFT source ID and observed revision. This consumes only owner-approved Epic authority under planning estimates; do not assert an individual owner approval. If staging resolves the exact technical blocker, activate the staged WU using the approved mandate, and continue normal verification/review/merge. A product/scope/security/permission blocker remains a hard stop.`
+        text: scopeTriage ? `One bounded stale-worktree scope recovery triage for execution ${execution}, blocker at revision ${state.blocker.at_revision}. Do not clear BLOCKED_SCOPE generically, change the original WU scope, or manipulate the journal. Call inspect_scope_worktree, and only if Git HEAD equals the previous verified merge with matching frozen predecessor bytes and no tracked drift, call reconcile_stale_worktree_scope with the current expected_revision and exact blocked_at_revision. Re-read controller status/verify and continue the original WU. If evidence fails, preserve BLOCKED_SCOPE and report the exact mismatch; do not attempt new dispatch or candidate.`
+          : contractTriage ? `Next frozen Work Unit technical contract is incomplete for execution ${execution}; blocker revision ${state.blocker.at_revision}. Read status/verify and inspect_next_wu_contract, then derive_and_stage_next_wu_contract using the exact DRAFT source ID and observed revision. This consumes only owner-approved Epic authority under planning estimates; do not assert an individual owner approval. If staging resolves the exact technical blocker, activate the staged WU using the approved mandate, and continue normal verification/review/merge. A product/scope/security/permission blocker remains a hard stop.`
           : toolingTriage ? `One-time read-only tooling diagnosis for execution ${execution}, blocker at revision ${state.blocker.at_revision}. Inspect exact runtime/source facts once. If the exact blocker cause is already demonstrably repaired, clear only that recoverable blocker using its exact revision and concrete verification evidence, then return; ordinary authorized continuation will be scheduled separately. Never start a new WU, reserve or launch a dispatch, run billable implementation, change authority, alter the journal, or bypass review during this diagnosis. If repair is outside the frozen mandate, state one narrowly scoped owner decision with the exact failure and proposed repair; do not repeat the request.`
           : `Continue execution ${execution} from durable status and verify under its existing approved mandate. ${expiredWait(state) ? `Observe the remote condition for expired wait ${expiredWait(state).operation}; recovery is read-only until terminal evidence is obtained. Never assume success.` : state.external_wait ? `The durable external wait is due: observe and retry ${state.external_wait.operation}; never assume remote success.` : unsettled ? "Inspect/recover the existing dispatch before any new work." : "Execute the next authorized transition."} Preserve budget, scope, permissions and all evidence. A runtime terminal result is not acceptance. Do not request approvals already applicable. Stop on a real unresolved blocker or completion.` })
       await commit(c, session, "SUPERVISOR_SENT", { intent_id: intent.intent_id }, `${execution}:sent:${intent.intent_id}`)

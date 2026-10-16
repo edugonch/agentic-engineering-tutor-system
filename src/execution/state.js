@@ -5,6 +5,7 @@ import { PLANNING_ESTIMATES } from "./time-policy.js"
 import { isTechnicalWuContractBlocker } from "./jit-contract.js"
 import { validateContractCorrection } from "./contract-correction.js"
 import { executionProgress, supervisorProgress } from "./progress.js"
+import { isStaleWorktreeScopeBlocker } from "./scope-recovery.js"
 import { wuBudgetUsage } from "./wu-budget.js"
 // State projection. state is derived, never canonical: events.ndjson is the
 // source of truth and every read replays it. This makes divergence between a
@@ -214,7 +215,8 @@ export function applyEvent(previous, event, { historicalReplay = false } = {}) {
       // continuation; authority/scope/security blockers remain hard stops.
       const toolingTriage = state.blocker?.class === "BLOCKED_TOOLING" && !expiredWait(state)
       const contractTriage = isTechnicalWuContractBlocker(state.blocker) && (!state.wu || state.wu.completed)
-      if (!state.supervisor || (state.blocker && !expiredWait(state) && !toolingTriage && !contractTriage) ||
+      const scopeTriage = isStaleWorktreeScopeBlocker(state.blocker)
+      if (!state.supervisor || (state.blocker && !expiredWait(state) && !toolingTriage && !contractTriage && !scopeTriage) ||
           state.completed || supervisorProgress(state) !== body.progress_hash) throw new Error("Continuation no longer eligible")
       const previous = state.supervisor.intent
       const attempt = body.attempt ?? 1
@@ -890,6 +892,43 @@ export function applyEvent(previous, event, { historicalReplay = false } = {}) {
       state.last_blocker_resolution = { class: state.blocker.class, blocked_at_revision: state.blocker.at_revision,
         resolution: body.resolution, source_artifact_id: body.source_artifact_id, source_record_key: body.source_record_key,
         source_hash: body.source_hash, at_revision: state.revision }
+      state.blocker = null
+      break
+    }
+
+    case "SCOPE_WORKTREE_RECONCILE": {
+      const blocker = state.blocker
+      if (!isStaleWorktreeScopeBlocker(blocker) ||
+          body.blocked_at_revision !== blocker.at_revision ||
+          body.wu_id !== state.wu?.wu_id || state.wu.completed ||
+          state.mandate?.authority_kind !== MANDATE_AUTHORITY.OWNER_APPROVED_EPIC ||
+          body.proof?.kind !== "VERIFIED_PREDECESSOR_WORKTREE" ||
+          body.proof.wu_id !== body.wu_id || body.proof.blocked_at_revision !== blocker.at_revision ||
+          !/^[a-f0-9]{40}$/.test(body.proof.head_sha ?? "") ||
+          body.proof.head_sha !== body.proof.predecessor_merge_sha ||
+          !Array.isArray(body.proof.predecessor_files) || body.proof.predecessor_files.length === 0) {
+        throw new Error("SCOPE_WORKTREE_RECONCILE requires the exact stale-worktree blocker and verified predecessor provenance")
+      }
+      if (state.budget.active_phase || state.external_wait || state.verification_phase ||
+          Object.values(state.dispatches).some(d => !["released", "result_reconciled"].includes(d.status)) ||
+          Object.values(state.candidates).some(c => c.wu_id === state.wu.wu_id)) {
+        throw new Error("SCOPE_WORKTREE_RECONCILE rejects unsettled or already frozen active work")
+      }
+      const index = state.activated_wu_ids.length - 1
+      const previousWu = state.mandate.wu_sequence?.[index - 1]
+      const previous = state.completed_wus?.[previousWu]
+      const merge = state.merge?.candidate_id === previous?.candidate_id ? state.merge : state.merges?.[previous?.candidate_id]
+      if (!previousWu || previous?.candidate_id !== body.proof.predecessor_candidate_id ||
+          !merge || merge.status !== "VERIFIED" ||
+          merge.merge_commit_sha !== body.proof.predecessor_merge_sha ||
+          new Set(body.proof.predecessor_files.map(f => f.path)).size !== body.proof.predecessor_files.length ||
+          body.proof.predecessor_files.some(f => !f.path || !/^[a-f0-9]{64}$/.test(f.sha256 ?? ""))) {
+        throw new Error("SCOPE_WORKTREE_RECONCILE predecessor merge/evidence mismatch")
+      }
+      state.last_blocker_resolution = { class: blocker.class,
+        blocked_at_revision: blocker.at_revision,
+        resolution: "Verified stale-worktree discrepancy resolved at exact prior merged Git HEAD; no scope or authority amendment",
+        proof: body.proof, at_revision: state.revision }
       state.blocker = null
       break
     }
