@@ -101,7 +101,7 @@ for (const cls of ["BLOCKED_PERMISSION", "BLOCKED_SECURITY", "BLOCKED_SCOPE", "B
   const f = await fixture(t)
   const a = await f.decision()
   await f.run("resolve_authority_blocker", { decision_artifact_id: a.record_key })
-  const blocked = await f.run("block", { class: cls, reason: "Different unresolved issue" })
+  const blocked = await f.run("block", { class: cls, reason: "Different unresolved issue", ...(cls === "BLOCKED_SCOPE" ? { scope_cause: { kind: "FUNCTIONAL_SCOPE_CHANGE", authority_ref: "github:example/authority" } } : {}) })
   const replay = await f.run("resolve_authority_blocker", { decision_artifact_id: a.record_key })
   assert.deepEqual(replay.blocker, blocked.blocker)
   const copy = await f.decision({}, { artifact_id: "copy" })
