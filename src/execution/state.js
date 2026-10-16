@@ -418,6 +418,39 @@ export function applyEvent(previous, event, { historicalReplay = false } = {}) {
       break
     }
 
+    case "WU_CONTRACT_STAGE": {
+      if (body.expected_revision !== state.revision) throw new Error("WU_CONTRACT_STAGE stale expected_revision")
+      if (state.completed || state.mandate?.authority_kind !== MANDATE_AUTHORITY.OWNER_APPROVED_EPIC) {
+        throw new Error("WU_CONTRACT_STAGE requires an incomplete owner-approved Epic")
+      }
+      if (state.blocker && state.blocker.class !== "BLOCKED_AUTHORITY") {
+        throw new Error("WU_CONTRACT_STAGE cannot bypass an unrelated blocker")
+      }
+      if (state.wu && !state.wu.completed) throw new Error("WU_CONTRACT_STAGE requires the preceding WU to be completed")
+      if (processPending(state)) throw new Error("WU_CONTRACT_STAGE blocked by pending process recovery")
+      if (state.staged_wu_contract) throw new Error("WU_CONTRACT_STAGE already staged a contract; conflicting revisions require explicit reconciliation")
+      if (!Array.isArray(state.mandate.wu_sequence)) throw new Error("WU_CONTRACT_STAGE requires a frozen WU sequence")
+      if (state.activated_wu_ids.length >= state.mandate.max_wus) throw new Error("WU_CONTRACT_STAGE exceeds max_wus")
+      const expected = state.mandate.wu_sequence[state.activated_wu_ids.length]
+      if (!expected || body.wu_id !== expected || state.activated_wu_ids.includes(body.wu_id)) {
+        throw new Error(`WU_CONTRACT_STAGE next frozen WU is ${expected ?? "none"}, not ${body.wu_id}`)
+      }
+      const contract = body.contract
+      if (!contract || contract.wu_id !== body.wu_id || contract.normalization_required ||
+        !contract.verification_contract_hash || contract.source_authority !== "APPROVED" ||
+        !contract.source_record_key || !/^[a-f0-9]{64}$/.test(contract.source_hash ?? "") ||
+        !Number.isSafeInteger(contract.active_seconds) || contract.active_seconds <= 0 ||
+        !contract.contract_hash || typeof contract.source_content !== "string") {
+        throw new Error("WU_CONTRACT_STAGE requires an exact approved executable contract")
+      }
+      if (state.blocker?.class === "BLOCKED_AUTHORITY" && !Number.isSafeInteger(state.blocker.at_revision)) {
+        throw new Error("WU_CONTRACT_STAGE requires an auditable authority blocker revision")
+      }
+      state.staged_wu_contract = { wu_id: body.wu_id, source_artifact_id: body.source_artifact_id, contract, staged_at_revision: state.revision,
+        blocker_at_revision: state.blocker?.at_revision ?? null }
+      break
+    }
+
     case "WU_CONTRACT_BIND": {
       if (!state.wu || state.wu.completed || body.contract?.wu_id !== state.wu.wu_id) throw new Error("WU contract target mismatch")
       const old = state.wu.contract
@@ -452,6 +485,17 @@ export function applyEvent(previous, event, { historicalReplay = false } = {}) {
           throw new Error(`WU_ACTIVATE blocked: next frozen WU is ${expectedWu}, got ${body.wu_id}; successor creation/reordering is not authorized.`)
         }
       }
+      if (state.staged_wu_contract) {
+        const staged = state.staged_wu_contract
+        if (staged.wu_id !== body.wu_id || !body.contract ||
+            body.contract.contract_hash !== staged.contract.contract_hash ||
+            body.contract.source_record_key !== staged.contract.source_record_key ||
+            body.contract.source_hash !== staged.contract.source_hash ||
+            stableHash(body.contract) !== stableHash(staged.contract)) {
+          throw new Error("WU_ACTIVATE must use the exact preactivation-staged approved contract")
+        }
+        if (state.blocker) throw new Error("WU_ACTIVATE requires the preactivation authority blocker to be resolved")
+      }
       state.wu = {
         wu_id: body.wu_id,
         mandate_id: state.mandate.mandate_id,
@@ -462,6 +506,7 @@ export function applyEvent(previous, event, { historicalReplay = false } = {}) {
         ...(body.contract ? { contract: body.contract } : {}),
       }
       state.activated_wu_ids.push(body.wu_id)
+      if (state.staged_wu_contract) delete state.staged_wu_contract
       break
     }
 
@@ -760,8 +805,13 @@ export function applyEvent(previous, event, { historicalReplay = false } = {}) {
     }
 
     case "AUTHORITY_RESOLVE": {
-      if (state.completed || !state.wu || state.wu.completed) throw new Error("AUTHORITY_RESOLVE requires an active incomplete WU")
-      if (state.mandate?.authority_kind !== MANDATE_AUTHORITY.OWNER_APPROVED_EPIC || body.mandate_id !== state.mandate.mandate_id || body.wu_id !== state.wu.wu_id || `${body.execution_id}:exec` !== state.execution_id) {
+      const activeTarget = state.wu && !state.wu.completed && body.wu_id === state.wu.wu_id
+      const stagedTarget = (!state.wu || state.wu.completed) &&
+        state.staged_wu_contract?.wu_id === body.wu_id
+      if (state.completed || (!activeTarget && !stagedTarget)) {
+        throw new Error("AUTHORITY_RESOLVE target must match the active WU or a preactivation-staged next WU")
+      }
+      if (state.mandate?.authority_kind !== MANDATE_AUTHORITY.OWNER_APPROVED_EPIC || body.mandate_id !== state.mandate.mandate_id || `${body.execution_id}:exec` !== state.execution_id) {
         throw new Error("AUTHORITY_RESOLVE must match the execution, mandate and active WU")
       }
       if (state.blocker?.class !== "BLOCKED_AUTHORITY" || body.blocked_at_revision !== state.blocker.at_revision) throw new Error("AUTHORITY_RESOLVE must target the exact active BLOCKED_AUTHORITY blocker")
@@ -770,7 +820,11 @@ export function applyEvent(previous, event, { historicalReplay = false } = {}) {
       }
       state.authority_resolutions ??= {}
       state.authority_resolutions[body.wu_id] ??= []
-      const receipt = { ...body, blocker_reason: state.blocker.reason, at_revision: state.revision }
+      if (stagedTarget && state.staged_wu_contract.blocker_at_revision !== state.blocker.at_revision) {
+        throw new Error("AUTHORITY_RESOLVE preactivation blocker changed after contract staging")
+      }
+      const receipt = { ...body, blocker_reason: state.blocker.reason, at_revision: state.revision,
+        ...(stagedTarget ? { preactivation_contract_hash: state.staged_wu_contract.contract.contract_hash } : {}) }
       state.authority_resolutions[body.wu_id].push(receipt)
       state.last_blocker_resolution = { class: state.blocker.class, blocked_at_revision: state.blocker.at_revision,
         resolution: body.resolution, source_artifact_id: body.source_artifact_id, source_record_key: body.source_record_key,
