@@ -19,11 +19,14 @@
 //   display_id    — short ergonomic prefix (never an authoritative key)
 
 import { createHash } from "node:crypto"
+import { execFile } from "node:child_process"
 import { lstat, readFile, readlink } from "node:fs/promises"
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path"
+import { promisify } from "node:util"
 import { stableSerialize } from "./serialize.js"
 import { verificationContractHash } from "./verification-contract.js"
 
+const exec = promisify(execFile)
 const sha256 = (value) => createHash("sha256").update(value).digest("hex")
 
 function inside(root, path) {
@@ -128,6 +131,75 @@ export async function captureBaseSnapshot(root, paths) {
   return { kind: "snapshot", commit: null, files }
 }
 
+// Capture a base snapshot from an EXACT Git commit, read from the local Git
+// object database and never from the working tree.
+//
+// This is the recovery path for a candidate whose frozen working tree drifted
+// from the bound PR head: the caller supplies the exact already-bound commit,
+// so the resulting candidate Git tree equals the commit tree byte-for-byte
+// (verified independently by candidateGitTree at merge/rebind time). It fails
+// closed when the commit/tree cannot be resolved locally, and it never trusts
+// PR text or the mutable index/working tree.
+export async function captureCommitSnapshot(root, commit) {
+  if (typeof commit !== "string" || !/^[0-9a-fA-F]{4,64}$/.test(commit)) {
+    throw new Error(`source commit must be a Git object id: ${String(commit)}`)
+  }
+  // The supplied id must resolve as an actual COMMIT before any tree resolution
+  // or listing. A tree object id is a valid Git object id and peels to itself
+  // under `^{tree}`, so resolving only the tree would silently accept a non-commit
+  // and bind the wrong source identity. Peeling to `^{commit}` both rejects
+  // non-commit objects (trees, blobs) and yields the canonical commit id.
+  let sourceCommit
+  try {
+    const { stdout } = await exec("git", ["rev-parse", "--verify", "--quiet", `${commit}^{commit}`], { cwd: root, encoding: "utf8" })
+    sourceCommit = stdout.trim()
+  } catch {
+    throw new Error(`SOURCE_COMMIT_UNRESOLVED: ${commit} is not available as a commit in the local Git object database.`)
+  }
+  if (!/^[0-9a-fA-F]{40,64}$/.test(sourceCommit)) throw new Error(`SOURCE_COMMIT_UNRESOLVED: ${commit} does not resolve to a commit.`)
+
+  let tree
+  try {
+    const { stdout } = await exec("git", ["rev-parse", "--verify", "--quiet", `${sourceCommit}^{tree}`], { cwd: root, encoding: "utf8" })
+    tree = stdout.trim()
+  } catch {
+    throw new Error(`SOURCE_COMMIT_UNRESOLVED: ${commit} is not available in the local Git object database.`)
+  }
+  if (!/^[0-9a-fA-F]{40,64}$/.test(tree)) throw new Error(`SOURCE_COMMIT_UNRESOLVED: could not resolve a tree for ${commit}.`)
+
+  const { stdout } = await exec("git", ["ls-tree", "-r", "-z", sourceCommit], { cwd: root, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 })
+  const files = []
+  const seen = new Set()
+  for (const record of stdout.split("\0")) {
+    if (!record) continue
+    const match = record.match(/^(\d{6}) (blob) ([0-9a-fA-F]+)\t([\s\S]+)$/)
+    if (!match) throw new Error(`unexpected Git tree record: ${record}`)
+    const [, mode, , oid, path] = match
+    assertCandidatePath(path)
+    if (seen.has(path)) throw new Error(`duplicate path in Git tree: ${path}`)
+    seen.add(path)
+    const { stdout: raw } = await exec("git", ["cat-file", "blob", oid], { cwd: root, encoding: "buffer", maxBuffer: 10 * 1024 * 1024 })
+    const bytes = Buffer.from(raw)
+    if (mode === "120000") {
+      files.push({ path, type: "symlink", mode, target: bytes.toString("utf8") })
+    } else if (mode === "100644" || mode === "100755") {
+      files.push({ path, type: "file", mode, sha256: sha256(bytes), content: bytes.toString("base64") })
+    } else {
+      throw new Error(`unsupported Git mode ${mode} for ${path}`)
+    }
+  }
+  files.sort((a, b) => a.path.localeCompare(b.path))
+  return { kind: "commit", commit: sourceCommit, tree, files }
+}
+
+// Reproducible freeze from an exact Git commit: base = the commit tree, no
+// working-tree overlay or deletions. Recording kind/commit/tree on the base
+// binds the source (identity) while the verification contract is preserved.
+export async function freezeCandidateFromCommit(root, { commit, verification_contract = null } = {}) {
+  const base = await captureCommitSnapshot(root, commit)
+  return freezeCandidate(root, { base, paths: [], deletions: [], verification_contract })
+}
+
 // Reproducible freeze: validate → capture → verify working paths unchanged → publish.
 export async function freezeCandidate(root, { base = null, paths = [], deletions = [], verification_contract = null } = {}) {
   for (const path of paths) assertCandidatePath(path)
@@ -152,7 +224,14 @@ export async function freezeCandidate(root, { base = null, paths = [], deletions
   const completeEntries = composeCandidateEntries(baseFiles, sortedDeletions, overlay)
 
   const manifest = {
-    base: base ? { kind: base.kind ?? "snapshot", commit: base.commit ?? null, files: baseFiles.map(identityOnly) } : null,
+    base: base
+      ? {
+          kind: base.kind ?? "snapshot",
+          commit: base.commit ?? null,
+          ...(base.tree ? { tree: base.tree } : {}),
+          files: baseFiles.map(identityOnly),
+        }
+      : null,
     deletions: sortedDeletions,
     overlay: overlay.map(identityOnly),
     verification_contract: verification_contract

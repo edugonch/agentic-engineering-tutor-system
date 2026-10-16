@@ -43,7 +43,7 @@ import {
   isJevReady,
   readJevSettings,
 } from "./src/decision/index.js"
-import { runContinuationProbe, createContinuationDriver, createCandidateRegistry, captureBaseSnapshot, freezeCandidate, runCandidateVerification, checkExecutionReadiness, pathDigest, validateVerificationContract, runExecutionController, claimDispatchLaunch, createLaunchBindingRegistry, findPendingLaunchBinding, createVerificationReceipt, writeVerificationReceipt, createGitHubAdapter, runMergeCandidate, runVerifyExternalMerge, observeMergeProgress, BLOCKER_CLASSES, CI_CONCLUSIONS } from "./src/execution/index.js"
+import { runContinuationProbe, createContinuationDriver, createCandidateRegistry, captureBaseSnapshot, freezeCandidate, freezeCandidateFromCommit, candidateGitTree, runCandidateVerification, checkExecutionReadiness, pathDigest, validateVerificationContract, runExecutionController, claimDispatchLaunch, createLaunchBindingRegistry, findPendingLaunchBinding, createVerificationReceipt, writeVerificationReceipt, createGitHubAdapter, runMergeCandidate, runVerifyExternalMerge, observeMergeProgress, BLOCKER_CLASSES, CI_CONCLUSIONS } from "./src/execution/index.js"
 import { verificationContractHash } from "./src/execution/verification-contract.js"
 
 const json = (value) => ({ content: JSON.stringify(value, null, 2) })
@@ -689,6 +689,43 @@ export default Plugin.define({
             display_id: candidate.display_id,
             manifest_hash: candidate.manifest_hash,
             tree_hash: candidate.tree_hash,
+            verification_contract_hash: candidate.manifest.verification_contract?.contract_hash ?? null,
+          })
+        },
+      })
+
+      editor.add({
+        name: "harness_refreeze_candidate",
+        description: "Recovery: re-freeze a NEW append-only candidate from the exact commit already bound to the WU's PR, read from the local Git object database rather than the (possibly drifted) working tree. The old candidate is never altered. The source commit/tree are recorded on the base and the WU verification contract is preserved; merge/rebind still verifies the candidate Git tree against the remote head. Fails closed if no PR is bound or the commit is unavailable locally.",
+        input: objectInput({
+          wu_id: { type: "string", minLength: 1 },
+          source_commit: { type: "string", minLength: 4, description: "Optional exact commit id; must equal the already-bound PR head." },
+        }, ["wu_id"]),
+        execute: async (input) => {
+          const root = requireProjectRoot()
+          const execution = await findWuExecution(root, input.wu_id)
+          if (!execution?.state.wu.contract?.verification_contract) throw new Error("Bind the WU executable contract before re-freezing a candidate")
+          const binding = execution.state.pr_binding
+          if (!binding?.head_sha) throw new Error("Re-freeze requires the exact commit already bound to the WU's PR; bind the PR first")
+          if (input.source_commit && input.source_commit !== binding.head_sha) {
+            throw new Error("SOURCE_COMMIT_DRIFT: the requested commit is not the already-bound PR head")
+          }
+          const contract = structuredClone(execution.state.wu.contract.verification_contract)
+          contract.source_wu_hash = execution.state.wu.contract.source_hash
+          contract.source_wu_revision = execution.state.wu.contract.source_revision
+          contract.source_wu_id = input.wu_id
+          const candidate = await freezeCandidateFromCommit(root, { commit: binding.head_sha, verification_contract: contract })
+          const stored = await candidateRegistry.store(candidate)
+          return json({
+            ...stored,
+            candidate_id: candidate.candidate_id,
+            display_id: candidate.display_id,
+            manifest_hash: candidate.manifest_hash,
+            tree_hash: candidate.tree_hash,
+            source_commit: candidate.base?.commit ?? null,
+            source_tree: candidate.base?.tree ?? null,
+            git_tree: candidateGitTree(candidate),
+            previous_candidate_id: binding.candidate_id,
             verification_contract_hash: candidate.manifest.verification_contract?.contract_hash ?? null,
           })
         },
