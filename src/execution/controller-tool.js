@@ -438,6 +438,33 @@ export async function runExecutionController(projectRoot, input, candidateRegist
     return { action, commit_status: res.status, next_action: "Clear only the resolved tooling blocker, refreeze the same code with the corrected contract, rerun every check and fresh independent review. Prior receipts remain historical.", ...(await summary(controller)) }
   }
 
+  if (action === "inspect_next_wu_contract") {
+    // JIT preflight only. Never registers, approves, activates or edits a WU.
+    // The approved Epic freezes order; normalization must remain source-backed.
+    const { state } = await controller.snapshot()
+    const next = state.mandate?.wu_sequence?.[state.activated_wu_ids.length] ?? null
+    if (!next) return { action, status: "NO_NEXT_FROZEN_WU", revision: state.revision }
+    if (state.wu && !state.wu.completed) return { action, status: "PREDECESSOR_INCOMPLETE", next_wu_id: next,
+      active_wu_id: state.wu.wu_id, revision: state.revision }
+    if (state.staged_wu_contract) return { action, status: "APPROVED_CONTRACT_STAGED", next_wu_id: next,
+      source_record_key: state.staged_wu_contract.contract.source_record_key,
+      contract_hash: state.staged_wu_contract.contract.contract_hash, revision: state.revision }
+    const sourceId = String(input.wu_artifact_id ?? next)
+    try {
+      const definition = await readWorkUnitDefinition(projectRoot, next,
+        state.mandate.source_artifact_id, sourceId)
+      const contract = compileWuContract(next, definition)
+      return { action, status: contract.normalization_required ? "NORMALIZATION_REQUIRED" : "EXECUTABLE_SOURCE_READY",
+        next_wu_id: next, source_record_key: contract.source_record_key,
+        contract_hash: contract.contract_hash, verification_contract_hash: contract.verification_contract_hash,
+        revision: state.revision,
+        note: "Read-only source inspection; executable status is not approval or activation authority" }
+    } catch (error) {
+      return { action, status: "SOURCE_NORMALIZATION_OR_SELECTION_REQUIRED", next_wu_id: next,
+        reason: error.message, revision: state.revision }
+    }
+  }
+
   if (action === "stage_wu_contract") {
     // This is an audited recovery/selection operation, not WU activation.
     // It may run while BLOCKED_AUTHORITY prevents WU_ACTIVATE; all source
