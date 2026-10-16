@@ -70,6 +70,41 @@ source through the project's existing authorized JIT normalization/approval
 procedure. The original DRAFT and frozen sequence remain intact. Apply this
 per WU; never promote the entire future backlog as a batch.
 
+### Mandate-derived next-WU technical normalization
+
+A predeclared WU with a DRAFT or PROPOSED document may have enough approved
+outcome/scope context but lack machine-readable `execution_contract`.
+Under an owner-approved **frozen** Epic with `WU_PLANNING_ESTIMATES`,
+`derive_and_stage_next_wu_contract` is a separate technical route from
+`stage_wu_contract` (which still requires an individually APPROVED source).
+
+This route:
+
+1. Reads and SHA-verifies the **exact indexed next frozen WU**. It must retain
+   preexisting acceptance and expected write-scope statements; a planning label
+   alone is not sufficient authority.
+2. Derives a positive planning estimate from remaining Epic time divided by
+   remaining frozen WUs, never increasing the Epic total. A WU estimate is not a
+   new entitlement or hard runtime deadline.
+3. Selects only the repository's *existing* safe baseline npm verification
+   scripts; if absent it stops. Semantic acceptance remains subject to fresh
+   independent review; shell exit status never replaces product acceptance.
+4. Stages an immutable source-backed `MANDATE_DERIVED` contract in the
+   append-only controller event log. The source archive is unchanged and its
+   SHA-256 must match `source_hash`. This is **execution authorized by the
+   mandate**, never a fictitious individual owner `APPROVED` artifact.
+5. When a matching preactivation `BLOCKED_AUTHORITY` records only missing
+   technical contract normalization, the same guarded stage event may record a
+   technical resolution with the exact blocker revision. It cannot clear a
+   business, security, permission, scope, unrelated, or ambiguous blocker.
+6. The orchestrator activates only the staged contract and continues ordinary
+   candidate freeze, deterministic verification, independent review, exact-head
+   CI and approved merge policy. No bulk future-WU promotion occurs.
+
+The existing APPROVED-source stage/resolution path remains unchanged. The
+derived route is intentionally limited to repositories with supported npm
+verification scripts; absent tooling must not be concealed with fake checks.
+
 ## 2. Durability target
 
 - **v1 guarantee:** survive process crash, OpenCode restart, and an orderly
