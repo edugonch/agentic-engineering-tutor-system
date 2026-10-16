@@ -191,8 +191,8 @@ export default Plugin.define({
     await ctx.session.hook("prompt", async (event) => {
       await ownership.onPrompt(event)
       const internalSupervisorPrompt = supervisor.isInternalPrompt(event)
-      if (internalSupervisorPrompt) await supervisor.onPrompt(event)
-      if (!internalSupervisorPrompt && !continuation.isInternalPrompt(event.sessionID)) {
+      const admittedSupervisorPrompt = await supervisor.onPrompt(event)
+      if (!internalSupervisorPrompt && !admittedSupervisorPrompt && !continuation.isInternalPrompt(event.sessionID)) {
         guard.reset(event.sessionID)
         sessionRecovery.reset()
       }
