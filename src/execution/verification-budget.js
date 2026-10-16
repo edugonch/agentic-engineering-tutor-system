@@ -6,12 +6,27 @@ import { verificationContractHash } from "./verification-contract.js"
 // Verification inside a worker is covered by that worker's measured envelope.
 // Root verification owns an ACTIVE phase, settled even on failure/cancellation.
 // The timestamps are anchored to monotonic elapsed time after admission.
-export async function withVerificationBudget({ controller, candidate, check_id, context, runtimeSession, launchEvidence = [], run, monotonic = () => performance.now() }) {
+export async function withVerificationBudget({ controller, candidate, check_id, context, runtimeSession, launchEvidence = [], setupRecovery = null, run, monotonic = () => performance.now() }) {
   const session = context?.sessionID
   if (!session) throw new Error("Verification requires a runtime session identity")
   const { state } = await controller.snapshot()
   const contract = state.wu?.contract
-  if (state.completed || state.wu?.completed || state.blocker) throw new Error(`Verification cannot start: ${state.blocker?.class ?? "execution completed"}`)
+  const eligibleSetupRecovery = setupRecovery?.kind === "VERIFIED_SETUP_TIMEOUT" &&
+    state.blocker?.class === "BLOCKED_TOOLING" &&
+    state.blocker.at_revision === setupRecovery.blocked_at_revision &&
+    state.wu?.wu_id === setupRecovery.source_wu_id &&
+    state.verification_retry?.blocked_at_revision === setupRecovery.blocked_at_revision &&
+    state.verification_retry?.candidate_id === candidate.candidate_id &&
+    state.verification_retry?.check_id === check_id &&
+    state.verification_retry?.wu_id === state.wu.wu_id &&
+    check_id === setupRecovery.check_id &&
+    !runtimeSession?.parentID && (!runtimeSession || runtimeSession.id === session) &&
+    Object.values(state.dispatches).every(d => ["released", "result_reconciled"].includes(d.status))
+  // This flag may only be set by the runtime after independent receipt checks.
+  // The check itself, its setup, immutable candidate and budget stay unchanged.
+  if (state.completed || state.wu?.completed || (state.blocker && !eligibleSetupRecovery)) {
+    throw new Error(`Verification cannot start: ${state.blocker?.class ?? "execution completed"}`)
+  }
   if (!contract || candidate.verification_contract?.source_wu_id !== state.wu.wu_id ||
       verificationContractHash(candidate.verification_contract) !== contract.verification_contract_hash)
     throw new Error("Verification candidate does not match the active WU contract")

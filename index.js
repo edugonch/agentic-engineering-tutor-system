@@ -3,6 +3,7 @@ import { readExternalSource } from "./src/external-source-reader.js"
 import { usesPlanningEstimates, epicExecutionRemaining } from "./src/execution/time-policy.js"
 import { observeSubagentProgress } from "./src/execution/launch-progress.js"
 import { withVerificationBudget, recoverVerificationPhase } from "./src/execution/verification-budget.js"
+import { retryBlockedFrozenVerification } from "./src/execution/setup-timeout-recovery.js"
 import { packageFingerprint } from "./src/package-fingerprint.js"
 import { createWorkerBudgetGuard } from "./src/execution/worker-budget.js"
 import { createExecutionSupervisor } from "./src/execution/supervisor.js"
@@ -805,6 +806,28 @@ export default Plugin.define({
             evidence_id = receipt.evidence_id
           }
           return json({ ...result, evidence_id })
+        },
+      })
+
+      editor.add({
+        name: "harness_retry_blocked_verification",
+        description: "One-shot governed recovery of a BLOCKED_TOOLING verification setup timeout. Root orchestrator only. Requires a historical immutable FAIL receipt proving the frozen candidate's exact setup timed out, then runs the FULL unchanged declared check (including npm ci), charges its real verification budget, and automatically clears only the exact tooling blocker after PASS and a durable receipt. A failure retains the blocker; no timeout/command/CI/review waiver and no arbitrary 'install' check.",
+        input: objectInput({
+          candidate_id: { type: "string", pattern: "^cand-[0-9a-f]{64}$" },
+          verification_check_id: { type: "string", minLength: 1 },
+        }, ["candidate_id", "verification_check_id"]),
+        execute: async (input, context) => {
+          const candidate = await candidateRegistry.load(input.candidate_id)
+          if (!candidate) return json({ status: "BLOCKED_UNKNOWN_CANDIDATE", candidate_id: input.candidate_id })
+          const execution = await findWuExecution(requireProjectRoot(), candidate.verification_contract?.source_wu_id)
+          if (!execution) return json({ status: "BLOCKED_UNKNOWN_WU", reason: "Candidate is not bound to an active WU" })
+          const raw = await ctx.session.get({ sessionID: context?.sessionID })
+          const runtimeSession = raw?.data ?? raw
+          const result = await retryBlockedFrozenVerification({
+            controller: execution.controller, candidate, checkId: input.verification_check_id,
+            context, runtimeSession, receiptsDir: join(requireProjectRoot(), ".harness", "execution", "verification-results"),
+          })
+          return json(result)
         },
       })
 

@@ -215,7 +215,8 @@ For a deterministic controller/merge failure, inspect durable status once and al
 Map stops to typed blocker classes; do not invent new classes:
 
 - turn/guard exhaustion → `CHECKPOINT` + handoff, never `BLOCK`.
-- review environment/tooling failure → `BLOCKED_TOOLING` (or `BLOCKED_EXTERNAL_FACT` when an external service is unavailable).
+- review environment/tooling failure → `BLOCKED_TOOLING` (or `BLOCKED_EXTERNAL_FACT` when an external service is unavailable). For the **specific** case of a frozen verification setup that timed out and created a tooling blocker, never invoke its setup ID (for example `install`) as a standalone check; it is undeclared in `commands`. Instead, after status/audit and integrity checks, use `harness_retry_blocked_verification` for the original frozen candidate and declared check ID (for example `arch`). This performs at most one root-owned retry with the unchanged setup and command and records a fresh PASS/FAIL receipt. The exact tooling blocker is cleared only by a full PASS. If retry fails, report the actual setup/check output; do not rerun blindly or request a new owner product decision. All other blockers remain hard stops.
+
 - authority conflict → `BLOCKED_AUTHORITY`.
 - security → `BLOCKED_SECURITY`.
 - stale or divergent worktree/predecessor checkout → classify as tooling/environment evidence,
