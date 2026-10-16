@@ -90,8 +90,8 @@ test("read-only JIT preflight reports source ambiguity and incomplete DRAFT with
     parent_refs: ["EPIC-1"], content: "planning; non-executable\nNo approved executable contract",
   })
   const incomplete = await f.run("inspect_next_wu_contract", { wu_artifact_id: draft.record_key })
-  assert.equal(incomplete.status, "SOURCE_NORMALIZATION_OR_SELECTION_REQUIRED")
-  assert.match(incomplete.reason, /active_seconds/)
+  assert.equal(incomplete.status, "SOURCE_CONTRACT_INCOMPLETE")
+  assert.match(incomplete.reason, /JIT_SOURCE_REQUIRED/)
   assert.deepEqual((await f.ctl.snapshot()).events, before.events)
 })
 
@@ -269,4 +269,52 @@ test("mandate-derived contract cannot invent missing acceptance, scope or a prod
   assert.equal(isTechnicalWuContractBlocker({
     class: "BLOCKED_AUTHORITY", reason: "security authorization required",
   }), false)
+})
+
+// Uses a real DRAFT archive and the exact production JIT compiler, not a mock.
+test("JIT preflight derives planning estimate without asking owner or writing state", async t => {
+  const f = await setup(t)
+  await writeFile(join(f.root, "package.json"), JSON.stringify({
+    scripts: { "format:check": "prettier --check .", lint: "eslint .", typecheck: "tsc --noEmit" },
+  }))
+  const draft = await recordKnowledgeArtifact(f.root, {
+    artifact_type: "work-unit", artifact_id: "WU-03-PLANNING-JIT",
+    title: "Appointment transitions", status: "DRAFT", owner_confirmed: true,
+    parent_refs: ["EPIC-1"],
+    content: "Salida comprobable: Document known invariant and proposed state transitions.\nExpected write scope: docs/design/epic-05 only.\nNo runtime change.",
+  })
+  const baseline = await f.ctl.snapshot()
+  const input = { wu_id: "WU-03", wu_artifact_id: draft.record_key, expected_revision: f.blocked.revision }
+  const preflight = await f.run("inspect_next_wu_contract", { wu_artifact_id: draft.record_key })
+  assert.equal(preflight.status, "READY_FOR_JIT")
+  assert.equal(preflight.next_action, "derive_and_stage_next_wu_contract")
+  assert.ok(preflight.planning_estimate_seconds > 0)
+  assert.ok(preflight.verification_check_ids.includes("jit-format-check"))
+  assert.deepEqual((await f.ctl.snapshot()).events, baseline.events)
+  const staged = await f.run("derive_and_stage_next_wu_contract", input)
+  assert.equal(staged.blocker, null, "only exact technical normalisation blocker may be retired")
+  assert.equal(staged.staged_wu_contract.source_authority, "MANDATE_DERIVED")
+  const activation = await f.run("activate_wu", {
+    wu_id: "WU-03", mandate_id: "E1-MANDATE-001", wu_artifact_id: draft.record_key,
+  })
+  assert.equal(activation.wu.contract.active_seconds, preflight.planning_estimate_seconds)
+  assert.equal(activation.wu.contract.source_authority, "MANDATE_DERIVED")
+  assert.equal(activation.budget.total_seconds, baseline.state.budget.total_seconds)
+  assert.equal(activation.budget.used_seconds, baseline.state.budget.used_seconds)
+  assert.equal((await f.run("verify")).passed, true)
+})
+
+test("JIT preflight refuses a product-policy authority stop even with a compilable DRAFT", async t => {
+  const f = await setup(t, { blockerClass: "BLOCKED_SECURITY" })
+  await writeFile(join(f.root, "package.json"), JSON.stringify({ scripts: { lint: "eslint ." } }))
+  const draft = await recordKnowledgeArtifact(f.root, {
+    artifact_type: "work-unit", artifact_id: "WU-03-SECURITY-JIT", title: "Security stop",
+    status: "DRAFT", owner_confirmed: true, parent_refs: ["EPIC-1"],
+    content: "Salida comprobable: Proposed table.\nExpected write scope: docs/ only.",
+  })
+  const diagnosis = await f.run("inspect_next_wu_contract", { wu_artifact_id: draft.record_key })
+  assert.equal(diagnosis.status, "AUTHORITY_OR_SAFETY_BLOCKED")
+  await assert.rejects(f.run("derive_and_stage_next_wu_contract", {
+    wu_id: "WU-03", wu_artifact_id: draft.record_key, expected_revision: f.blocked.revision,
+  }), /unrelated authority or security blockers/)
 })
