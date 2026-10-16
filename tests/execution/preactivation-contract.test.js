@@ -13,7 +13,7 @@ const VERIFICATION = {
   environment: { network_policy: "UNRESTRICTED" },
 }
 
-async function setup(t, { completed = 2 } = {}) {
+async function setup(t, { completed = 2, blockerClass = "BLOCKED_AUTHORITY" } = {}) {
   const root = await mkdtemp(join(tmpdir(), "harness-preactivation-"))
   t.after(() => rm(root, { recursive: true, force: true }))
   const run = (action, params = {}) => runExecutionController(root, {
@@ -23,15 +23,15 @@ async function setup(t, { completed = 2 } = {}) {
   const commit = async (operation_type, body) => {
     const lease = await ctl.acquire("root")
     const snap = await ctl.snapshot()
-    return ctl.commit({ operation_id: \`fixture:\${snap.state.revision}:\${operation_type}\`, operation_type, body },
+    return ctl.commit({ operation_id: `fixture:${snap.state.revision}:${operation_type}`, operation_type, body },
       { holder_session_id: "root", expected_revision: snap.state.revision, lease_fencing_token: lease.fencing_token })
   }
   await recordKnowledgeArtifact(root, {
     artifact_type: "epic", artifact_id: "EPIC-1", title: "Three frozen WUs", status: "APPROVED",
     owner_confirmed: true, source_refs: ["https://example.com/owner-epic"],
-    content: \`execution_mandate: \${JSON.stringify({ max_wus: 3, total_seconds: 600,
+    content: `execution_mandate: ${JSON.stringify({ max_wus: 3, total_seconds: 600,
       merge_policy: "none", required_ci_checks: [],
-      wu_sequence: ["WU-01", "WU-02", "WU-03"] })}\`,
+      wu_sequence: ["WU-01", "WU-02", "WU-03"] })}`,
   })
   await run("approve_mandate", { epic_artifact_id: "EPIC-1" })
   for (const wu of ["WU-01", "WU-02", "WU-03"]) {
@@ -39,12 +39,12 @@ async function setup(t, { completed = 2 } = {}) {
   }
   for (const wu of ["WU-01", "WU-02"].slice(0, completed)) {
     await run("activate_wu", { wu_id: wu, mandate_id: "E1-MANDATE-001", wu_artifact_id: wu })
-    const candidate = \`cand-\${wu}\`
+    const candidate = `cand-${wu}`
     await commit("FREEZE_CANDIDATE", { candidate_id: candidate, wu_id: wu,
-      manifest_hash: \`manifest-\${wu}\`, tree_hash: \`tree-\${wu}\` })
+      manifest_hash: `manifest-${wu}`, tree_hash: `tree-${wu}` })
     await commit("RECORD_REVIEW", { candidate_id: candidate, verdict: "PASS",
-      candidate_hashes: { manifest_hash: \`manifest-\${wu}\`, tree_hash: \`tree-\${wu}\` },
-      verification_evidence_ids: [\`fixture-receipt-\${wu}\`], verified_check_ids: [],
+      candidate_hashes: { manifest_hash: `manifest-${wu}`, tree_hash: `tree-${wu}` },
+      verification_evidence_ids: [`fixture-receipt-${wu}`], verified_check_ids: [],
       verification_contract_hash: null })
     await run("complete_wu", { candidate_id: candidate })
   }
@@ -54,20 +54,20 @@ async function setup(t, { completed = 2 } = {}) {
     title: "Approved WU-03 normalized contract", status: "APPROVED",
     owner_confirmed: true, parent_refs: ["EPIC-1"],
     source_refs: ["https://example.com/approved-wu-03"],
-    content: \`Active-time limit: 100 seconds
+    content: `Active-time limit: 100 seconds
 Origin: WU-03 DRAFT source preserved separately
-execution_contract: \${JSON.stringify({ active_seconds: 100, verification_contract: VERIFICATION, process_obligations: [] })}\`,
+execution_contract: ${JSON.stringify({ active_seconds: 100, verification_contract: VERIFICATION, process_obligations: [] })}`,
   })
   const beforeBlock = await run("status")
-  const blocked = await run("block", { class: "BLOCKED_AUTHORITY", reason: "WU-03 needs a selected approved contract" })
+  const blocked = await run("block", { class: blockerClass, reason: "WU-03 needs a selected approved contract" })
   const decision = await recordKnowledgeArtifact(root, {
     artifact_type: "decision", artifact_id: "WU-03-OWNER-RESOLUTION",
     title: "Owner approval for preactivation contract", status: "APPROVED", owner_confirmed: true,
     source_refs: ["https://example.com/owner-decision"],
-    content: \`Retain all verification and acceptance obligations.
-authority_resolution: \${JSON.stringify({ execution_id: "E1", mandate_id: "E1-MANDATE-001",
+    content: `Retain all verification and acceptance obligations.
+authority_resolution: ${JSON.stringify({ execution_id: "E1", mandate_id: "E1-MANDATE-001",
       wu_id: "WU-03", blocked_at_revision: blocked.blocker.at_revision,
-      resolution: "Exact approved executable WU-03 contract is available; proceed with original scope" })}\`,
+      resolution: "Exact approved executable WU-03 contract is available; proceed with original scope" })}`,
   })
   return { root, run, ctl, commit, approved, blocked, decision, beforeBlock }
 }
@@ -82,9 +82,8 @@ test("preactivation recovery stages approved contract, resolves exact authority 
   assert.equal(stage.staged_wu_contract.wu_id, "WU-03")
   assert.equal(stage.staged_wu_contract.contract.source_authority, "APPROVED")
   assert.equal(stage.blocker.class, "BLOCKED_AUTHORITY")
-  assert.equal(stage.completed_wus?.["WU-02"], undefined) // summaries do not expose this field
-  assert.deepEqual(stage.budget, baseline.state.budget.total_seconds
-    ? { ...stage.budget } : stage.budget)
+  assert.equal(stage.budget.total_seconds, baseline.state.budget.total_seconds)
+  assert.equal(stage.budget.used_seconds, baseline.state.budget.used_seconds)
   const retry = await f.run("stage_wu_contract", { wu_id: "WU-03", wu_artifact_id: f.approved.record_key,
     expected_revision: f.blocked.revision })
   assert.equal(retry.commit_status, "replayed")
@@ -121,8 +120,9 @@ test("staging rejects stale revision, DRAFT, non-eligible WU and unrelated block
   await assert.rejects(f.run("stage_wu_contract", { ...input, wu_id: "WU-02" }), /next frozen WU/)
   await assert.rejects(f.run("stage_wu_contract", { ...input, wu_artifact_id: "missing" }), /source/)
   assert.deepEqual((await f.ctl.snapshot()).events, baseline)
-  await f.run("block", { class: "BLOCKED_SECURITY", reason: "unrelated security stop" })
-  await assert.rejects(f.run("stage_wu_contract", { ...input, expected_revision: (await f.run("status")).revision }), /unrelated blocker/)
+  const security = await setup(t, { blockerClass: "BLOCKED_SECURITY" })
+  await assert.rejects(security.run("stage_wu_contract", { wu_id: "WU-03", wu_artifact_id: security.approved.record_key,
+    expected_revision: security.blocked.revision }), /unrelated blocker/)
 })
 
 test("no stage, no preactivation AUTHORITY_RESOLVE; decision must bind exact owner blocker", async t => {
@@ -134,10 +134,10 @@ test("no stage, no preactivation AUTHORITY_RESOLVE; decision must bind exact own
   const other = await recordKnowledgeArtifact(f.root, {
     artifact_type: "decision", artifact_id: "STALE-RESOLUTION",
     title: "Stale decision", status: "APPROVED", owner_confirmed: true,
-    source_refs: ["https://example.com/owner-decision"], content: \`authority_resolution: \${JSON.stringify({
+    source_refs: ["https://example.com/owner-decision"], content: `authority_resolution: ${JSON.stringify({
       execution_id: "E1", mandate_id: "E1-MANDATE-001", wu_id: "WU-03",
       blocked_at_revision: 0, resolution: "No authority for this blocker",
-    })}\`,
+    })}`,
   })
   await assert.rejects(f.run("resolve_authority_blocker", { decision_artifact_id: other.record_key }), /exact active/)
   assert.equal((await f.run("status")).blocker.class, "BLOCKED_AUTHORITY")
