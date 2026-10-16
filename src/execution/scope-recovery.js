@@ -18,6 +18,11 @@ const actualScopeClaim = /(?:new (?:feature|requirement|policy|scope)|unauthori[
 
 export function classifyScopeBlocker(blocker) {
   if (blocker?.class !== "BLOCKED_SCOPE") return { kind: "NOT_SCOPE", reason: "No scope blocker is active" }
+  if (blocker.scope_cause) {
+    return blocker.scope_cause.kind === "FUNCTIONAL_SCOPE_CHANGE"
+      ? { kind: "SCOPE_CONFLICT", reason: "Typed functional scope authority requires an owner decision" }
+      : { kind: "EVIDENCE_REQUIRED", reason: "Unknown scope cause: do not guess its authority" }
+  }
   if (blocker.authority_question) {
     return { kind: "SCOPE_CONFLICT", reason: "An explicit structured authority question cannot be resolved by Git checkout repair" }
   }

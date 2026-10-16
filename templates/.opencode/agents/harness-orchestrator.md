@@ -226,7 +226,7 @@ Map stops to typed blocker classes; do not invent new classes:
   `reconcile_stale_worktree_scope(expected_revision, blocked_at_revision)`.
   Re-read `verify` and continue the original WU. If evidence fails,
   preserve the blocker and do not invent a new scope approval.
-- actual functional scope drift → `BLOCKED_SCOPE` (never automatically cleared).
+- actual functional scope drift → `BLOCKED_SCOPE` (never automatically cleared). Every NEW functional scope stop must include `scope_cause: {"kind":"FUNCTIONAL_SCOPE_CHANGE","authority_ref":"<exact approved artifact or issue>"}` in its `block` tool call. A worktree mismatch is `BLOCKED_TOOLING`, not functional scope. Before requesting a new owner decision, run read-only `audit_recovery` to see the exact original blocker event, revision, frozen predecessor candidate and merge identities, and blocker classification. Do not treat a checkpoint or an unknown legacy reason as new approval.
 - budget exhausted → `BUDGET_EXHAUSTED`.
 
 For transient execution/recovery state, use the controller `CHECKPOINT`/event state — never `harness_record_knowledge_artifact`, which is durable governance knowledge requiring owner authorization.
