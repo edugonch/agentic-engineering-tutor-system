@@ -419,6 +419,7 @@ export function applyEvent(previous, event, { historicalReplay = false } = {}) {
     }
 
     case "WU_CONTRACT_STAGE": {
+      if (body.expected_revision !== state.revision) throw new Error("WU_CONTRACT_STAGE stale expected_revision")
       if (state.completed || state.mandate?.authority_kind !== MANDATE_AUTHORITY.OWNER_APPROVED_EPIC) {
         throw new Error("WU_CONTRACT_STAGE requires an incomplete owner-approved Epic")
       }
@@ -445,7 +446,7 @@ export function applyEvent(previous, event, { historicalReplay = false } = {}) {
       if (state.blocker?.class === "BLOCKED_AUTHORITY" && !Number.isSafeInteger(state.blocker.at_revision)) {
         throw new Error("WU_CONTRACT_STAGE requires an auditable authority blocker revision")
       }
-      state.staged_wu_contract = { wu_id: body.wu_id, contract, staged_at_revision: state.revision,
+      state.staged_wu_contract = { wu_id: body.wu_id, source_artifact_id: body.source_artifact_id, contract, staged_at_revision: state.revision,
         blocker_at_revision: state.blocker?.at_revision ?? null }
       break
     }
@@ -489,7 +490,8 @@ export function applyEvent(previous, event, { historicalReplay = false } = {}) {
         if (staged.wu_id !== body.wu_id || !body.contract ||
             body.contract.contract_hash !== staged.contract.contract_hash ||
             body.contract.source_record_key !== staged.contract.source_record_key ||
-            body.contract.source_hash !== staged.contract.source_hash) {
+            body.contract.source_hash !== staged.contract.source_hash ||
+            stableHash(body.contract) !== stableHash(staged.contract)) {
           throw new Error("WU_ACTIVATE must use the exact preactivation-staged approved contract")
         }
         if (state.blocker) throw new Error("WU_ACTIVATE requires the preactivation authority blocker to be resolved")
