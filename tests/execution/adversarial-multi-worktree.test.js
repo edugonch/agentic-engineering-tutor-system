@@ -159,7 +159,7 @@ test("adversarial lifecycle: recovery -> candidate from moved checkout -> indepe
     verification_evidence_ids: ["synthetic-state-fixture"], verified_check_ids: [],
     verification_contract_hash: null,
   })
-  await assert.rejects(f.commit("WU_COMPLETE", { candidate_id: candidate.candidate_id }), /VERIFIED/)
+  await assert.rejects(f.commit("WU_COMPLETE", { candidate_id: candidate.candidate_id }), /merge candidate .* does not match|merge.status VERIFIED/)
   await f.commit("BIND_PR", {
     candidate_id: candidate.candidate_id, repository: "example/alfran",
     pr_number: 218, head_sha: head, base_sha: f.verifiedHead, base_branch: "main",
