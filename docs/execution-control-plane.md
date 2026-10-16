@@ -134,6 +134,32 @@ The existing APPROVED-source stage/resolution path remains unchanged. The
 derived route is intentionally limited to repositories with supported npm
 verification scripts; absent tooling must not be concealed with fake checks.
 
+## Durable continuation delivery and no-progress detection
+
+The supervisor separates **queued**, **received**, and **root turn observed** states.
+`SUPERVISOR_SENT` alone does not establish that an orchestrator ran. The exact
+internal root prompt records `SUPERVISOR_RECEIVED` under the same execution,
+session and intent. An independent `session.execution.succeeded` observation
+records `SUPERVISOR_TURN_OBSERVED` only when the current supervisor progress
+fingerprint has not changed.
+
+A received, completed root turn without progress admits **one** additional
+bounded continuation. A second independently observed no-progress turn records
+a typed `NO_PROGRESS` stop with the exact intent and fingerprint. The supervisor
+never fabricates handoff acceptance, dispatch completion, a new candidate,
+review PASS, or a merge. Missing receipt, running/interrupted sessions, security
+or authority blockers and unrelated progress do not trigger retries.
+
+Receipt and observation events are append-only and idempotent on the exact
+intent ID. Older historical execution logs replay unchanged. Plugin restart
+can admit a still-queued continuation using durable identity, rather than
+requiring an ephemeral in-memory token. A failed event handler does not
+terminate the subscription, and a broken subscription retries with backoff.
+
+This is a conservative liveness bound, not a guarantee that an external
+provider will run every queued prompt. Actual root-turn execution and
+end-to-end builder-to-merge behavior require a real OpenCode canary.
+
 ## 2. Durability target
 
 - **v1 guarantee:** survive process crash, OpenCode restart, and an orderly
