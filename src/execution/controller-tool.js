@@ -496,6 +496,8 @@ export async function runExecutionController(projectRoot, input, candidateRegist
     if (snap.state.mandate?.authority_kind !== MANDATE_AUTHORITY.OWNER_APPROVED_EPIC) throw new Error("JIT requires an owner-approved Epic")
     if (snap.state.blocker && !isTechnicalWuContractBlocker(snap.state.blocker)) throw new Error("JIT refuses unrelated authority or security blockers")
     if (snap.state.staged_wu_contract) throw new Error("JIT contract already staged")
+    if (snap.state.mandate.wu_sequence?.[snap.state.activated_wu_ids.length] !== wuId ||
+        (snap.state.wu && !snap.state.wu.completed)) throw new Error("JIT_WU_ORDER: next frozen WU with completed predecessor required")
     const source = await readWorkUnitDefinition(projectRoot, wuId, snap.state.mandate.source_artifact_id, sourceId)
     const contract = await compileMandateDerivedWu(projectRoot, snap.state, wuId, source)
     const body = { wu_id: wuId, source_artifact_id: sourceId, expected_revision: snap.state.revision,
