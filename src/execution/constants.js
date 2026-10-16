@@ -12,6 +12,8 @@ export const OPERATION_TYPES = Object.freeze([
   "SUPERVISOR_BIND",
   "SUPERVISOR_CONTINUE",
   "SUPERVISOR_SENT",
+  "SUPERVISOR_RECEIVED", // root prompt hook admitted the exact durable intent
+  "SUPERVISOR_TURN_OBSERVED", // authenticated root completed a continuation without durable progress
   "MANDATE_APPROVE", // owner-approved Epic execution mandate (initial authority input)
   "MANDATE_AMEND", // versioned owner-approved policy amendment; budget/scope remain immutable
   "PROCESS_POLICY_ADOPT",
