@@ -809,7 +809,7 @@ export function applyEvent(previous, event, { historicalReplay = false } = {}) {
       const stagedTarget = (!state.wu || state.wu.completed) &&
         state.staged_wu_contract?.wu_id === body.wu_id
       if (state.completed || (!activeTarget && !stagedTarget)) {
-        throw new Error("AUTHORITY_RESOLVE requires the active WU or a preactivation-staged next WU")
+        throw new Error("AUTHORITY_RESOLVE target must match the active WU or a preactivation-staged next WU")
       }
       if (state.mandate?.authority_kind !== MANDATE_AUTHORITY.OWNER_APPROVED_EPIC || body.mandate_id !== state.mandate.mandate_id || `${body.execution_id}:exec` !== state.execution_id) {
         throw new Error("AUTHORITY_RESOLVE must match the execution, mandate and active WU")
