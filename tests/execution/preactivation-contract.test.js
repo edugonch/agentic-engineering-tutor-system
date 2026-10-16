@@ -1,6 +1,6 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { mkdtemp, rm } from "node:fs/promises"
+import { mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { runExecutionController } from "../../src/execution/controller-tool.js"
@@ -175,3 +175,73 @@ test("no staging while predecessor is active or at another execution's authority
   assert.equal((await f.run("status")).wu.completed, true)
 })
 
+
+
+test("mandate-derived JIT stages the exact DRAFT, resolves only technical blocker and activates without owner fiction", async t => {
+  const f = await setup(t)
+  await writeFile(join(f.root, "package.json"), JSON.stringify({
+    scripts: { "format:check": "node --check index.js", lint: "node --check index.js", "deploy:production": "echo forbidden" },
+  }))
+  const draft = await recordKnowledgeArtifact(f.root, {
+    artifact_type: "work-unit", artifact_id: "WU-03-PLANNING-DRAFT", title: "Planned third WU",
+    status: "DRAFT", owner_confirmed: true, parent_refs: ["EPIC-1"],
+    content: "Original acceptance: explain three allowed state transitions with test evidence.\\nScope: one design report.\\nTDD required.",
+  })
+  const before = await f.ctl.snapshot()
+  const staged = await f.run("derive_and_stage_next_wu_contract", {
+    wu_id: "WU-03", wu_artifact_id: draft.record_key, expected_revision: f.blocked.revision,
+  })
+  assert.equal(staged.blocker, null)
+  assert.equal(staged.staged_wu_contract.wu_id, "WU-03")
+  assert.equal(staged.staged_wu_contract.source_authority, "MANDATE_DERIVED")
+  assert.equal(staged.budget.total_seconds, before.state.budget.total_seconds)
+  assert.equal(staged.budget.used_seconds, before.state.budget.used_seconds)
+  const fresh = await f.ctl.snapshot()
+  const stageEvent = fresh.events.at(-1)
+  assert.equal(stageEvent.operation_type, "WU_CONTRACT_STAGE")
+  assert.equal(stageEvent.body.derived_technical, true)
+  assert.equal(stageEvent.body.contract.source_hash, draft.sha256)
+  assert.equal(stageEvent.body.contract.origin_source_hash, draft.sha256)
+  assert.equal(stageEvent.body.contract.process_obligations[0].kind, "tdd")
+  assert.ok(stageEvent.body.contract.verification_contract.commands.some(x => x.args[1] === "format:check"))
+  assert.ok(stageEvent.body.contract.verification_contract.commands.every(x => x.args[1] !== "deploy:production"))
+  const again = await f.run("derive_and_stage_next_wu_contract", {
+    wu_id: "WU-03", wu_artifact_id: draft.record_key, expected_revision: f.blocked.revision,
+  })
+  assert.equal(again.commit_status, "replayed")
+  assert.equal(again.revision, staged.revision)
+  const activated = await f.run("activate_wu", {
+    wu_id: "WU-03", mandate_id: "E1-MANDATE-001", wu_artifact_id: draft.record_key,
+  })
+  assert.equal(activated.wu.contract.source_authority, "MANDATE_DERIVED")
+  assert.equal(activated.staged_wu_contract, null)
+  assert.equal((await f.run("verify")).passed, true)
+})
+
+test("mandate JIT refuses unrelated security blockers, out-of-order work and absent verification capability", async t => {
+  const f = await setup(t)
+  const draft = await recordKnowledgeArtifact(f.root, {
+    artifact_type: "work-unit", artifact_id: "WU-03-JIT-DRAFT", title: "JIT candidate",
+    status: "DRAFT", owner_confirmed: true, parent_refs: ["EPIC-1"],
+    content: "Original acceptance and bounded scope are preserved; no business policy.",
+  })
+  const args = { wu_id: "WU-03", wu_artifact_id: draft.record_key, expected_revision: f.blocked.revision }
+  const events = (await f.ctl.snapshot()).events
+  await assert.rejects(f.run("derive_and_stage_next_wu_contract", args), /JIT_VERIFICATION_REQUIRED/)
+  await writeFile(join(f.root, "package.json"), JSON.stringify({ scripts: { "deploy:production": "echo forbidden" } }))
+  await assert.rejects(f.run("derive_and_stage_next_wu_contract", args), /JIT_VERIFICATION_REQUIRED/)
+  await writeFile(join(f.root, "package.json"), JSON.stringify({ scripts: { lint: "node --check index.js" } }))
+  await assert.rejects(f.run("derive_and_stage_next_wu_contract", { ...args, wu_id: "WU-02" }), /JIT_WU_ORDER/)
+  await assert.rejects(f.run("derive_and_stage_next_wu_contract", { ...args, expected_revision: 0 }), /stale revision/)
+  assert.deepEqual((await f.ctl.snapshot()).events, events)
+  const security = await setup(t, { blockerClass: "BLOCKED_SECURITY" })
+  await writeFile(join(security.root, "package.json"), JSON.stringify({ scripts: { lint: "node --check index.js" } }))
+  const securityDraft = await recordKnowledgeArtifact(security.root, {
+    artifact_type: "work-unit", artifact_id: "WU-03-SECURITY-DRAFT", title: "No authority", status: "DRAFT",
+    owner_confirmed: true, parent_refs: ["EPIC-1"], content: "No security bypass permitted.",
+  })
+  await assert.rejects(security.run("derive_and_stage_next_wu_contract", {
+    wu_id: "WU-03", wu_artifact_id: securityDraft.record_key, expected_revision: security.blocked.revision,
+  }), /unrelated authority or security/)
+  assert.equal((await security.run("status")).blocker.class, "BLOCKED_SECURITY")
+})
