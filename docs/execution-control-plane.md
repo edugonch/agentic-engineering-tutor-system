@@ -46,7 +46,9 @@ Use this governed sequence:
 
 1. Read `harness_execution_controller(status)` and `verify` for the existing
    execution, including the exact `revision`, `blocker.at_revision`, mandate,
-   and next `wu_sequence` entry.
+   and next `wu_sequence` entry. Optionally call read-only
+   `inspect_next_wu_contract` for a source selection/normalization diagnosis:
+   it cannot approve, activate or mutate a WU.
 2. Find the approved, fully executable successor WU artifact in the knowledge
    index. The source must link to the approved Epic, pass content-hash checks,
    and contain its exact `execution_contract` with verification commands.
