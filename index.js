@@ -689,17 +689,21 @@ export default Plugin.define({
           deletions: { type: "array", items: { type: "string" }, maxItems: 2000 },
           verification_contract: { type: "object" },
         }, ["wu_id"]),
-        execute: async (input) => {
+        execute: async (input, context) => {
+          // Controller/registry are canonical; the model's current Git files
+          // belong to its verified runtime session checkout after session_move.
           const root = requireProjectRoot()
+          const roots = await resolveScopeRuntimeCheckout(ctx, root, context?.sessionID)
+          const checkoutRoot = roots.checkoutRoot
           const execution = await findWuExecution(root, input.wu_id)
           if (!execution?.state.wu.contract?.verification_contract) throw new Error("Bind the WU executable contract before freezing a candidate")
           const base = null
           const contract = structuredClone(execution.state.wu.contract.verification_contract)
-          const paths = await trackedCandidatePaths(root, [...(input.base_paths ?? []), ...(input.overlay_paths ?? [])], input.deletions ?? [])
+          const paths = await trackedCandidatePaths(checkoutRoot, [...(input.base_paths ?? []), ...(input.overlay_paths ?? [])], input.deletions ?? [])
           contract.source_wu_hash = execution.state.wu.contract.source_hash
           contract.source_wu_revision = execution.state.wu.contract.source_revision
           contract.source_wu_id = input.wu_id
-          const candidate = await freezeCandidate(root, {
+          const candidate = await freezeCandidate(checkoutRoot, {
             base,
             paths,
             deletions: input.deletions ?? [],
