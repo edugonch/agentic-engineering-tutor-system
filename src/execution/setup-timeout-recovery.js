@@ -49,6 +49,7 @@ export async function retryBlockedFrozenVerification({
       !state.wu || state.wu.wu_id !== contract?.source_wu_id ||
       !state.candidates?.[candidate.candidate_id] ||
       state.candidates[candidate.candidate_id].wu_id !== state.wu.wu_id ||
+      state.candidates[candidate.candidate_id].tree_hash !== candidate.tree_hash ||
       !Array.isArray(contract?.setup) || contract.setup.length === 0 ||
       !contract.commands?.some(c => c.id === checkId) ||
       verificationContractHash(contract) !== state.wu.contract?.verification_contract_hash ||
@@ -84,6 +85,18 @@ export async function retryBlockedFrozenVerification({
       blocked_at_revision: blocker.at_revision, source_wu_id: state.wu.wu_id, check_id: checkId },
     run: options => run(candidate, checkId, options),
   })
+  if (result.status === "PASS") {
+    const setups = candidate.verification_contract.setup
+    if (result.candidate_id !== candidate.candidate_id || result.check_id !== checkId ||
+        result.verification_contract_hash !== candidate.manifest?.verification_contract?.contract_hash ||
+        result.tree_hash !== candidate.tree_hash || result.exitCode !== 0 ||
+        !result.fingerprint ||
+        !Array.isArray(result.setup_results) ||
+        result.setup_results.length !== setups.length ||
+        setups.some((step, i) => result.setup_results[i]?.id !== step.id || result.setup_results[i]?.ok !== true)) {
+      throw new Error("SETUP_RECOVERY_INCOMPLETE_PASS: candidate, frozen setup, executed check or check fingerprint missing")
+    }
+  }
   let evidence_id = null
   if (result.status === "PASS" || result.status === "FAIL") {
     const receipt = createVerificationReceipt(result)
