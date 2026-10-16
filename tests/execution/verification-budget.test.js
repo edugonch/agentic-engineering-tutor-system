@@ -118,6 +118,9 @@ test("planning estimates allow verification after WU and reviewer reservation ov
 test("RED: a verified prior setup timeout permits one budgeted unchanged frozen check retry under BLOCKED_TOOLING", async t => {
   const { c, commit, candidate } = await fixture(t, true)
   await commit("BLOCK", { class: "BLOCKED_TOOLING", reason: "Frozen verification setup npm ci timed out after 120000 ms" })
+  const candidate_id = "cand-" + "d".repeat(64)
+  candidate.candidate_id = candidate_id
+  await commit("FREEZE_CANDIDATE", { candidate_id, wu_id: "WU1", manifest_hash: "mh", tree_hash: "th" })
   const before = (await c.snapshot()).state
   let executed = 0
   await assert.rejects(withVerificationBudget({
@@ -131,6 +134,12 @@ test("RED: a verified prior setup timeout permits one budgeted unchanged frozen 
     run: async () => { executed++; return { status: "PASS" } },
   }), /BLOCKED_TOOLING|recovery/i)
   assert.equal(executed, 0)
+  await commit("VERIFICATION_RETRY_ATTEMPT", {
+    blocked_at_revision: before.blocker.at_revision, wu_id: "WU1",
+    candidate_id, check_id: "check",
+    verification_contract_hash: (await c.snapshot()).state.wu.contract.verification_contract_hash,
+    failure_evidence_id: "verify-" + "c".repeat(64), setup_id: "install",
+  })
   const result = await withVerificationBudget({
     controller: c, candidate, check_id: "check", context: { sessionID: "root" },
     setupRecovery: { kind: "VERIFIED_SETUP_TIMEOUT", blocked_at_revision: before.blocker.at_revision, check_id: "check", source_wu_id: "WU1" },
