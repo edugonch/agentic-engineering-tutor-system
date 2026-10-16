@@ -21,7 +21,7 @@ import { recoveryAction } from "./progress.js"
 
 import { join } from "node:path"
 import { compileWuContract } from "./wu-contract.js"
-import { compileMandateDerivedWu, isTechnicalWuContractBlocker } from "./jit-contract.js"
+import { compileMandateDerivedWu, inspectMandateDerivedWu, isTechnicalWuContractBlocker } from "./jit-contract.js"
 import { wuBudgetUsage } from "./wu-budget.js"
 import { stableHash } from "./serialize.js"
 import { readLog, validateLog } from "./event-log.js"
@@ -450,20 +450,30 @@ export async function runExecutionController(projectRoot, input, candidateRegist
   }
 
   if (action === "inspect_next_wu_contract") {
-    // JIT preflight only. Never registers, approves, activates or edits a WU.
-    // The approved Epic freezes order; normalization must remain source-backed.
+    // Read-only source-backed preflight. Incomplete planning fields are not
+    // new budget authority questions; the JIT compiler determines readiness.
     const { state } = await controller.snapshot()
     const next = state.mandate?.wu_sequence?.[state.activated_wu_ids.length] ?? null
     if (!next) return { action, status: "NO_NEXT_FROZEN_WU", revision: state.revision }
-    if (state.wu && !state.wu.completed) return { action, status: "PREDECESSOR_INCOMPLETE", next_wu_id: next,
-      active_wu_id: state.wu.wu_id, revision: state.revision }
-    if (state.staged_wu_contract) return { action, status: "APPROVED_CONTRACT_STAGED", next_wu_id: next,
-      source_record_key: state.staged_wu_contract.contract.source_record_key,
+    if (state.wu && !state.wu.completed) return { action, status: "PREDECESSOR_INCOMPLETE",
+      next_wu_id: next, active_wu_id: state.wu.wu_id, revision: state.revision }
+    if (state.staged_wu_contract) return { action, status: "APPROVED_CONTRACT_STAGED",
+      next_wu_id: next, source_record_key: state.staged_wu_contract.contract.source_record_key,
       contract_hash: state.staged_wu_contract.contract.contract_hash, revision: state.revision }
+    if (state.blocker && !isTechnicalWuContractBlocker(state.blocker)) {
+      return { action, status: "AUTHORITY_OR_SAFETY_BLOCKED", next_wu_id: next,
+        blocker_class: state.blocker.class, authority_question: state.blocker.authority_question ?? null,
+        revision: state.revision, note: "Do not replace a real business/security/permission stop with JIT" }
+    }
     const sourceId = String(input.wu_artifact_id ?? next)
     try {
       const definition = await readWorkUnitDefinition(projectRoot, next,
         state.mandate.source_artifact_id, sourceId)
+      if (!/^execution_contract: /m.test(definition.content)) {
+        const diagnosis = await inspectMandateDerivedWu(projectRoot, state, next, definition)
+        return { action, ...diagnosis, next_wu_id: next, revision: state.revision,
+          next_action: diagnosis.status === "READY_FOR_JIT" ? "derive_and_stage_next_wu_contract" : null }
+      }
       const contract = compileWuContract(next, definition)
       return { action, status: contract.normalization_required ? "NORMALIZATION_REQUIRED" : "EXECUTABLE_SOURCE_READY",
         next_wu_id: next, source_record_key: contract.source_record_key,
