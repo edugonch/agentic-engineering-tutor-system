@@ -1,6 +1,6 @@
 import { expiredWait, terminalObservation } from "./external-observation.js"
 import { applyProcessEvent, activeRecovery, assertProcessAcceptance, requiresTdd, processPending } from "./process-recovery.js"
-import { stableHash } from "./serialize.js"
+import { stableHash, sha256 } from "./serialize.js"
 import { PLANNING_ESTIMATES } from "./time-policy.js"
 import { isTechnicalWuContractBlocker } from "./jit-contract.js"
 import { validateContractCorrection } from "./contract-correction.js"
@@ -458,7 +458,8 @@ export function applyEvent(previous, event, { historicalReplay = false } = {}) {
         const { contract_hash, ...identity } = contract
         if (stableHash(identity) !== contract_hash ||
             contract.derivation?.kind !== "MANDATE_JIT" ||
-            contract.derivation.original_source_hash !== contract.source_hash) {
+            contract.derivation.original_source_hash !== contract.source_hash ||
+            sha256(contract.source_content) !== contract.source_hash) {
           throw new Error("JIT derived contract integrity mismatch")
         }
       }
