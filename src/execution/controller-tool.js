@@ -83,6 +83,8 @@ async function summary(controller) {
       source_artifact_id: state.staged_wu_contract.source_artifact_id,
       source_record_key: state.staged_wu_contract.contract.source_record_key,
       contract_hash: state.staged_wu_contract.contract.contract_hash,
+      source_authority: state.staged_wu_contract.contract.source_authority,
+      normalization_required: state.staged_wu_contract.contract.normalization_required,
       staged_at_revision: state.staged_wu_contract.staged_at_revision,
       blocker_at_revision: state.staged_wu_contract.blocker_at_revision,
     } : null,
@@ -507,14 +509,12 @@ export async function runExecutionController(projectRoot, input, candidateRegist
         throw new Error("stage_wu_contract replay conflicts with the previous approved source or revision")
       }
       const replay = await commitAction(controller, holder, previous.operation_id, "WU_CONTRACT_STAGE", previous.body)
-      return { action, commit_status: replay.status, staged_wu_contract: replay.state.staged_wu_contract ?? null,
-        ...(await summary(controller)) }
+      return { action, commit_status: replay.status, ...(await summary(controller)) }
     }
     const body = { wu_id: wuId, source_artifact_id: sourceId, expected_revision: input.expected_revision, contract }
     const res = await commitAction(controller, holder,
       `${executionId}:wu-contract-stage:${wuId}:${contract.contract_hash}`, "WU_CONTRACT_STAGE", body)
-    return { action, commit_status: res.status, staged_wu_contract: res.state.staged_wu_contract,
-      ...(await summary(controller)) }
+    return { action, commit_status: res.status, ...(await summary(controller)) }
   }
 
   if (action === "bind_wu_contract") {
