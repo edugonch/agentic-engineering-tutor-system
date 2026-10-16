@@ -933,6 +933,28 @@ export function applyEvent(previous, event, { historicalReplay = false } = {}) {
       break
     }
 
+    case "VERIFICATION_RETRY_ATTEMPT": {
+      const blocker = state.blocker
+      const wu = state.wu
+      if (state.completed || blocker?.class !== "BLOCKED_TOOLING" ||
+          blocker.at_revision !== body.blocked_at_revision ||
+          !wu || wu.completed || wu.wu_id !== body.wu_id ||
+          body.candidate_id == null || state.candidates[body.candidate_id]?.wu_id !== wu.wu_id ||
+          !wu.contract?.verification_contract?.commands?.some(c => c.id === body.check_id) ||
+          typeof body.failure_evidence_id !== "string" ||
+          !/^verify-[a-f0-9]{64}$/.test(body.failure_evidence_id) ||
+          body.verification_contract_hash !== wu.contract.verification_contract_hash ||
+          state.verification_phase || state.budget.active_phase ||
+          Object.values(state.dispatches).some(d => !["released", "result_reconciled"].includes(d.status))) {
+        throw new Error("VERIFICATION_RETRY_ATTEMPT requires matching active WU, frozen check, failure receipt and exact tooling blocker")
+      }
+      if (state.verification_retry?.blocked_at_revision === blocker.at_revision) {
+        throw new Error("VERIFICATION_RETRY_ALREADY_ATTEMPTED: one retry per exact tooling blocker")
+      }
+      state.verification_retry = { ...body, at_revision: state.revision }
+      break
+    }
+
     case "CLEAR_BLOCKER": {
       if (state.blocker?.class === "NO_PROGRESS" && state.blocker.progress_hash === executionProgress(state)) throw new Error("NO_PROGRESS requires new durable execution evidence; a resolution string or checkpoint is insufficient")
       if (!state.blocker) throw new Error("CLEAR_BLOCKER requires an active blocker.")
