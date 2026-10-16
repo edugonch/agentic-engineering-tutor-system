@@ -454,6 +454,14 @@ export function applyEvent(previous, event, { historicalReplay = false } = {}) {
       if (state.blocker?.class === "BLOCKED_AUTHORITY" && !Number.isSafeInteger(state.blocker.at_revision)) {
         throw new Error("WU_CONTRACT_STAGE requires an auditable authority blocker revision")
       }
+      if (delegated) {
+        const { contract_hash, ...identity } = contract
+        if (stableHash(identity) !== contract_hash ||
+            contract.derivation?.kind !== "MANDATE_JIT" ||
+            contract.derivation.original_source_hash !== contract.source_hash) {
+          throw new Error("JIT derived contract integrity mismatch")
+        }
+      }
       if (delegated && state.blocker &&
         (!isTechnicalWuContractBlocker(state.blocker) || body.blocker_at_revision !== state.blocker.at_revision)) {
         throw new Error("JIT may resolve only the exact technical contract-normalization blocker")
