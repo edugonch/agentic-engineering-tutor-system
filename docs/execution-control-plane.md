@@ -160,6 +160,35 @@ This is a conservative liveness bound, not a guarantee that an external
 provider will run every queued prompt. Actual root-turn execution and
 end-to-end builder-to-merge behavior require a real OpenCode canary.
 
+### Stale-worktree scope reconciliation (fail-closed)
+
+A `BLOCKED_SCOPE` caused by a checkout disagreement is not itself evidence
+that the active Work Unit exceeded its approved business scope. New worktree
+discrepancies must be triaged as tooling/environment concerns before declaring
+functional scope drift. Existing historical `BLOCKED_SCOPE` records remain
+terminal until their exact cause is independently reconciled.
+
+The narrow `inspect_scope_worktree` action is read-only. It checks that the
+blocker names a stale/predecessor worktree discrepancy (not new functional
+scope), that the current WU is exactly next after completed frozen predecessors,
+that work is settled, that `git rev-parse HEAD` is the *exact verified merge
+commit of the last completed WU*, that tracked paths are clean, and that every
+final predecessor candidate overlay file matches its SHA-256 from the immutable
+candidate registry. A checkpoint note alone is never proof.
+
+`reconcile_stale_worktree_scope(expected_revision, blocked_at_revision)`
+performs that inspection again and commits one `SCOPE_WORKTREE_RECONCILE`
+event through the ordinary CAS/lease-fenced controller. It preserves the
+original blocker, work-unit scope, completed WUs, budget, receipts and candidates
+as durable history. It is not a general `clear_blocker` for BLOCKED_SCOPE and
+does not authorize new functional scope, production data changes, or a security
+waiver. A changed Git head, changed tracked file, missing candidate/merge,
+unsettled dispatch, new WU candidate, or true scope conflict fails closed.
+
+The supervisor may wake the root **once** for read-only proof and the exact
+reconciliation attempt. It never performs automatic scope widening or an
+unverified blocker clear. Existing reviews/CI/merge checks still apply.
+
 ## 2. Durability target
 
 - **v1 guarantee:** survive process crash, OpenCode restart, and an orderly
