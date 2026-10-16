@@ -67,3 +67,32 @@ export async function compileMandateDerivedWu(root, state, wuId, definition) {
       verification_check_ids: verification_contract.commands.map(check => check.id) } }
   return { ...normalized, contract_hash: stableHash(normalized) }
 }
+
+// Read-only JIT preflight uses the SAME compiler as the committing operation.
+// It never approves an artifact, spends budget, changes a blocker or emits an event.
+export async function inspectMandateDerivedWu(root, state, wuId, definition) {
+  try {
+    const contract = await compileMandateDerivedWu(root, state, wuId, definition)
+    return {
+      status: "READY_FOR_JIT",
+      source_record_key: contract.source_record_key,
+      planning_estimate_seconds: contract.active_seconds,
+      verification_check_ids: contract.derivation.verification_check_ids,
+      contract_hash: contract.contract_hash,
+      note: "Mandate-derived technical estimate, not a new owner approval or hard WU limit",
+    }
+  } catch (error) {
+    const message = String(error?.message ?? error)
+    const code = message.split(":")[0]
+    const status = {
+      JIT_TIME_POLICY_REQUIRED: "TIME_POLICY_REQUIRED",
+      JIT_BUDGET_EXHAUSTED: "EPIC_BUDGET_EXHAUSTED",
+      JIT_VERIFICATION_REQUIRED: "TECHNICAL_VERIFICATION_MISSING",
+      JIT_SOURCE_INCOMPLETE: "SOURCE_CONTRACT_INCOMPLETE",
+      JIT_SOURCE_REQUIRED: "SOURCE_CONTRACT_INCOMPLETE",
+      JIT_SOURCE_ALREADY_EXECUTABLE: "EXECUTABLE_SOURCE_SELECTION_REQUIRED",
+      JIT_WU_ORDER: "PREDECESSOR_INCOMPLETE",
+    }[code] ?? "JIT_COMPILATION_BLOCKED"
+    return { status, reason: message, source_record_key: definition.source_record_key }
+  }
+}
