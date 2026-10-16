@@ -33,10 +33,10 @@ async function setup(t, { completed = 2, blockerClass = "BLOCKED_AUTHORITY" } = 
       merge_policy: "none", required_ci_checks: [],
       wu_sequence: ["WU-01", "WU-02", "WU-03"] })}`,
   })
-  await run("approve_mandate", { epic_artifact_id: "EPIC-1" })
   for (const wu of ["WU-01", "WU-02", "WU-03"]) {
     await seedWuContract(root, wu, "EPIC-1", 100)
   }
+  await run("approve_mandate", { epic_artifact_id: "EPIC-1" })
   for (const wu of ["WU-01", "WU-02"].slice(0, completed)) {
     await run("activate_wu", { wu_id: wu, mandate_id: "E1-MANDATE-001", wu_artifact_id: wu })
     const candidate = `cand-${wu}`
