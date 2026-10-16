@@ -160,6 +160,41 @@ This is a conservative liveness bound, not a guarantee that an external
 provider will run every queued prompt. Actual root-turn execution and
 end-to-end builder-to-merge behavior require a real OpenCode canary.
 
+### Frozen setup-timeout verification recovery (one-shot)
+
+A `BLOCKED_TOOLING` created after a declared verification setup (such as
+`npm ci`) timed out cannot be solved by invoking `install` as a check:
+`install` is an element of `verification_contract.setup`, and only
+`verification_contract.commands` are callable via
+`harness_run_verification`. Ordinary verification deliberately rejects
+an active tooling blocker.
+
+For **one** bounded retry, the authenticated root orchestrator may call
+`harness_retry_blocked_verification(candidate_id, verification_check_id)`,
+for example with the existing frozen candidate and `arch`. It validates a
+cryptographically intact historical `FAIL` receipt of a timed-out setup
+for exactly that candidate, check, and frozen verification contract; requires
+an active matching WU and an eligible `BLOCKED_TOOLING` with setup/verification
+cause; records a `VERIFICATION_RETRY_ATTEMPT` keyed to the exact blocker
+revision, preserving the preexisting journal; then runs **the complete
+original check including all setup steps and their original timeouts** in
+the disposable candidate workspace under the ordinary measured WU/Epic
+verification budget. No free-form commands, timeout extension or setup waiver
+are accepted. The command and the build artifact are unchanged.
+
+A fresh full-check `PASS` must be persisted as an immutable verification
+receipt before the runtime commits `CLEAR_BLOCKER` for only the exact active
+tooling blocker, including its failed and successful receipt identities in the
+audit trail. FAIL, timeout, missing/tampered receipt, wrong WU or session,
+incomplete check, scope/authority blocker, concurrent verification and a
+duplicate recovery attempt all fail closed. Ordinary remaining check coverage,
+review, CI under the effective mandate and merge gates remain obligatory.
+
+For `npm ci` timeouts caused by continuing network degradation, this retry
+may still fail at the **same** frozen timeout. The correct next step then is a
+governed verification-contract correction (when allowed) or new evidence,
+not an undocumented retry loop or silent increase to 300 seconds.
+
 ### Auditable recovery diagnostics and typed new scope stops
 
 `harness_execution_controller(action="audit_recovery")` is a strictly read-only trace of the exact existing blocker event (including its operation identity, **previous** controller revision `blocker.at_revision`, source body and stable hash), frozen Work Unit, predecessor completion and verified merge receipts, open dispatches, and current budget ledger. It performs no new authorization and does not clear blockers. Historical BLOCK events may lack typed scope provenance and retain their original contents.
