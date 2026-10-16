@@ -6,6 +6,7 @@ import { withVerificationBudget, recoverVerificationPhase } from "./src/executio
 import { packageFingerprint } from "./src/package-fingerprint.js"
 import { createWorkerBudgetGuard } from "./src/execution/worker-budget.js"
 import { createExecutionSupervisor } from "./src/execution/supervisor.js"
+import { resolveScopeRuntimeCheckout } from "./src/execution/scope-checkout.js"
 import { runResilientEventLoop } from "./src/execution/event-loop.js"
 import { deferPluginStartup } from "./src/plugin-startup.js"
 import { runWithExternalWait } from "./src/execution/external-wait.js"
@@ -608,8 +609,13 @@ export default Plugin.define({
               throw new Error(`A launch binding is already pending for ${agent}; consume or release it before preparing another launch.`)
             }
           }
+          const scopeAction = input.action === "inspect_scope_worktree" || input.action === "reconcile_stale_worktree_scope"
+          const scopeRoots = scopeAction
+            ? await resolveScopeRuntimeCheckout(ctx, requireProjectRoot(), context?.sessionID)
+            : null
           const result = await guard.runHarness(context?.sessionID ?? input.session_id, "harness_execution_controller", input,
-            () => runExecutionController(requireProjectRoot(), input, candidateRegistry))
+            () => runExecutionController(requireProjectRoot(), input, candidateRegistry,
+              scopeRoots ? { checkoutRoot: scopeRoots.checkoutRoot } : {}))
           if (supervisor.enabled && result.mandate?.authority_kind === "OWNER_APPROVED_EPIC") await supervisor.bind(input.execution_id, context?.sessionID ?? input.session_id)
           if (input.action === "release") launchBindings.release(input.execution_id, input.dispatch_id)
           // Wave B: after a successful prepare_launch with a named launch_agent,
