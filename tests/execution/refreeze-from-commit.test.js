@@ -157,6 +157,42 @@ test("an unavailable source commit fails closed", async () => {
   } finally { await rm(root, { recursive: true, force: true }) }
 })
 
+test("commit freeze refuses a bare tree or blob object id (the source must resolve as a commit)", async () => {
+  const root = await mkdtemp(join(tmpdir(), "refreeze-noncommit-"))
+  try {
+    initRepo(root)
+    await seedAndCommit(root)
+    const head = git(root, ["rev-parse", "HEAD"])
+    const tree = git(root, ["rev-parse", "HEAD^{tree}"])
+    const blob = git(root, ["rev-parse", "HEAD:app.js"])
+    // A tree peels to itself under `^{tree}`, which is exactly why a tree id must
+    // be rejected before tree resolution: it is a valid Git object id but not a
+    // source commit.
+    assert.equal(git(root, ["rev-parse", `${tree}^{tree}`]), tree)
+    assert.notEqual(tree, head)
+    assert.notEqual(blob, head)
+
+    await assert.rejects(captureCommitSnapshot(root, tree), /SOURCE_COMMIT_UNRESOLVED/)
+    await assert.rejects(captureCommitSnapshot(root, blob), /SOURCE_COMMIT_UNRESOLVED/)
+    await assert.rejects(freezeCandidateFromCommit(root, { commit: tree }), /SOURCE_COMMIT_UNRESOLVED/)
+    await assert.rejects(freezeCandidateFromCommit(root, { commit: blob }), /SOURCE_COMMIT_UNRESOLVED/)
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+test("commit freeze resolves an abbreviated object id to the canonical commit identity", async () => {
+  const root = await mkdtemp(join(tmpdir(), "refreeze-canonical-"))
+  try {
+    initRepo(root)
+    await seedAndCommit(root)
+    const head = git(root, ["rev-parse", "HEAD"])
+    const tree = git(root, ["rev-parse", "HEAD^{tree}"])
+    const candidate = await freezeCandidateFromCommit(root, { commit: head.slice(0, 12) })
+    assert.equal(candidate.base.commit, head)
+    assert.equal(candidate.base.tree, tree)
+    assert.equal(candidateGitTree(candidate), tree)
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+
 test("commit-tree capture refuses a path-traversal entry", async () => {
   const root = await mkdtemp(join(tmpdir(), "refreeze-traversal-"))
   try {
@@ -314,4 +350,31 @@ test("harness_refreeze_candidate fails closed without a bound PR or an executabl
   await assert.rejects(f.invoke("harness_refreeze_candidate", { wu_id: "WU-01" }), /bind the PR first/)
   // No active execution for this WU => no executable contract.
   await assert.rejects(f.invoke("harness_refreeze_candidate", { wu_id: "NOPE" }), /Bind the WU executable contract/)
+})
+
+// Bind the durable PR to a chosen head_sha after recording a stale candidate.
+async function freezeStaleAndBind(f, { head_sha, pr_number }) {
+  await writeFile(join(f.root, "app.js"), "drifted working tree\n")
+  const stale = await f.invoke("harness_freeze_candidate", { wu_id: "WU-01" })
+  await f.run({ action: "record_candidate", candidate_id: stale.candidate_id })
+  await f.run({ action: "bind_pr", repository: "owner/repo", pr_number, candidate_id: stale.candidate_id,
+    head_sha, base_branch: "main", base_sha: "base-0" })
+  return stale
+}
+
+test("harness_refreeze_candidate refuses a durable PR binding whose head is a tree object, not a commit", async (t) => {
+  const f = await pluginHost(t)
+  const { tree } = await activateWu(f)
+  await freezeStaleAndBind(f, { head_sha: tree, pr_number: 219 })
+  // The durable binding holds a valid Git object id that is a tree, not a source
+  // commit; the recovery must fail closed rather than bind a wrong source identity.
+  await assert.rejects(f.invoke("harness_refreeze_candidate", { wu_id: "WU-01" }), /SOURCE_COMMIT_UNRESOLVED/)
+})
+
+test("harness_refreeze_candidate refuses a durable PR binding whose head is a blob object, not a commit", async (t) => {
+  const f = await pluginHost(t)
+  const { head } = await activateWu(f)
+  const blob = git(f.root, ["rev-parse", `${head}:app.js`])
+  await freezeStaleAndBind(f, { head_sha: blob, pr_number: 220 })
+  await assert.rejects(f.invoke("harness_refreeze_candidate", { wu_id: "WU-01" }), /SOURCE_COMMIT_UNRESOLVED/)
 })

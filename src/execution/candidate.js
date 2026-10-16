@@ -144,16 +144,30 @@ export async function captureCommitSnapshot(root, commit) {
   if (typeof commit !== "string" || !/^[0-9a-fA-F]{4,64}$/.test(commit)) {
     throw new Error(`source commit must be a Git object id: ${String(commit)}`)
   }
+  // The supplied id must resolve as an actual COMMIT before any tree resolution
+  // or listing. A tree object id is a valid Git object id and peels to itself
+  // under `^{tree}`, so resolving only the tree would silently accept a non-commit
+  // and bind the wrong source identity. Peeling to `^{commit}` both rejects
+  // non-commit objects (trees, blobs) and yields the canonical commit id.
+  let sourceCommit
+  try {
+    const { stdout } = await exec("git", ["rev-parse", "--verify", "--quiet", `${commit}^{commit}`], { cwd: root, encoding: "utf8" })
+    sourceCommit = stdout.trim()
+  } catch {
+    throw new Error(`SOURCE_COMMIT_UNRESOLVED: ${commit} is not available as a commit in the local Git object database.`)
+  }
+  if (!/^[0-9a-fA-F]{40,64}$/.test(sourceCommit)) throw new Error(`SOURCE_COMMIT_UNRESOLVED: ${commit} does not resolve to a commit.`)
+
   let tree
   try {
-    const { stdout } = await exec("git", ["rev-parse", "--verify", "--quiet", `${commit}^{tree}`], { cwd: root, encoding: "utf8" })
+    const { stdout } = await exec("git", ["rev-parse", "--verify", "--quiet", `${sourceCommit}^{tree}`], { cwd: root, encoding: "utf8" })
     tree = stdout.trim()
   } catch {
     throw new Error(`SOURCE_COMMIT_UNRESOLVED: ${commit} is not available in the local Git object database.`)
   }
   if (!/^[0-9a-fA-F]{40,64}$/.test(tree)) throw new Error(`SOURCE_COMMIT_UNRESOLVED: could not resolve a tree for ${commit}.`)
 
-  const { stdout } = await exec("git", ["ls-tree", "-r", "-z", commit], { cwd: root, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 })
+  const { stdout } = await exec("git", ["ls-tree", "-r", "-z", sourceCommit], { cwd: root, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 })
   const files = []
   const seen = new Set()
   for (const record of stdout.split("\0")) {
@@ -175,7 +189,7 @@ export async function captureCommitSnapshot(root, commit) {
     }
   }
   files.sort((a, b) => a.path.localeCompare(b.path))
-  return { kind: "commit", commit, tree, files }
+  return { kind: "commit", commit: sourceCommit, tree, files }
 }
 
 // Reproducible freeze from an exact Git commit: base = the commit tree, no
