@@ -101,7 +101,7 @@ test("preactivation recovery stages approved contract, resolves exact authority 
   const stage = await f.run("stage_wu_contract", { wu_id: "WU-03", wu_artifact_id: f.approved.record_key,
     expected_revision: f.blocked.revision })
   assert.equal(stage.staged_wu_contract.wu_id, "WU-03")
-  assert.equal(stage.staged_wu_contract.contract.source_authority, "APPROVED")
+  assert.equal(stage.staged_wu_contract.source_authority, "APPROVED")
   assert.equal(stage.blocker.class, "BLOCKED_AUTHORITY")
   assert.equal(stage.budget.total_seconds, baseline.state.budget.total_seconds)
   assert.equal(stage.budget.used_seconds, baseline.state.budget.used_seconds)
@@ -113,7 +113,7 @@ test("preactivation recovery stages approved contract, resolves exact authority 
   const resolution = await f.run("resolve_authority_blocker", { decision_artifact_id: f.decision.record_key })
   assert.equal(resolution.blocker, null)
   assert.equal(resolution.authority_resolutions["WU-03"][0].preactivation_contract_hash,
-    stage.staged_wu_contract.contract.contract_hash)
+    stage.staged_wu_contract.contract_hash)
   await assert.rejects(f.run("activate_wu", { wu_id: "WU-03", mandate_id: "E1-MANDATE-001",
     wu_artifact_id: "WU-03" }), /differs from the preactivation-staged/)
   const activated = await f.run("activate_wu", { wu_id: "WU-03", mandate_id: "E1-MANDATE-001",
@@ -123,7 +123,7 @@ test("preactivation recovery stages approved contract, resolves exact authority 
   assert.equal(activated.wu.contract.normalization_required, false)
   assert.equal(activated.budget.total_seconds, baseline.state.budget.total_seconds)
   assert.equal(activated.budget.used_seconds, baseline.state.budget.used_seconds)
-  assert.equal(activated.staged_wu_contract, undefined)
+  assert.equal(activated.staged_wu_contract, null)
   const replayAfterActivation = await f.run("stage_wu_contract", { wu_id: "WU-03",
     wu_artifact_id: f.approved.record_key, expected_revision: f.blocked.revision })
   assert.equal(replayAfterActivation.commit_status, "replayed")
