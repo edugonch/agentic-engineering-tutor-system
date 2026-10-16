@@ -13,7 +13,7 @@ const hashBytes = bytes => createHash("sha256").update(bytes).digest("hex")
 const shaPattern = /^[a-f0-9]{40}$/
 // The legacy BLOCK event has no typed cause. Treat prose as *triage evidence*,
 // never as proof that Git or a user-approved scope decision changed.
-const legacyEnvironmentClaim = /(?:\\buntracked\\b|\\bnot[ -]tracked\\b|\\bnot in git\\b|\\bmissing from (?:git|branch|checkout)\\b|\\bworktree\\b|\\bworking[ -]tree\\b|\\bstale\\b|predecessor.{0,70}(?:hash|tree|commit|mismatch)|baseline.{0,40}(?:mismatch|drift))/i
+const legacyEnvironmentClaim = /(?:\buntracked\b|\bnot[ -]tracked\b|\bnot in git\b|\bmissing from (?:git|branch|checkout)\b|\bworktree\b|\bworking[ -]tree\b|\bstale\b|predecessor.{0,70}(?:hash|tree|commit|mismatch)|baseline.{0,40}(?:mismatch|drift))/i
 const actualScopeClaim = /(?:new (?:feature|requirement|policy|scope)|unauthori[sz]ed (?:change|scope|feature)|scope (?:expansion|increase)|out.of.scope (?:feature|implementation)|additional (?:feature|service|module|endpoint)|change (?:business|product) policy)/i
 
 export function classifyScopeBlocker(blocker) {
