@@ -184,3 +184,74 @@ test("completed predecessor technical-contract blocker wakes once for governed J
   assert.equal(after.wu.completed, true)
   assert.equal(after.activated_wu_ids.length, 1)
 })
+
+
+test("acknowledged root no-progress turn gets one bounded retry, then an auditable NO_PROGRESS stop", async t => {
+  const f = await fixture(t)
+  assert.equal(await f.s.tick("E"), true)
+  const first = (await f.c.snapshot()).state.supervisor.intent
+  assert.equal(first.attempt, 1)
+  // Sending does not prove the prompt was received. Never blindly retry.
+  await f.s.onEvent({ type: "session.execution.succeeded", data: { sessionID: "ses_root" } })
+  assert.equal(f.prompts.size, 1)
+  assert.equal(await f.s.onPrompt({ sessionID: "ses_foreign",
+    metadata: { harness_continuation: first.intent_id, execution_id: "E" } }), false)
+  assert.equal(await f.s.onPrompt({ sessionID: "ses_root",
+    metadata: { harness_continuation: "unknown", execution_id: "E" } }), false)
+  const receipt = { sessionID: "ses_root", metadata: { harness_continuation: first.intent_id, execution_id: "E" } }
+  assert.equal(await f.s.onPrompt(receipt), true)
+  // Idempotent receipt, including after a plugin restart.
+  assert.equal(await f.make().onPrompt(receipt), true)
+  assert.equal((await f.c.snapshot()).events.filter(x => x.operation_type === "SUPERVISOR_RECEIVED").length, 1)
+  await f.s.onEvent({ type: "session.execution.succeeded", data: { sessionID: "ses_root" } })
+  assert.equal(f.prompts.size, 2)
+  const retry = (await f.c.snapshot()).state.supervisor.intent
+  assert.equal(retry.attempt, 2)
+  assert.notEqual(retry.intent_id, first.intent_id)
+  // Duplicate succeeded events without a second receipt do not retry/stop.
+  await f.s.onEvent({ type: "session.execution.succeeded", data: { sessionID: "ses_root" } })
+  assert.equal((await f.c.snapshot()).state.blocker, null)
+  const retryReceipt = { sessionID: "ses_root", prompt: { metadata: {
+    harness_continuation: retry.intent_id, execution_id: "E",
+  } } }
+  assert.equal(await f.make().onPrompt(retryReceipt), true)
+  await f.make().onEvent({ type: "session.execution.succeeded", data: { sessionID: "ses_root" } })
+  const { state, events } = await f.c.snapshot()
+  assert.equal(state.blocker.class, "NO_PROGRESS")
+  assert.match(state.blocker.reason, /returned twice/)
+  assert.equal(events.filter(x => x.operation_type === "SUPERVISOR_TURN_OBSERVED").length, 2)
+  assert.equal(events.filter(x => x.operation_type === "SUPERVISOR_CONTINUE").length, 2)
+  assert.equal((await f.s.tick("E")), false)
+  assert.equal((await f.c.snapshot()).state.revision, state.revision)
+  assert.equal((await f.c.snapshot()).state.budget.used_seconds, 0)
+})
+
+test("real durable dispatch progress resets continuation retry without duplicating a completed worker", async t => {
+  const f = await fixture(t)
+  await f.s.tick("E")
+  const first = (await f.c.snapshot()).state.supervisor.intent
+  await f.s.onPrompt({ sessionID: "ses_root", metadata: {
+    harness_continuation: first.intent_id, execution_id: "E",
+  } })
+  // The orchestrator records an actual dispatch handoff / reconciliation:
+  // progress changes, so the next continuation begins again at attempt 1.
+  await f.commit("DISPATCH_RESERVE", { dispatch_id: "builder-1", reserved_seconds: 10 })
+  await f.s.onEvent({ type: "session.execution.succeeded", data: { sessionID: "ses_root" } })
+  const { state } = await f.c.snapshot()
+  assert.equal(state.supervisor.intent.attempt, 1)
+  assert.notEqual(state.supervisor.intent.intent_id, first.intent_id)
+  assert.equal(state.blocker, null)
+  assert.equal(state.dispatches["builder-1"].status, "reserved")
+  assert.equal((await f.c.snapshot()).events.filter(x => x.operation_type === "SUPERVISOR_TURN_OBSERVED").length, 0)
+})
+
+test("no-progress retry cannot be committed without admitted and observed previous turn", async t => {
+  const f = await fixture(t)
+  await f.s.tick("E")
+  const snap = await f.c.snapshot()
+  const intent = snap.state.supervisor.intent
+  const fake = { intent_id: "forged", progress_hash: intent.progress_hash, attempt: 2 }
+  await assert.rejects(f.commit("SUPERVISOR_CONTINUE", fake), /observed no-progress root turn/)
+  assert.equal((await f.c.snapshot()).state.supervisor.intent.intent_id, intent.intent_id)
+  assert.equal((await f.c.snapshot()).state.blocker, null)
+})
