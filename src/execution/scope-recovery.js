@@ -11,14 +11,27 @@ import { assertCandidatePath } from "./candidate.js"
 const exec = promisify(execFile)
 const hashBytes = bytes => createHash("sha256").update(bytes).digest("hex")
 const shaPattern = /^[a-f0-9]{40}$/
-const worktreeCause = /(?:worktree|working[ -]tree|predecessor.{0,50}(?:hash|tree|commit|mismatch)|stale.{0,40}(?:branch|baseline|tree)|baseline.{0,40}(?:mismatch|drift))/i
-const trueScopeCause = /(?:new (?:feature|requirement|policy|scope)|unauthori[sz]ed (?:change|scope|feature)|scope (?:expansion|increase)|out.of.scope (?:feature|implementation))/i
+// The legacy BLOCK event has no typed cause. Treat prose as *triage evidence*,
+// never as proof that Git or a user-approved scope decision changed.
+const legacyEnvironmentClaim = /(?:\buntracked\b|\bnot[ -]tracked\b|\bnot in git\b|\bmissing from (?:git|branch|checkout)\b|\bworktree\b|\bworking[ -]tree\b|\bstale\b|predecessor.{0,70}(?:hash|tree|commit|mismatch)|baseline.{0,40}(?:mismatch|drift))/i
+const actualScopeClaim = /(?:new (?:feature|requirement|policy|scope)|unauthori[sz]ed (?:change|scope|feature)|scope (?:expansion|increase)|out.of.scope (?:feature|implementation)|additional (?:feature|service|module|endpoint)|change (?:business|product) policy)/i
 
-export function isStaleWorktreeScopeBlocker(blocker) {
-  const reason = String(blocker?.reason ?? "")
-  return blocker?.class === "BLOCKED_SCOPE" && worktreeCause.test(reason) && !trueScopeCause.test(reason) &&
-    !blocker.authority_question
+export function classifyScopeBlocker(blocker) {
+  if (blocker?.class !== "BLOCKED_SCOPE") return { kind: "NOT_SCOPE", reason: "No scope blocker is active" }
+  if (blocker.authority_question) {
+    return { kind: "SCOPE_CONFLICT", reason: "An explicit structured authority question cannot be resolved by Git checkout repair" }
+  }
+  const reason = String(blocker.reason ?? "")
+  if (actualScopeClaim.test(reason)) {
+    return { kind: "SCOPE_CONFLICT", reason: "Blocker explicitly asserts functional scope expansion; requires separate owner authority" }
+  }
+  if (!legacyEnvironmentClaim.test(reason)) {
+    return { kind: "EVIDENCE_REQUIRED", reason: "Legacy BLOCKED_SCOPE cause is not typed and lacks a recognizable checkout/predecessor evidence claim" }
+  }
+  return { kind: "LEGACY_CHECKOUT_CLAIM", reason: "Possible historical environment mismatch; only exact Git/candidate proof may permit reconciliation" }
 }
+
+export const isStaleWorktreeScopeBlocker = blocker => classifyScopeBlocker(blocker).kind === "LEGACY_CHECKOUT_CLAIM"
 
 async function git(root, args) {
   const { stdout } = await exec("git", args, { cwd: root, timeout: 15000, maxBuffer: 2 * 1024 * 1024 })
@@ -112,7 +125,7 @@ export async function inspectStaleWorktreeScope(root, state, registry) {
     throw new Error("SCOPE_RECOVERY_RACE: checkout changed during inspection")
   }
   return {
-    kind: "VERIFIED_PREDECESSOR_WORKTREE", wu_id: state.wu.wu_id,
+    kind: "VERIFIED_PREDECESSOR_WORKTREE", checkout_root: root, wu_id: state.wu.wu_id,
     blocked_at_revision: blocker.at_revision, head_sha: head,
     predecessor_candidate_id: lastCandidate, predecessor_merge_sha: lastMerge.merge_commit_sha,
     predecessor_files: proof,
