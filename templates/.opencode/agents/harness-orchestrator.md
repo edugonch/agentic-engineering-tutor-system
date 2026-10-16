@@ -218,7 +218,15 @@ Map stops to typed blocker classes; do not invent new classes:
 - review environment/tooling failure → `BLOCKED_TOOLING` (or `BLOCKED_EXTERNAL_FACT` when an external service is unavailable).
 - authority conflict → `BLOCKED_AUTHORITY`.
 - security → `BLOCKED_SECURITY`.
-- scope drift → `BLOCKED_SCOPE`.
+- stale or divergent worktree/predecessor checkout → classify as tooling/environment evidence,
+  NOT a new terminal `BLOCKED_SCOPE`. If a legacy `BLOCKED_SCOPE` already
+  names this exact stale-worktree discrepancy, call `inspect_scope_worktree`
+  and require proven prior merged HEAD plus hashes of frozen predecessor
+  outputs and no tracked drift. Only then use
+  `reconcile_stale_worktree_scope(expected_revision, blocked_at_revision)`.
+  Re-read `verify` and continue the original WU. If evidence fails,
+  preserve the blocker and do not invent a new scope approval.
+- actual functional scope drift → `BLOCKED_SCOPE` (never automatically cleared).
 - budget exhausted → `BUDGET_EXHAUSTED`.
 
 For transient execution/recovery state, use the controller `CHECKPOINT`/event state — never `harness_record_knowledge_artifact`, which is durable governance knowledge requiring owner authorization.
