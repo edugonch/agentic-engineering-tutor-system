@@ -164,3 +164,17 @@ test("RED plugin: freeze candidate captures the moved root session worktree, not
   assert.equal(candidate.overlay.find(entry => entry.path === "docs/ONLY-IN-MOVED-SESSION.md").type, "file")
   assert.equal(candidate.base?.commit ?? null, null)
 })
+
+
+test("registered recovery audit identifies loaded plugin runtime and exposes immutable blocker record without mutating it", async t => {
+  const f = await host(t)
+  await assert.rejects(f.run({ action: "status" }), /HARNESS_HANDOFF_REQUIRED/)
+  const audit = await f.run({ action: "audit_recovery" })
+  const readiness = JSON.parse((await f.definitions.get("harness_check_agent_readiness").execute({})).content)
+  assert.equal(audit.action, "audit_recovery")
+  assert.equal(audit.read_only, true)
+  assert.equal(audit.status, "NO_BLOCKER")
+  assert.equal(audit.loaded_plugin_revision, readiness.plugin_revision)
+  assert.equal(audit.blocker_event, null)
+  assert.equal(typeof audit.supervisor_runtime.enabled, "boolean")
+})
