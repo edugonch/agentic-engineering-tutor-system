@@ -17,6 +17,7 @@ async function fixture(t, planning = false) {
   }
   await commit("MANDATE_APPROVE", { execution_id: "E", mandate_id: "M", total_seconds: 100, max_wus: 2,
     ...(planning ? { time_policy: "WU_PLANNING_ESTIMATES" } : {}),
+    wu_sequence: ["WU1", "WU2"],
     authority_kind: "OWNER_APPROVED_EPIC", source_artifact_id: "epic", source_record_key: "r", source_hash: "h" })
   await commit("WU_ACTIVATE", { wu_id: "WU1", mandate_id: "M" })
   const prompts = new Map()
@@ -160,4 +161,26 @@ test("authority and scope blockers never receive autonomous diagnostic wake", as
     assert.equal(await f.s.tick("E"), false)
     assert.equal(f.prompts.size, 0)
   }
+})
+
+
+test("completed predecessor technical-contract blocker wakes once for governed JIT without bypassing authority", async t => {
+  const f = await fixture(t, true)
+  await f.commit("FREEZE_CANDIDATE", { candidate_id: "cand-jit-before", wu_id: "WU1",
+    manifest_hash: "m", tree_hash: "t" })
+  await f.commit("RECORD_REVIEW", { candidate_id: "cand-jit-before", verdict: "PASS",
+    candidate_hashes: { manifest_hash: "m", tree_hash: "t" },
+    verification_evidence_ids: ["test-receipt"], verified_check_ids: [], verification_contract_hash: null })
+  await f.commit("WU_COMPLETE", { candidate_id: "cand-jit-before" })
+  await f.commit("BLOCK", { class: "BLOCKED_AUTHORITY",
+    reason: "next WU has no executable approved contract with finite active_seconds" })
+  const before = (await f.c.snapshot()).state
+  assert.equal(await f.s.tick("E"), true)
+  assert.match([...f.prompts.values()][0].text, /derive_and_stage_next_wu_contract/)
+  assert.equal(await f.s.tick("E"), false)
+  const after = (await f.c.snapshot()).state
+  assert.equal(after.blocker.class, "BLOCKED_AUTHORITY")
+  assert.equal(after.budget.used_seconds, before.budget.used_seconds)
+  assert.equal(after.wu.completed, true)
+  assert.equal(after.activated_wu_ids.length, 1)
 })
