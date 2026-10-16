@@ -438,6 +438,50 @@ export async function runExecutionController(projectRoot, input, candidateRegist
     return { action, commit_status: res.status, next_action: "Clear only the resolved tooling blocker, refreeze the same code with the corrected contract, rerun every check and fresh independent review. Prior receipts remain historical.", ...(await summary(controller)) }
   }
 
+  if (action === "stage_wu_contract") {
+    // This is an audited recovery/selection operation, not WU activation.
+    // It may run while BLOCKED_AUTHORITY prevents WU_ACTIVATE; all source
+    // authority comes from the exact indexed APPROVED WU revision.
+    const wuId = String(input.wu_id ?? "")
+    const sourceId = String(input.wu_artifact_id ?? "")
+    if (!wuId || !sourceId) throw new Error("stage_wu_contract requires wu_id and exact approved wu_artifact_id")
+    if (!Number.isSafeInteger(input.expected_revision) || input.expected_revision < 0) {
+      throw new Error("stage_wu_contract requires expected_revision from the durable status")
+    }
+    const snap = await controller.snapshot()
+    const previous = snap.events.find(e => e.operation_type === "WU_CONTRACT_STAGE" &&
+      e.body.wu_id === wuId && e.body.contract.source_record_key === sourceId)
+    if (!previous && snap.state.revision !== input.expected_revision) {
+      throw new Error(`stage_wu_contract stale revision: expected ${input.expected_revision}, current ${snap.state.revision}`)
+    }
+    if (snap.state.mandate?.authority_kind !== MANDATE_AUTHORITY.OWNER_APPROVED_EPIC) {
+      throw new Error("stage_wu_contract requires an owner-approved mandate")
+    }
+    if (snap.state.mandate.wu_sequence?.[snap.state.activated_wu_ids.length] !== wuId) {
+      throw new Error("stage_wu_contract must target the next frozen WU")
+    }
+    const source = await readWorkUnitDefinition(projectRoot, wuId, snap.state.mandate.source_artifact_id,
+      sourceId, { requireApproved: true })
+    const contract = compileWuContract(wuId, source)
+    if (contract.normalization_required) {
+      throw new Error("stage_wu_contract rejects a non-executable source without a complete verification contract")
+    }
+    if (previous) {
+      if (previous.body.expected_revision !== input.expected_revision ||
+        previous.body.contract.contract_hash !== contract.contract_hash) {
+        throw new Error("stage_wu_contract replay conflicts with the previous approved source or revision")
+      }
+      const replay = await commitAction(controller, holder, previous.operation_id, "WU_CONTRACT_STAGE", previous.body)
+      return { action, commit_status: replay.status, staged_wu_contract: replay.state.staged_wu_contract ?? null,
+        ...(await summary(controller)) }
+    }
+    const body = { wu_id: wuId, expected_revision: input.expected_revision, contract }
+    const res = await commitAction(controller, holder,
+      `${executionId}:wu-contract-stage:${wuId}:${contract.contract_hash}`, "WU_CONTRACT_STAGE", body)
+    return { action, commit_status: res.status, staged_wu_contract: res.state.staged_wu_contract,
+      ...(await summary(controller)) }
+  }
+
   if (action === "bind_wu_contract") {
     const snap = await controller.snapshot()
     const wu = snap.state.wu
@@ -463,10 +507,21 @@ export async function runExecutionController(projectRoot, input, candidateRegist
         (!input.wu_artifact_id || input.wu_artifact_id === priorActivation.body.contract?.source_record_key)) {
       return { action, commit_status: "replayed", wu_id: wuId, ...(await summary(controller)) }
     }
-    // Validate lifecycle first, before loading a successor that is not yet eligible.
-    applyEvent(snap.state, { operation_type: "WU_ACTIVATE", body: { wu_id: wuId, mandate_id: mandateId }, next_revision: snap.state.revision + 1 })
-    const contract = compileWuContract(wuId, await readWorkUnitDefinition(projectRoot, wuId, snap.state.mandate.source_artifact_id, input.wu_artifact_id ?? wuId))
-    const res = await commitAction(controller, holder, `${executionId}:activate:${wuId}`, "WU_ACTIVATE", { wu_id: wuId, mandate_id: mandateId, contract })
+    // A preactivation recovery pins one approved executable contract. Never
+    // re-select an ambiguous DRAFT or silently replace the staged source.
+    const staged = snap.state.staged_wu_contract
+    if (staged && input.wu_artifact_id && input.wu_artifact_id !== staged.contract.source_record_key &&
+      input.wu_artifact_id !== staged.contract.source_artifact_id) {
+      throw new Error("activate_wu source differs from the preactivation-staged approved contract")
+    }
+    // Validate lifecycle before loading a successor that is not yet eligible.
+    applyEvent(snap.state, { operation_type: "WU_ACTIVATE",
+      body: { wu_id: wuId, mandate_id: mandateId, ...(staged ? { contract: staged.contract } : {}) },
+      next_revision: snap.state.revision + 1 })
+    const contract = staged?.contract ?? compileWuContract(wuId,
+      await readWorkUnitDefinition(projectRoot, wuId, snap.state.mandate.source_artifact_id, input.wu_artifact_id ?? wuId))
+    const res = await commitAction(controller, holder, `${executionId}:activate:${wuId}`,
+      "WU_ACTIVATE", { wu_id: wuId, mandate_id: mandateId, contract })
     return { action, commit_status: res.status, wu_id: wuId, ...(await summary(controller)) }
   }
 
