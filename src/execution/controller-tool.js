@@ -22,6 +22,7 @@ import { recoveryAction } from "./progress.js"
 import { join } from "node:path"
 import { compileWuContract } from "./wu-contract.js"
 import { compileMandateDerivedWu, inspectMandateDerivedWu, isTechnicalWuContractBlocker } from "./jit-contract.js"
+import { inspectAuthorityGap } from "./authority-triage.js"
 import { wuBudgetUsage } from "./wu-budget.js"
 import { stableHash } from "./serialize.js"
 import { readLog, validateLog } from "./event-log.js"
@@ -74,6 +75,7 @@ async function summary(controller) {
     external_wait: state.external_wait ?? null,
     verification_phase: state.verification_phase ?? null,
     next_action: recoveryAction(state),
+    authority_triage: inspectAuthorityGap(state),
     last_blocker_resolution: state.last_blocker_resolution ?? null,
     authority_resolutions: state.authority_resolutions ?? {},
     completed: state.completed,
@@ -447,6 +449,11 @@ export async function runExecutionController(projectRoot, input, candidateRegist
       check_mapping: correctionCheckMapping(baseline.verification_contract, contract.verification_contract, input.check_mapping) }
     const res = await commitAction(controller, holder, operation, "WU_CONTRACT_CORRECT", body)
     return { action, commit_status: res.status, next_action: "Clear only the resolved tooling blocker, refreeze the same code with the corrected contract, rerun every check and fresh independent review. Prior receipts remain historical.", ...(await summary(controller)) }
+  }
+
+  if (action === "inspect_authority_gap") {
+    const snap = await controller.snapshot()
+    return { action, revision: snap.state.revision, ...inspectAuthorityGap(snap.state) }
   }
 
   if (action === "inspect_next_wu_contract") {
