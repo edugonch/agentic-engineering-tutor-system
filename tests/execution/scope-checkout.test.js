@@ -31,9 +31,9 @@ async function roots(t) {
 
 test("verified linked checkout is distinct from canonical state root and remains the current session checkout", async t => {
   const f = await roots(t)
-  const roots = await resolveScopeRuntimeCheckout(f.ctx, f.root, "ses_orchestrator")
-  assert.equal(roots.checkoutRoot, f.linked)
-  assert.equal(roots.canonicalRoot, f.root)
+  const resolved = await resolveScopeRuntimeCheckout(f.ctx, f.root, "ses_orchestrator")
+  assert.equal(resolved.checkoutRoot, f.linked)
+  assert.equal(resolved.canonicalRoot, f.root)
 })
 
 test("a source checkout from an unrelated repository cannot provide scope-clearing proof", async t => {
