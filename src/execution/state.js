@@ -1,7 +1,8 @@
 import { expiredWait, terminalObservation } from "./external-observation.js"
 import { applyProcessEvent, activeRecovery, assertProcessAcceptance, requiresTdd, processPending } from "./process-recovery.js"
-import { stableHash } from "./serialize.js"
+import { stableHash, sha256 } from "./serialize.js"
 import { PLANNING_ESTIMATES } from "./time-policy.js"
+import { isTechnicalWuContractBlocker } from "./jit-contract.js"
 import { validateContractCorrection } from "./contract-correction.js"
 import { executionProgress, supervisorProgress } from "./progress.js"
 import { wuBudgetUsage } from "./wu-budget.js"
@@ -212,7 +213,9 @@ export function applyEvent(previous, event, { historicalReplay = false } = {}) {
       // Only an exact recoverable tooling blocker permits one read-only diagnostic
       // continuation; authority/scope/security blockers remain hard stops.
       const toolingTriage = state.blocker?.class === "BLOCKED_TOOLING" && !expiredWait(state)
-      if (!state.supervisor || (state.blocker && !expiredWait(state) && !toolingTriage) || state.completed || supervisorProgress(state) !== body.progress_hash) throw new Error("Continuation no longer eligible")
+      const contractTriage = isTechnicalWuContractBlocker(state.blocker) && (!state.wu || state.wu.completed)
+      if (!state.supervisor || (state.blocker && !expiredWait(state) && !toolingTriage && !contractTriage) ||
+          state.completed || supervisorProgress(state) !== body.progress_hash) throw new Error("Continuation no longer eligible")
       state.supervisor.intent = { ...body, sent: false }
       break
     }
@@ -436,8 +439,15 @@ export function applyEvent(previous, event, { historicalReplay = false } = {}) {
         throw new Error(`WU_CONTRACT_STAGE next frozen WU is ${expected ?? "none"}, not ${body.wu_id}`)
       }
       const contract = body.contract
+      const delegated = body.derived_technical === true
+      const authorized = delegated
+        ? contract?.source_authority === "MANDATE_DERIVED" && state.time_policy?.mode === PLANNING_ESTIMATES &&
+          contract.mandate_source_hash === state.mandate.source_hash &&
+          contract.origin_source_hash === contract.source_hash &&
+          Boolean(contract.source_record_key)
+        : contract?.source_authority === "APPROVED"
       if (!contract || contract.wu_id !== body.wu_id || contract.normalization_required ||
-        !contract.verification_contract_hash || contract.source_authority !== "APPROVED" ||
+        !contract.verification_contract_hash || !authorized ||
         !contract.source_record_key || !/^[a-f0-9]{64}$/.test(contract.source_hash ?? "") ||
         !Number.isSafeInteger(contract.active_seconds) || contract.active_seconds <= 0 ||
         !contract.contract_hash || typeof contract.source_content !== "string") {
@@ -446,8 +456,30 @@ export function applyEvent(previous, event, { historicalReplay = false } = {}) {
       if (state.blocker?.class === "BLOCKED_AUTHORITY" && !Number.isSafeInteger(state.blocker.at_revision)) {
         throw new Error("WU_CONTRACT_STAGE requires an auditable authority blocker revision")
       }
+      if (delegated) {
+        const { contract_hash, ...identity } = contract
+        if (stableHash(identity) !== contract_hash ||
+            contract.derivation?.kind !== "MANDATE_JIT" ||
+            contract.derivation.original_source_hash !== contract.source_hash ||
+            sha256(contract.source_content) !== contract.source_hash) {
+          throw new Error("JIT derived contract integrity mismatch")
+        }
+      }
+      if (delegated && state.blocker &&
+        (!isTechnicalWuContractBlocker(state.blocker) || body.blocker_at_revision !== state.blocker.at_revision)) {
+        throw new Error("JIT may resolve only the exact technical contract-normalization blocker")
+      }
+      if (delegated && !state.blocker && body.blocker_at_revision !== null) throw new Error("JIT blocker revision drift")
       state.staged_wu_contract = { wu_id: body.wu_id, source_artifact_id: body.source_artifact_id, contract, staged_at_revision: state.revision,
         blocker_at_revision: state.blocker?.at_revision ?? null }
+      if (delegated && state.blocker) {
+        state.last_blocker_resolution = { class: state.blocker.class,
+          blocked_at_revision: state.blocker.at_revision,
+          resolution: "Mandate-derived technical normalization; no owner approval asserted",
+          source_record_key: contract.source_record_key,
+          source_hash: contract.source_hash, at_revision: state.revision }
+        state.blocker = null
+      }
       break
     }
 

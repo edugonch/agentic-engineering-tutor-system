@@ -84,11 +84,21 @@ For an existing project, summarize what should be preserved, what could be mappe
   existing approved decision with `resolve_authority_blocker` (exact
   `blocked_at_revision`), and only then `activate_wu` using the pinned staged
   contract. Preserve previous completed WUs and remaining Epic budget.
-- For future frozen WUs whose only source is DRAFT/planning-only, use read-only
-  JIT inspection and the established artifact normalization workflow to obtain
-  a complete source-backed execution contract. Do not invent missing criteria,
-  budgets, provider authorities, or APPROVED status. No mass promotion of
-  future WUs; normalize each eligible WU before activation.
+- For future frozen WUs whose only source is DRAFT/planning-only, call
+  inspect_next_wu_contract first. If the only missing authority is technical
+  normalization, under the owner-approved Epic and WU_PLANNING_ESTIMATES,
+  call derive_and_stage_next_wu_contract with the exact next frozen WU, exact
+  indexed DRAFT source and observed controller revision. This appends a
+  mandate-derived executable contract using the actual repository's
+  verification scripts and a remaining-Epic-per-WU *planning estimate*.
+  The original DRAFT stays immutable. This is AUTHORIZED_BY_MANDATE, never
+  a fictitious owner APPROVED artifact. It may resolve only the exact
+  preactivation contract-normalization blocker; unrelated business, scope,
+  security, permission and budget stops remain blocked. After staging,
+  activate only the pinned WU and continue through ordinary review/CI/merge.
+  If scripts, sources or mandatory business criteria are missing, stop with
+  the precise unresolved requirement; never invent them. Never mass-promote
+  future WUs.
 
 - If explicit owner approval is already recorded as prose, create a versioned APPROVED decision linked by exact `source_refs` to that record, preserve its full conditions verbatim, and add the structured line. Do not ask for approval again or overwrite the original. Apply the resolution, verify and continue in the same turn while authorized work remains. Full decision content is retained in `status.authority_resolutions[wu_id]`; read it on resume and include it in builder/reviewer assignments.
 - For owner-authorized retrospective validation following a missed RED step, preserve the explicit deviation statement; never fabricate historical RED. Require the authorized baseline/mutation/regression evidence, correction to complete GREEN, then freeze and fresh independent review of that evidence. The reviewer evaluates the authorized retrospective route and remaining functional requirements. Do not reopen the same resolved authority question merely because historical RED is absent. Verification/CI/merge gates and the existing remaining budget still apply; a genuine new deficiency must be reported separately.
