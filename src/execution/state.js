@@ -216,12 +216,41 @@ export function applyEvent(previous, event, { historicalReplay = false } = {}) {
       const contractTriage = isTechnicalWuContractBlocker(state.blocker) && (!state.wu || state.wu.completed)
       if (!state.supervisor || (state.blocker && !expiredWait(state) && !toolingTriage && !contractTriage) ||
           state.completed || supervisorProgress(state) !== body.progress_hash) throw new Error("Continuation no longer eligible")
-      state.supervisor.intent = { ...body, sent: false }
+      const previous = state.supervisor.intent
+      const attempt = body.attempt ?? 1
+      if (!Number.isSafeInteger(attempt) || attempt < 1 || attempt > 2) throw new Error("Supervisor continuation attempt is invalid")
+      if (previous?.sent && previous.progress_hash === body.progress_hash) {
+        // Only a *received and terminal-observed* turn with no durable progress
+        // can authorize one bounded retry. Merely sending/queuing a prompt cannot.
+        if (!previous.received || !previous.turn_observed || attempt !== (previous.attempt ?? 1) + 1) {
+          throw new Error("Supervisor retry requires observed no-progress root turn")
+        }
+      } else if (attempt !== 1) throw new Error("New supervisor progress must start at attempt 1")
+      state.supervisor.intent = { ...body, attempt, sent: false, received: false, turn_observed: false }
       break
     }
     case "SUPERVISOR_SENT": {
       if (state.supervisor?.intent?.intent_id !== body.intent_id) throw new Error("Continuation intent mismatch")
       state.supervisor.intent.sent = true
+      break
+    }
+    case "SUPERVISOR_RECEIVED": {
+      const intent = state.supervisor?.intent
+      if (!intent || intent.intent_id !== body.intent_id || state.supervisor.session_id !== body.session_id ||
+          intent.progress_hash !== body.progress_hash) throw new Error("Supervisor receipt identity mismatch")
+      if (intent.received) throw new Error("Supervisor continuation already received")
+      intent.received = true
+      intent.received_at_revision = state.revision
+      break
+    }
+    case "SUPERVISOR_TURN_OBSERVED": {
+      const intent = state.supervisor?.intent
+      if (!intent || intent.intent_id !== body.intent_id || !intent.sent || !intent.received || intent.turn_observed ||
+          intent.progress_hash !== body.progress_hash || supervisorProgress(state) !== intent.progress_hash) {
+        throw new Error("Supervisor turn observation requires delivered same-progress root completion")
+      }
+      intent.turn_observed = true
+      intent.observed_at_revision = state.revision
       break
     }
 
