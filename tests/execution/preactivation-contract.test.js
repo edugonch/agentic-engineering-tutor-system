@@ -185,7 +185,7 @@ test("mandate-derived JIT stages the exact DRAFT, resolves only technical blocke
   const draft = await recordKnowledgeArtifact(f.root, {
     artifact_type: "work-unit", artifact_id: "WU-03-PLANNING-DRAFT", title: "Planned third WU",
     status: "DRAFT", owner_confirmed: true, parent_refs: ["EPIC-1"],
-    content: "Original acceptance: explain three allowed state transitions with test evidence.\\nScope: one design report.\\nTDD required.",
+    content: "Original acceptance: explain three allowed state transitions with test evidence.\nScope: one design report.\nTDD required.",
   })
   const before = await f.ctl.snapshot()
   const staged = await f.run("derive_and_stage_next_wu_contract", {
