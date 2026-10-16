@@ -9,7 +9,7 @@ import { epicExecutionRemaining, usesPlanningEstimates } from "./time-policy.js"
 export const isTechnicalWuContractBlocker = blocker =>
   blocker?.class === "BLOCKED_AUTHORITY" &&
   (!blocker.authority_question || blocker.authority_question.domain === "governance") &&
-  /(?:no executable approved contract|no executable contract|finite active_seconds|execution_contract|WU_CONTRACT_REQUIRED|normaliz(?:ation|e).*contract)/i.test(String(blocker.reason ?? ""))
+  /(?:no executable approved contract|no executable contract|needs a selected approved contract|finite active_seconds|execution_contract|WU_CONTRACT_REQUIRED|normaliz(?:ation|e).*contract)/i.test(String(blocker.reason ?? ""))
 
 const SCRIPT_ORDER = ["format:check", "lint", "typecheck", "arch", "governance:verify", "governance:test", "test"]
 const FORBIDDEN_SCRIPTS = /(?:^|:)(?:deploy|publish|release|production|migrate|seed|reset|delete|write)(?:$|:)/i
@@ -43,9 +43,10 @@ export async function compileMandateDerivedWu(root, state, wuId, definition) {
   const remaining = epicExecutionRemaining(state)
   const remainingWus = sequence.length - index
   if (!Number.isFinite(remaining) || remaining <= 0 || remainingWus < 1) throw new Error("JIT_BUDGET_EXHAUSTED: no remaining Epic allocation")
-  const active_seconds = Math.max(1, Math.floor(remaining / remainingWus))
+  const active_seconds = Math.floor(remaining / remainingWus)
+  if (active_seconds < 1) throw new Error("JIT_BUDGET_EXHAUSTED: insufficient remaining Epic allocation")
   const verification_contract = await deriveVerificationContract(root)
-  const appendix = `\n\n## Mandate-derived technical execution contract\n\nPlanning estimate only; technical authority is the approved Epic, not an individually owner-approved WU. Preserve all original scope, acceptance and exclusions.\nexecution_contract: ${JSON.stringify({ active_seconds, verification_contract, process_obligations: [] })}\n`
+  const appendix = `\n\n## Mandate-derived technical execution contract\n\nPlanning estimate only; technical authority is the approved Epic, not an individually owner-approved WU. Preserve all original scope, acceptance and exclusions.\nexecution_contract: ${JSON.stringify({ active_seconds, verification_contract, process_obligations: /\\bTDD\\b/i.test(definition.content) ? [{ kind: "tdd", required: true }] : [] })}\n`
   const compiled = compileWuContract(wuId, {
     ...definition, content: definition.content + appendix,
     source_authority: "MANDATE_DERIVED",
