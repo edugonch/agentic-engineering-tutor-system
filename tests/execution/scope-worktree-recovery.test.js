@@ -187,3 +187,64 @@ test("RED diagnosis: unknown legacy BLOCKED_SCOPE cause is EVIDENCE_REQUIRED, no
   assert.match(out.reason, /cause/i)
   assert.equal((await f.run("status")).blocker.class, "BLOCKED_SCOPE")
 })
+
+
+test("audit_recovery returns exact historical BLOCK event and does not modify durable journal", async t => {
+  const f = await setup(t, { reason: "docs/pred.md was reported untracked at predecessor handoff" })
+  const before = await f.controller.snapshot()
+  const result = await f.run("audit_recovery")
+  assert.equal(result.status, "BLOCKER_RECORDED")
+  assert.equal(result.read_only, true)
+  assert.equal(result.execution_id, "E:exec")
+  assert.equal(result.active_wu_id, "WU-CURRENT")
+  assert.equal(result.blocker.at_revision, before.state.blocker.at_revision)
+  assert.equal(result.blocker_event.operation_type, "BLOCK")
+  assert.equal(result.blocker_event.next_revision, before.state.blocker.at_revision)
+  assert.equal(result.blocker_event.body.reason, before.state.blocker.reason)
+  assert.match(result.blocker_event.body_hash, /^[a-f0-9]{64}$/)
+  assert.deepEqual(result.completed_predecessors.map(x => x.wu_id), ["WU-PREV"])
+  assert.equal(result.completed_predecessors[0].candidate_id, f.candidate.candidate_id)
+  assert.equal(result.completed_predecessors[0].merge_status, "VERIFIED")
+  assert.equal(result.completed_predecessors[0].merge_commit_sha, f.head)
+  assert.deepEqual((await f.controller.snapshot()).events, before.events)
+})
+
+test("read-only recovery audit does not turn an unknown blocker into a scope authorization", async t => {
+  const f = await setup(t, { reason: "Historical BLOCKED_SCOPE without a typed cause" })
+  const before = await f.controller.snapshot()
+  const result = await f.run("audit_recovery")
+  assert.equal(result.read_only, true)
+  assert.equal(result.blocker.class, "BLOCKED_SCOPE")
+  assert.equal(result.scope_diagnosis.kind, "EVIDENCE_REQUIRED")
+  assert.equal((await f.run("status")).blocker.class, "BLOCKED_SCOPE")
+  assert.deepEqual((await f.controller.snapshot()).events, before.events)
+})
+
+test("new functional-scope stops require typed provenance rather than ambiguous free text", async t => {
+  const f = await setup(t, { blockerClass: "BLOCKED_TOOLING", reason: "tooling fixture" })
+  await f.run("clear_blocker", { resolution: "Fixture tooling recovery verified" })
+  const before = await f.controller.snapshot()
+  await assert.rejects(f.run("block", {
+    class: "BLOCKED_SCOPE", reason: "Product decision required by downstream operations",
+  }), /SCOPE_CAUSE_REQUIRED/)
+  assert.deepEqual((await f.controller.snapshot()).events, before.events)
+  const blocked = await f.run("block", {
+    class: "BLOCKED_SCOPE", reason: "Proposed new public behavior requires a product decision",
+    scope_cause: { kind: "FUNCTIONAL_SCOPE_CHANGE", authority_ref: "github:example/alfran/issues/999" },
+  })
+  assert.equal(blocked.blocker.class, "BLOCKED_SCOPE")
+  assert.equal(blocked.blocker.scope_cause.kind, "FUNCTIONAL_SCOPE_CHANGE")
+  assert.equal((await f.run("inspect_scope_worktree")).status, "NOT_ELIGIBLE")
+  await assert.rejects(f.run("clear_blocker", { resolution: "git clean now" }), /non-recoverable/)
+})
+
+test("scope blocker typed as worktree mismatch must be rejected as a nonterminal environment classification", async t => {
+  const f = await setup(t, { blockerClass: "BLOCKED_TOOLING", reason: "tooling fixture" })
+  await f.run("clear_blocker", { resolution: "Fixture repaired" })
+  const before = await f.controller.snapshot()
+  await assert.rejects(f.run("block", {
+    class: "BLOCKED_SCOPE", reason: "Previous working tree is stale",
+    scope_cause: { kind: "WORKTREE_MISMATCH", authority_ref: "github:example/alfran/pull/217" },
+  }), /SCOPE_WORKTREE_CLASSIFICATION/)
+  assert.deepEqual((await f.controller.snapshot()).events, before.events)
+})
