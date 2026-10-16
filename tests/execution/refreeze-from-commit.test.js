@@ -273,7 +273,7 @@ async function pluginHost(t) {
   process.env.OPENCODE_CONFIG_DIR = join(root, "config")
   const agents = new Map(["orchestrator", "builder", "reviewer", "researcher", "designer"].map(role =>
     [`harness-${role}`, { id: `harness-${role}`, name: `harness-${role}`, mode: role === "orchestrator" ? "primary" : "subagent" }]))
-  const sessions = new Map([["ses_root", { id: "ses_root", agent: "build" }]])
+  const sessions = new Map([["ses_root", { id: "ses_root", agent: "build", location: { directory: root } }]])
   const hooks = new Map(), definitions = new Map(), storage = new Map()
   const ctx = {
     app: { version: "2.0.25-fixture" }, location: { project: { canonical: root } },
