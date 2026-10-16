@@ -73,6 +73,26 @@ authority_resolution: ${JSON.stringify({ execution_id: "E1", mandate_id: "E1-MAN
   return { root, run, ctl, commit, approved, blocked, decision, beforeBlock, baseWus }
 }
 
+test("read-only JIT preflight reports source ambiguity and incomplete DRAFT without changing authority", async t => {
+  const f = await setup(t)
+  const before = await f.ctl.snapshot()
+  const ambiguous = await f.run("inspect_next_wu_contract")
+  assert.equal(ambiguous.status, "SOURCE_NORMALIZATION_OR_SELECTION_REQUIRED")
+  assert.equal(ambiguous.next_wu_id, "WU-03")
+  const base = await f.run("inspect_next_wu_contract", { wu_artifact_id: f.baseWus["WU-03"].record_key })
+  assert.equal(base.status, "EXECUTABLE_SOURCE_READY")
+  assert.ok(base.verification_contract_hash)
+  const draft = await recordKnowledgeArtifact(f.root, {
+    artifact_type: "work-unit", artifact_id: "WU-03-DRAFT-INCOMPLETE",
+    title: "Planning only", status: "DRAFT", owner_confirmed: true,
+    parent_refs: ["EPIC-1"], content: "planning; non-executable\nNo approved executable contract",
+  })
+  const incomplete = await f.run("inspect_next_wu_contract", { wu_artifact_id: draft.record_key })
+  assert.equal(incomplete.status, "SOURCE_NORMALIZATION_OR_SELECTION_REQUIRED")
+  assert.match(incomplete.reason, /active_seconds/)
+  assert.deepEqual((await f.ctl.snapshot()).events, before.events)
+})
+
 test("preactivation recovery stages approved contract, resolves exact authority and activates frozen WU once", async t => {
   const f = await setup(t)
   const baseline = await f.ctl.snapshot()
