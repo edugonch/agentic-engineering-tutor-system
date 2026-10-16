@@ -37,6 +37,12 @@ export async function compileMandateDerivedWu(root, state, wuId, definition) {
   if (!usesPlanningEstimates(state)) throw new Error("JIT_TIME_POLICY_REQUIRED: approved WU_PLANNING_ESTIMATES policy is required")
   if (!/^status: "(?:DRAFT|PROPOSED)"\s*$/m.test(definition.content)) throw new Error("JIT_SOURCE_REQUIRED: only a planning DRAFT or PROPOSED WU can be normalized")
   if (/^execution_contract: /m.test(definition.content)) throw new Error("JIT_SOURCE_ALREADY_EXECUTABLE: select the existing executable source instead")
+  // A planning identity alone is not permission to invent acceptance or scope.
+  // Require visible existing acceptance and scope language in the frozen source.
+  if (!/(?:salida comprobable|acceptance criteria|original acceptance|accept:)/i.test(definition.content) ||
+      !/(?:expected write scope|bounded scope|scope:|fuera de alcance)/i.test(definition.content)) {
+    throw new Error("JIT_SOURCE_INCOMPLETE: acceptance and expected write scope must exist in the original WU")
+  }
   const sequence = state.mandate?.wu_sequence ?? []
   const index = state.activated_wu_ids.length
   if (sequence[index] !== wuId || state.wu && !state.wu.completed) throw new Error("JIT_WU_ORDER: next frozen WU with completed predecessor required")
@@ -53,6 +59,11 @@ export async function compileMandateDerivedWu(root, state, wuId, definition) {
     mandate_source_hash: state.mandate.source_hash,
     origin_source_hash: definition.source_hash,
   })
+  // source_hash identifies the *unchanged* archive bytes. Record derived
+  // executable metadata separately, not by pretending the archive changed.
   const { contract_hash, ...unsigned } = compiled
-  return { ...unsigned, contract_hash: stableHash(unsigned) }
+  const normalized = { ...unsigned, source_content: definition.content,
+    derivation: { kind: "MANDATE_JIT", original_source_hash: definition.source_hash,
+      verification_check_ids: verification_contract.commands.map(check => check.id) } }
+  return { ...normalized, contract_hash: stableHash(normalized) }
 }
