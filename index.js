@@ -6,6 +6,7 @@ import { withVerificationBudget, recoverVerificationPhase } from "./src/executio
 import { packageFingerprint } from "./src/package-fingerprint.js"
 import { createWorkerBudgetGuard } from "./src/execution/worker-budget.js"
 import { createExecutionSupervisor } from "./src/execution/supervisor.js"
+import { runResilientEventLoop } from "./src/execution/event-loop.js"
 import { deferPluginStartup } from "./src/plugin-startup.js"
 import { runWithExternalWait } from "./src/execution/external-wait.js"
 import { findExecutionForCandidate, runRebindPR, runAbortMerge } from "./src/execution/merge.js"
@@ -189,7 +190,9 @@ export default Plugin.define({
     // A fresh user prompt starts a new per-session action budget.
     await ctx.session.hook("prompt", async (event) => {
       await ownership.onPrompt(event)
-      if (!supervisor.isInternalPrompt(event) && !continuation.isInternalPrompt(event.sessionID)) {
+      const internalSupervisorPrompt = supervisor.isInternalPrompt(event)
+      if (internalSupervisorPrompt) await supervisor.onPrompt(event)
+      if (!internalSupervisorPrompt && !continuation.isInternalPrompt(event.sessionID)) {
         guard.reset(event.sessionID)
         sessionRecovery.reset()
       }
@@ -932,16 +935,15 @@ export default Plugin.define({
     })
 
     if (continuation.enabled || supervisor.enabled) {
-      ;(async () => {
-        try {
-          for await (const event of ctx.event.subscribe({ signal: eventSubscription.signal })) {
-            await continuation.onEvent(event).catch(() => {})
-            await supervisor.onEvent(event)
-          }
-        } catch (error) {
-          continuation.recordSubscriptionError(error?.message ?? String(error))
-        }
-      })().catch((error) => continuation.recordSubscriptionError(error?.message ?? String(error)))
+      runResilientEventLoop({
+        subscribe: args => ctx.event.subscribe(args),
+        signal: eventSubscription.signal,
+        onError: error => continuation.recordSubscriptionError(error?.message ?? String(error)),
+        onEvent: async event => {
+          await continuation.onEvent(event).catch(error => continuation.recordSubscriptionError(error?.message ?? String(error)))
+          await supervisor.onEvent(event)
+        },
+      }).catch(error => continuation.recordSubscriptionError(error?.message ?? String(error)))
     }
 
     await registerHarnessCommand(ctx, ownership)
