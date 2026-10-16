@@ -21,6 +21,7 @@ import { recoveryAction } from "./progress.js"
 
 import { join } from "node:path"
 import { compileWuContract } from "./wu-contract.js"
+import { inspectStaleWorktreeScope, isStaleWorktreeScopeBlocker } from "./scope-recovery.js"
 import { compileMandateDerivedWu, inspectMandateDerivedWu, isTechnicalWuContractBlocker } from "./jit-contract.js"
 import { inspectAuthorityGap } from "./authority-triage.js"
 import { wuBudgetUsage } from "./wu-budget.js"
@@ -773,10 +774,58 @@ export async function runExecutionController(projectRoot, input, candidateRegist
       if (!q || !['product', 'scope', 'security', 'permission', 'budget', 'governance'].includes(q.domain) ||
           !q.decision?.trim() || !q.source_ref?.trim() || !q.why_not_delegated?.trim()) throw new Error("Identify the actual owner decision, source, domain and why it is not delegated; process deviations use start_process_recovery")
     }
+    if (isStaleWorktreeScopeBlocker({ class: cls, reason })) {
+      throw new Error("SCOPE_WORKTREE_CLASSIFICATION: a stale checkout is tooling/environment reconciliation, not proven business scope drift; use BLOCKED_TOOLING or inspect_scope_worktree")
+    }
     if (cls === "BLOCKED_PROCESS" && input.process_kind !== "TDD_ORDER") throw new Error("Typed process deviation required")
     if (!reason) throw new Error("block requires reason (a human-readable explanation of the stop).")
     const res = await commitObservation(controller, holder, `${executionId}:block`, "BLOCK", { class: cls, reason, ...(input.authority_question ? { authority_question: input.authority_question } : {}), ...(cls === "BLOCKED_PROCESS" ? { kind: input.process_kind } : {}) }, () => true, state => Boolean(state.blocker))
     return { action, commit_status: res.status, ...(await summary(controller)) }
+  }
+
+  if (action === "inspect_scope_worktree") {
+    const snap = await controller.snapshot()
+    if (!isStaleWorktreeScopeBlocker(snap.state.blocker)) {
+      return { action, status: "NOT_ELIGIBLE", revision: snap.state.revision,
+        blocker: snap.state.blocker, note: "Genuine scope changes remain blocked" }
+    }
+    try {
+      const proof = await inspectStaleWorktreeScope(projectRoot, snap.state, registry)
+      return { action, status: "VERIFIED_RECONCILABLE", revision: snap.state.revision, proof }
+    } catch (error) {
+      return { action, status: "NOT_VERIFIED", revision: snap.state.revision, reason: error.message }
+    }
+  }
+
+  if (action === "reconcile_stale_worktree_scope") {
+    const expectedRevision = input.expected_revision
+    const blockedAt = input.blocked_at_revision
+    if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0 ||
+        !Number.isSafeInteger(blockedAt) || blockedAt < 0) {
+      throw new Error("Scope reconciliation requires expected_revision and exact blocked_at_revision")
+    }
+    const lease = await controller.acquire(holder)
+    const snap = await controller.snapshot()
+    const operation_id = `${executionId}:scope-worktree:${blockedAt}`
+    const prior = snap.events.find(e => e.operation_id === operation_id && e.operation_type === "SCOPE_WORKTREE_RECONCILE")
+    if (prior && !snap.state.blocker && prior.body.expected_revision === expectedRevision) {
+      const replay = await controller.commit({ operation_id, operation_type: "SCOPE_WORKTREE_RECONCILE", body: prior.body }, {
+        holder_session_id: holder, expected_revision: snap.state.revision, lease_fencing_token: lease.fencing_token,
+      })
+      return { action, commit_status: replay.status, recovery_proof: prior.body.proof, ...(await summary(controller)) }
+    }
+    if (snap.state.revision !== expectedRevision) throw new Error("Scope reconciliation stale controller revision")
+    if (snap.state.blocker?.at_revision !== blockedAt ||
+        !isStaleWorktreeScopeBlocker(snap.state.blocker)) {
+      throw new Error("Scope reconciliation cannot target a different or genuine scope blocker")
+    }
+    const proof = await inspectStaleWorktreeScope(projectRoot, snap.state, registry)
+    const body = { expected_revision: expectedRevision, blocked_at_revision: blockedAt,
+      wu_id: snap.state.wu.wu_id, proof }
+    const result = await controller.commit({ operation_id, operation_type: "SCOPE_WORKTREE_RECONCILE", body }, {
+      holder_session_id: holder, expected_revision: snap.state.revision, lease_fencing_token: lease.fencing_token,
+    })
+    return { action, commit_status: result.status, recovery_proof: proof, ...(await summary(controller)) }
   }
 
   if (action === "clear_blocker") {
