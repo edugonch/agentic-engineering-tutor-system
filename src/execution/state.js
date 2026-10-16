@@ -971,6 +971,7 @@ export function applyEvent(previous, event, { historicalReplay = false } = {}) {
         class: state.blocker.class,
         blocked_at_revision: state.blocker.at_revision,
         resolution: body.resolution,
+        ...(body.recovery_evidence ? { recovery_evidence: body.recovery_evidence } : {}),
         at_revision: state.revision,
       }
       state.blocker = null
