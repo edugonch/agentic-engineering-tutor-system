@@ -120,7 +120,7 @@ test('legacy authority recovery is scoped to the exact fingerprint; other produc
 
 for (const cls of ['BLOCKED_AUTHORITY', 'BLOCKED_SECURITY', 'BLOCKED_PERMISSION', 'BLOCKED_SCOPE']) test(`process policy cannot erase unrelated ${cls}`, async t => {
   const f = await fixture(t)
-  await f.run('block', { class: cls, reason: 'Unrelated unresolved decision' })
+  await f.run('block', { class: cls, reason: 'Unrelated unresolved decision', ...(cls === 'BLOCKED_SCOPE' ? { scope_cause: { kind: 'FUNCTIONAL_SCOPE_CHANGE', authority_ref: 'github:example/scope-decision' } } : {}) })
   await f.adopt()
   const before = await f.c.snapshot()
   await assert.rejects(f.start(), /cannot clear/)
