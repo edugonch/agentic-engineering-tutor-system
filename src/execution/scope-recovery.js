@@ -77,7 +77,9 @@ export async function inspectStaleWorktreeScope(root, state, registry) {
   const files = new Map()
   for (const wu of completed) {
     const id = state.completed_wus[wu].candidate_id
-    verifiedMerge(state, id)
+    // Historical completed predecessors can have their merge pointer superseded
+    // by a later binding. Their durable WU_COMPLETE is retained; only the last
+    // predecessor needs an independently retained VERIFIED merge SHA for HEAD.
     const candidate = await registry.load(id)
     if (!candidate || candidate.candidate_id !== id ||
         !candidate.overlay || !Array.isArray(candidate.overlay)) {
