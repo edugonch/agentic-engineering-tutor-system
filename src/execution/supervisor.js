@@ -126,8 +126,9 @@ export function createExecutionSupervisor(ctx, projectRoot, { enabled = true, no
     const c = await controller(execution)
     const { state } = await c.snapshot()
     const intent = state.supervisor?.intent
-    if (state.supervisor?.session_id !== event.sessionID || !intent || intent.intent_id !== token || intent.received) return false
+    if (state.supervisor?.session_id !== event.sessionID || !intent || intent.intent_id !== token) return false
     await identity(event.sessionID)
+    if (intent.received) return true
     await commit(c, event.sessionID, "SUPERVISOR_RECEIVED",
       { intent_id: token, session_id: event.sessionID, progress_hash: intent.progress_hash },
       `${execution}:received:${token}`)
