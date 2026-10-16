@@ -26,6 +26,14 @@ export function recoveryAction(state) {
   if (!cls && state.external_wait) return { kind: "WAITING_EXTERNAL", action: state.external_wait.operation, next_retry_at: state.external_wait.next_retry_at, deadline_at: state.external_wait.deadline_at }
   if (!cls && state.process_recoveries?.[state.wu?.wu_id]?.status === 'REPAIRING') return { kind: 'PROCESS_REPAIR', action: 'recover', condition: 'Continue retrospective validation, exact candidate review and GREEN; no renewed approval under the adopted policy' }
   if (!cls) return { kind: "CONTINUE", action: "recover" }
+  if (cls === "BLOCKED_TOOLING" &&
+      state.verification_retry?.blocked_at_revision !== state.blocker.at_revision &&
+      /(?:npm|setup|install|verification|timeout|timed out|sigkill)/i.test(state.blocker.reason ?? "")) {
+    return { kind: "RECOVERABLE_IF_RECEIPT_PROVEN", action: "harness_retry_blocked_verification",
+      blocked_at_revision: state.blocker.at_revision,
+      condition: "Only the exact frozen candidate/declared check with immutable prior timed-out setup FAIL receipt; one budgeted retry, full setup and check, clear only after PASS. No new owner authority." }
+  }
+
   const actions = { BLOCKED_PROCESS: "start_process_recovery", BLOCKED_AUTHORITY: "resolve_authority_blocker", BUDGET_EXHAUSTED: state.time_policy?.mode === "WU_PLANNING_ESTIMATES" ? null : "adopt_planning_estimates",
     BLOCKED_TOOLING: "clear_blocker", BLOCKED_EXTERNAL_FACT: "clear_blocker", BLOCKED_ARCHITECTURE: "clear_blocker", NO_PROGRESS: "clear_blocker" }
   return { kind: actions[cls] ? "RECOVERABLE_WITH_EVIDENCE" : "OWNER_DECISION_REQUIRED", action: actions[cls] ?? null,
