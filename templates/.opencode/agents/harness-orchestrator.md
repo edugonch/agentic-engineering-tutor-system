@@ -100,6 +100,41 @@ For an existing project, summarize what should be preserved, what could be mappe
   the precise unresolved requirement; never invent them. Never mass-promote
   future WUs.
 
+### Mandatory autonomy and authority triage
+
+- Before asking the owner for a WU-specific time budget, inspect the durable
+  controller `time_policy` and call `inspect_next_wu_contract`. With approved
+  `WU_PLANNING_ESTIMATES` and `READY_FOR_JIT`, use the exact source and
+  `derive_and_stage_next_wu_contract`. The generated seconds are a planning
+  estimate, not a new SLA or budget grant. Only an exhausted Epic total is a
+  genuine Epic-budget authorization question.
+- When a DESIGN_ONLY WU is commissioned to define a domain state/event table,
+  autonomously draft a versioned **proposal** of the technical state vocabulary,
+  event/actor/transition matrix and testable invariants using approved inputs.
+  Clearly distinguish `APPROVED`, `PROPOSED`, and `UNRESOLVED_POLICY` rows.
+  Do not ask the Product Owner to write that technical design. Do not claim
+  ACCEPT, PASS or authority for proposed business behavior.
+- Before a new `BLOCKED_AUTHORITY`, read the approved local authority matrix
+  and existing decisions, complete the safe bounded design work, and isolate
+  the **one exact unresolved business/safety decision** needed for acceptance.
+  Pass structured `authority_question` (domain, decision, source_ref,
+  why_not_delegated) with specific source evidence. Do not use a generic
+  "state table unknown" stop in place of the real product question.
+- For an existing `BLOCKED_AUTHORITY`, use the read-only
+  `inspect_authority_gap` result. If there is a genuine policy gap, preserve
+  the current incomplete WU, report the narrow decision with options and
+  implications, and wait. Do not clear a hard authority stop, re-launch a
+  builder, invent default guest confirmation policy, or mark an unfinished
+  outcome accepted.
+- If `format:check` fails due to apparent pre-existing untracked files,
+  preserve the failing receipt, list exact paths and distinguish candidate
+  changes from baseline through independent evidence. Verify in a clean
+  checkout if needed. Never remove an imposed verification check, delete
+  user files, or mark the full gate PASS based solely on a scoped check.
+- Reuse previously approved decisions for subsequent dependent WUs by exact
+  record identity. Only re-ask when the current policy question is new and
+  its required owner decision is not covered by prior authority.
+
 - If explicit owner approval is already recorded as prose, create a versioned APPROVED decision linked by exact `source_refs` to that record, preserve its full conditions verbatim, and add the structured line. Do not ask for approval again or overwrite the original. Apply the resolution, verify and continue in the same turn while authorized work remains. Full decision content is retained in `status.authority_resolutions[wu_id]`; read it on resume and include it in builder/reviewer assignments.
 - For owner-authorized retrospective validation following a missed RED step, preserve the explicit deviation statement; never fabricate historical RED. Require the authorized baseline/mutation/regression evidence, correction to complete GREEN, then freeze and fresh independent review of that evidence. The reviewer evaluates the authorized retrospective route and remaining functional requirements. Do not reopen the same resolved authority question merely because historical RED is absent. Verification/CI/merge gates and the existing remaining budget still apply; a genuine new deficiency must be reported separately.
 - Read `status.wu_budget` after an amendment. It supersedes only the old WU time limit; scope, sequence, review and merge gates remain in force. An Epic budget exhaustion still requires a separate rebase; this WU-only action cannot increase the Epic total. Settle unresolved dispatches before applying the amendment.

@@ -112,3 +112,18 @@ test("plugin setup completes without waiting for a hung agent.reload", async t =
     clearTimeout(timeout)
   }
 })
+
+// The runtime guidance must survive stale/custom profiles preserved by the
+// agent provisioner; it does not alter any owner approvals or controller log.
+test("plugin exposes loaded fingerprint and injects autonomy guard into root context", async t => {
+  const f = await host(t, "0")
+  const readiness = JSON.parse((await f.definitions.get("harness_check_agent_readiness").execute({})).content)
+  assert.equal(typeof readiness.plugin_revision, "string")
+  assert.ok(readiness.plugin_revision.length > 0)
+  const event = { sessionID: "ses_root", agent: "harness-orchestrator", system: [], options: {} }
+  await f.hooks.get("session:context")(event)
+  const guidance = event.system.map(p => p.text).join("\n")
+  assert.match(guidance, /WU_PLANNING_ESTIMATES/)
+  assert.match(guidance, /inspect_authority_gap/)
+  assert.match(guidance, /Do not ask the owner to create the technical design/)
+})
