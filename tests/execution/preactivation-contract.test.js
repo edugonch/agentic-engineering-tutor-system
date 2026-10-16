@@ -33,8 +33,9 @@ async function setup(t, { completed = 2, blockerClass = "BLOCKED_AUTHORITY" } = 
       merge_policy: "none", required_ci_checks: [],
       wu_sequence: ["WU-01", "WU-02", "WU-03"] })}`,
   })
+  const baseWus = {}
   for (const wu of ["WU-01", "WU-02", "WU-03"]) {
-    await seedWuContract(root, wu, "EPIC-1", 100)
+    baseWus[wu] = await seedWuContract(root, wu, "EPIC-1", 100)
   }
   await run("approve_mandate", { epic_artifact_id: "EPIC-1" })
   for (const wu of ["WU-01", "WU-02"].slice(0, completed)) {
@@ -69,7 +70,7 @@ authority_resolution: ${JSON.stringify({ execution_id: "E1", mandate_id: "E1-MAN
       wu_id: "WU-03", blocked_at_revision: blocked.blocker.at_revision,
       resolution: "Exact approved executable WU-03 contract is available; proceed with original scope" })}`,
   })
-  return { root, run, ctl, commit, approved, blocked, decision, beforeBlock }
+  return { root, run, ctl, commit, approved, blocked, decision, beforeBlock, baseWus }
 }
 
 test("preactivation recovery stages approved contract, resolves exact authority and activates frozen WU once", async t => {
@@ -116,7 +117,7 @@ test("staging rejects stale revision, DRAFT, non-eligible WU and unrelated block
   const input = { wu_id: "WU-03", wu_artifact_id: f.approved.record_key, expected_revision: f.blocked.revision }
   const baseline = (await f.ctl.snapshot()).events
   await assert.rejects(f.run("stage_wu_contract", { ...input, expected_revision: f.blocked.revision - 1 }), /stale revision/)
-  await assert.rejects(f.run("stage_wu_contract", { ...input, wu_artifact_id: "WU-03" }), /APPROVED/)
+  await assert.rejects(f.run("stage_wu_contract", { ...input, wu_artifact_id: f.baseWus["WU-03"].record_key }), /APPROVED/)
   await assert.rejects(f.run("stage_wu_contract", { ...input, wu_id: "WU-02" }), /next frozen WU/)
   await assert.rejects(f.run("stage_wu_contract", { ...input, wu_artifact_id: "missing" }), /source/)
   assert.deepEqual((await f.ctl.snapshot()).events, baseline)
