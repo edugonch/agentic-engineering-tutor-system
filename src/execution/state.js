@@ -213,7 +213,9 @@ export function applyEvent(previous, event, { historicalReplay = false } = {}) {
       // Only an exact recoverable tooling blocker permits one read-only diagnostic
       // continuation; authority/scope/security blockers remain hard stops.
       const toolingTriage = state.blocker?.class === "BLOCKED_TOOLING" && !expiredWait(state)
-      if (!state.supervisor || (state.blocker && !expiredWait(state) && !toolingTriage) || state.completed || supervisorProgress(state) !== body.progress_hash) throw new Error("Continuation no longer eligible")
+      const contractTriage = isTechnicalWuContractBlocker(state.blocker) && (!state.wu || state.wu.completed)
+      if (!state.supervisor || (state.blocker && !expiredWait(state) && !toolingTriage && !contractTriage) ||
+          state.completed || supervisorProgress(state) !== body.progress_hash) throw new Error("Continuation no longer eligible")
       state.supervisor.intent = { ...body, sent: false }
       break
     }
