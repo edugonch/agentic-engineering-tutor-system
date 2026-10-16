@@ -863,7 +863,7 @@ export function applyEvent(previous, event, { historicalReplay = false } = {}) {
 
     case "BLOCK": {
       if (!BLOCKER_CLASSES.includes(body.class)) throw new Error(`Unknown blocker class: ${body.class}.`)
-      state.blocker = { ...(body.authority_question ? { authority_question: body.authority_question } : {}), ...(body.kind ? { kind: body.kind } : {}), class: body.class, reason: body.reason ?? null, at_revision: state.revision, ...(body.class === "NO_PROGRESS" ? { progress_hash: executionProgress(state) } : {}), ...(["reservation_expired", "epic_exhausted"].includes(body.budget_reason) ? { budget_reason: body.budget_reason, dispatch_id: body.dispatch_id } : {}) }
+      state.blocker = { ...(body.authority_question ? { authority_question: body.authority_question } : {}), ...(body.scope_cause ? { scope_cause: body.scope_cause } : {}), ...(body.kind ? { kind: body.kind } : {}), class: body.class, reason: body.reason ?? null, at_revision: state.revision, ...(body.class === "NO_PROGRESS" ? { progress_hash: executionProgress(state) } : {}), ...(["reservation_expired", "epic_exhausted"].includes(body.budget_reason) ? { budget_reason: body.budget_reason, dispatch_id: body.dispatch_id } : {}) }
       break
     }
 
