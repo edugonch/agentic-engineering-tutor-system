@@ -124,6 +124,9 @@ test("preactivation recovery stages approved contract, resolves exact authority 
   assert.equal(activated.budget.total_seconds, baseline.state.budget.total_seconds)
   assert.equal(activated.budget.used_seconds, baseline.state.budget.used_seconds)
   assert.equal(activated.staged_wu_contract, undefined)
+  const replayAfterActivation = await f.run("stage_wu_contract", { wu_id: "WU-03",
+    wu_artifact_id: f.approved.record_key, expected_revision: f.blocked.revision })
+  assert.equal(replayAfterActivation.commit_status, "replayed")
   assert.equal((await f.run("verify")).passed, true)
   const log = await f.ctl.snapshot()
   assert.deepEqual(log.events.slice(0, baseline.events.length), baseline.events)
