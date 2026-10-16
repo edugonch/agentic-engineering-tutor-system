@@ -91,7 +91,7 @@ test("read-only JIT preflight reports source ambiguity and incomplete DRAFT with
   })
   const incomplete = await f.run("inspect_next_wu_contract", { wu_artifact_id: draft.record_key })
   assert.equal(incomplete.status, "SOURCE_CONTRACT_INCOMPLETE")
-  assert.match(incomplete.reason, /JIT_SOURCE_REQUIRED/)
+  assert.match(incomplete.reason, /JIT_SOURCE_INCOMPLETE/)
   assert.deepEqual((await f.ctl.snapshot()).events, before.events)
 })
 
