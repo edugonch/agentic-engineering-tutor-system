@@ -143,3 +143,36 @@ test("legacy stale-checkout reason is not allowed as a new terminal scope blocke
     /SCOPE_WORKTREE_CLASSIFICATION/)
   assert.equal((await f.controller.snapshot()).state.revision, before.state.revision)
 })
+
+
+test("RED incident: historical scope blocker says predecessor file UNTRACKED, not magic worktree phrase", async t => {
+  const f = await setup(t, { reason: "docs/pred.md was reported as untracked; prior merged appointment document was allegedly absent from Git" })
+  const prior = await f.controller.snapshot()
+  const report = await f.run("inspect_scope_worktree")
+  // The actual checkout and frozen candidate prove the predecessor is tracked,
+  // even though the old blocker uses untracked terminology rather than worktree.
+  assert.equal(report.status, "VERIFIED_RECONCILABLE")
+  assert.deepEqual(report.proof.predecessor_files.map(x => x.path), ["docs/pred.md"])
+  assert.equal((await f.controller.snapshot()).state.revision, prior.state.revision)
+})
+
+test("RED classification: a new BLOCKED_SCOPE cannot be created for a mere untracked previous artifact", async t => {
+  const f = await setup(t, { blockerClass: "BLOCKED_TOOLING", reason: "worktree recovery pending" })
+  const snapshot = await f.controller.snapshot()
+  await assert.rejects(f.run("block", {
+    class: "BLOCKED_SCOPE",
+    reason: "docs/pred.md is untracked in this temporary checkout, despite merged predecessor PR",
+  }), /SCOPE_WORKTREE_CLASSIFICATION/)
+  assert.deepEqual((await f.controller.snapshot()).events, snapshot.events)
+})
+
+test("adversarial safety: a real expansion mentioning worktree evidence is never reclassified as environment-only", async t => {
+  const f = await setup(t, { reason: "Actual scope expansion: new feature must be added, worktree docs/pred.md also mentioned" })
+  const inspect = await f.run("inspect_scope_worktree")
+  assert.equal(inspect.status, "NOT_ELIGIBLE")
+  const now = await f.run("status")
+  await assert.rejects(f.run("reconcile_stale_worktree_scope", {
+    expected_revision: now.revision, blocked_at_revision: now.blocker.at_revision,
+  }), /genuine scope blocker/)
+  assert.equal((await f.run("status")).blocker.class, "BLOCKED_SCOPE")
+})
