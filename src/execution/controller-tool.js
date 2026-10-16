@@ -771,7 +771,7 @@ export async function runExecutionController(projectRoot, input, candidateRegist
     const snap = await controller.snapshot()
     const state = snap.state
     const blocker = state.blocker ?? null
-    const historical = blocker && snap.events.find(e => e.next_revision === blocker.at_revision)
+    const historical = blocker && snap.events.find(e => e.previous_revision === blocker.at_revision)
     const sequence = state.mandate?.wu_sequence ?? []
     const activeIndex = state.wu ? sequence.indexOf(state.wu.wu_id) : -1
     const completed_predecessors = sequence.slice(0, Math.max(0, activeIndex)).map(wu_id => {
