@@ -484,7 +484,7 @@ export async function runExecutionController(projectRoot, input, candidateRegist
     if (snap.state.mandate?.authority_kind !== MANDATE_AUTHORITY.OWNER_APPROVED_EPIC) {
       throw new Error("stage_wu_contract requires an owner-approved mandate")
     }
-    if (snap.state.mandate.wu_sequence?.[snap.state.activated_wu_ids.length] !== wuId) {
+    if (!previous && snap.state.mandate.wu_sequence?.[snap.state.activated_wu_ids.length] !== wuId) {
       throw new Error("stage_wu_contract must target the next frozen WU")
     }
     const source = await readWorkUnitDefinition(projectRoot, wuId, snap.state.mandate.source_artifact_id,
