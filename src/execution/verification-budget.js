@@ -15,6 +15,10 @@ export async function withVerificationBudget({ controller, candidate, check_id, 
     state.blocker?.class === "BLOCKED_TOOLING" &&
     state.blocker.at_revision === setupRecovery.blocked_at_revision &&
     state.wu?.wu_id === setupRecovery.source_wu_id &&
+    state.verification_retry?.blocked_at_revision === setupRecovery.blocked_at_revision &&
+    state.verification_retry?.candidate_id === candidate.candidate_id &&
+    state.verification_retry?.check_id === check_id &&
+    state.verification_retry?.wu_id === state.wu.wu_id &&
     check_id === setupRecovery.check_id &&
     !runtimeSession?.parentID && (!runtimeSession || runtimeSession.id === session) &&
     Object.values(state.dispatches).every(d => ["released", "result_reconciled"].includes(d.status))
