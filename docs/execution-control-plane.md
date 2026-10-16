@@ -35,6 +35,35 @@ Two questions must never collapse into one field:
   The original authority event remains in `events.ndjson`; the amendment is a
   new auditable event, never an overwrite.
 
+### Mandate-derived autonomy and authority preflight
+
+The diagnostic `inspect_next_wu_contract` uses the **same JIT compiler**
+as `derive_and_stage_next_wu_contract` when the selected source is a planning
+DRAFT/PROPOSED artifact. A DRAFT lacking `active_seconds` does not by itself
+require owner budget approval: `READY_FOR_JIT` means the approved Epic
+can supply an estimated allocation while retaining its hard total.
+`TIME_POLICY_REQUIRED`, `SOURCE_CONTRACT_INCOMPLETE`,
+`TECHNICAL_VERIFICATION_MISSING` and `EPIC_BUDGET_EXHAUSTED` are
+distinct results. The preflight is read-only and cannot approve an artifact.
+
+An active-WU `BLOCKED_AUTHORITY` for unapproved Appointment state
+semantics is **not** the same as a preactivation technical JIT blocker.
+Use `inspect_authority_gap` to classify the durable stop without clearing it.
+A DESIGN_ONLY WU may produce a source-linked **proposed** state/event/actor
+matrix, but cannot assert missing guest auto-confirm or cancellation business
+policies as owner-approved. The owner is asked only for exact genuinely
+unresolved policy choices; reusable approved decisions do not require
+reapproval.
+
+OpenCode may preserve user-owned global agent profiles with older
+instructions. The plugin also injects this narrow, safety-preserving
+autonomy protocol at the actual root orchestrator context boundary.
+Agent readiness reports the effective `plugin_revision`; confirm that
+the loaded runtime, not just the remote source, contains these actions.
+A failed whole-project verification gate remains FAIL until verified,
+regardless of a scoped candidate-only PASS or known pre-existing local
+formatting defects. No automatic skip of CI/review/merge is introduced.
+
 ### Frozen successor preactivation recovery
 
 If an owner-approved Epic has completed its current WU but is blocked on
