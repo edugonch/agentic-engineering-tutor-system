@@ -1,5 +1,6 @@
 import { expiredWait } from "./external-observation.js"
 import { stableHash } from "./serialize.js"
+import { isTechnicalWuContractBlocker } from "./jit-contract.js"
 // Deliberately excludes checkpoints, blocker text, leases and revision counters.
 export function executionProgress(state) {
   return stableHash({ ...(state.process_policy ? { process_policy: state.process_policy, process_recoveries: state.process_recoveries } : {}), ...(state.process_red ? { process_red: state.process_red } : {}), ...(state.time_policy ? { time_policy: state.time_policy } : {}), mandate: state.mandate, wu: state.wu, budget: state.budget,
@@ -10,6 +11,11 @@ export function recoveryAction(state) {
   if (state.completed) return { kind: "COMPLETE", action: "status" }
   if (state.verification_phase) return { kind: "VERIFICATION_IN_PROGRESS", action: "harness_recover_verification", condition: "Observe the existing owner; recovery requires proof of process exit, never duplicate a live command" }
   const cls = state.blocker?.class
+  if (isTechnicalWuContractBlocker(state.blocker) && (!state.wu || state.wu.completed)) return {
+    kind: "RECOVERABLE_WITH_MANDATE", action: "derive_and_stage_next_wu_contract",
+    blocked_at_revision: state.blocker.at_revision,
+    condition: "Compile the exact next frozen DRAFT, stage its mandate-derived contract, and activate; never invent business decisions",
+  }
   if (expiredWait(state)) return { kind: "REMOTE_OBSERVATION_REQUIRED", action: expiredWait(state).operation, condition: "Observe current exact-head CI/PR; timeout is neither success nor remote failure" }
   if (!cls && state.external_wait) return { kind: "WAITING_EXTERNAL", action: state.external_wait.operation, next_retry_at: state.external_wait.next_retry_at, deadline_at: state.external_wait.deadline_at }
   if (!cls && state.process_recoveries?.[state.wu?.wu_id]?.status === 'REPAIRING') return { kind: 'PROCESS_REPAIR', action: 'recover', condition: 'Continue retrospective validation, exact candidate review and GREEN; no renewed approval under the adopted policy' }
@@ -25,7 +31,8 @@ export function recoveryAction(state) {
 
 export function supervisorProgress(state) {
   const toolingTriage = state.blocker?.class === "BLOCKED_TOOLING" && !expiredWait(state)
-  return toolingTriage
-    ? stableHash({ phase: "TOOLING_TRIAGE", progress: executionProgress(state), blocked_at_revision: state.blocker.at_revision })
+  const contractTriage = isTechnicalWuContractBlocker(state.blocker) && (!state.wu || state.wu.completed)
+  return toolingTriage || contractTriage
+    ? stableHash({ phase: toolingTriage ? "TOOLING_TRIAGE" : "JIT_CONTRACT", progress: executionProgress(state), blocked_at_revision: state.blocker.at_revision })
     : executionProgress(state)
 }
