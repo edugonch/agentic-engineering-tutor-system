@@ -27,6 +27,7 @@
 | A-08 | HIGH | Running a new positive test that mirrors new code is insufficient; RED must reproduce the incident **before** implementation, not after. | Commit only independent incident/negative tests first, observe CI RED, preserve exact failed test IDs, then implement minimal correction. |
 | A-09 | MEDIUM | Historical transaction safety and last-merge identity can be conflated with dynamic active aliases. | Validate `state.merges` index/history and `completed_wus` against exact source commits, with no duplicate/forged merge evidence. |
 | A-10 | HIGH | Continued run can still stall after a builder handoff even if scope recovery succeeds; recent supervisor changes require a real provider canary. | Contract test: terminal child => read handoff => reconcile => candidate => independent review; and real-provider canary, with no invented PASS. |
+| A-11 | CRITICAL | `harness_freeze_candidate` also called `trackedCandidatePaths()` and `freezeCandidate()` on the plugin’s frozen canonical root, excluding a document that exists **only** in the session-moved recovery worktree. | A real plugin registration test: file only in linked session worktree must appear in frozen candidate; registry remains canonical. |
 
 ## Boundaries for any fix
 
@@ -35,6 +36,16 @@
 3. No destructive `git reset`, `clean`, force push, manual state edits, spoofed approvals, WU reordering, budget changes or skipped CI/review.
 4. Preserve previous candidate hashes/PR merges; the active E05-04 document is not part of the E05-01–03 predecessor artifacts and must not be silently absorbed.
 5. An adverse test suite passing in CI is *necessary but insufficient* to claim that the user’s local controller was unblocked. Record the selected `checkout_root`, `canonical_root`, `HEAD`, blocker fingerprint, source path and exact failure class in the read-only inspection report. The real runtime canary must confirm installation, dispatch continuity and any authorized resolution.
+
+## Recorded RED evidence and corrective requirements
+
+- **Run 38951224208** (pre-fix): RED `untracked` legacy classifier returned `NOT_ELIGIBLE` rather than `VERIFIED_RECONCILABLE`; false new `BLOCKED_SCOPE` registration was accepted when the old blocker had been cleared.
+- **Run 38951559652** (pre-fix): three completed predecessors + fourth active WU in a linked worktree returned `NOT_VERIFIED` against stale canonical HEAD, even though the live session checkout was at the verified latest merge.
+- **Run 38952422160** (pre-freeze-fix): actual registered plugin froze a candidate that omitted `docs/ONLY-IN-MOVED-SESSION.md`, because it read the canonical checkout rather than the moved session checkout.
+- Another old test fixture failed on missing `Session.Info.location.directory` after adding strict runtime identity verification; this is a **fixture deficiency**, not permission to silently fall back to `ctx.location.project.canonical`. The fixture must model the real session location.
+- The original block revision 469's **literal full reason** remains unavailable in GitHub; no assertion that production ALFRAN has been unblocked may be made from CI alone.
+
+**Fix split:** controller/event log/candidate registry/authorities stay in the canonical root; only Git checkout reading and candidate file capture use the authenticated current root session location after verification of Git common-dir. Reject a session from a foreign Git repository, a missing location, a child session, and an actual product/scope authority question.
 
 ## RED → GREEN evidence protocol
 
