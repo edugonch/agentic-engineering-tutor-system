@@ -765,6 +765,49 @@ export async function runExecutionController(projectRoot, input, candidateRegist
     return { action, commit_status: res.status, ...(await summary(controller)) }
   }
 
+  if (action === "audit_recovery") {
+    // A strictly read-only record of the exact historical stop and its frozen
+    // predecessor lineage. Checkpoints and summary prose are not authority.
+    const snap = await controller.snapshot()
+    const state = snap.state
+    const blocker = state.blocker ?? null
+    const historical = blocker && snap.events.find(e => e.next_revision === blocker.at_revision)
+    const sequence = state.mandate?.wu_sequence ?? []
+    const activeIndex = state.wu ? sequence.indexOf(state.wu.wu_id) : -1
+    const completed_predecessors = sequence.slice(0, Math.max(0, activeIndex)).map(wu_id => {
+      const complete = state.completed_wus?.[wu_id] ?? null
+      const candidate_id = complete?.candidate_id ?? null
+      const merge = candidate_id
+        ? (state.merge?.candidate_id === candidate_id ? state.merge : state.merges?.[candidate_id])
+        : null
+      return { wu_id, candidate_id, completion_revision: complete?.at_revision ?? null,
+        merge_status: merge?.status ?? null, merge_commit_sha: merge?.merge_commit_sha ?? null }
+    })
+    return {
+      action, status: blocker ? "BLOCKER_RECORDED" : "NO_BLOCKER",
+      read_only: true, execution_id: state.execution_id, revision: state.revision,
+      active_wu_id: state.wu?.wu_id ?? null, blocker,
+      blocker_event: historical ? {
+        operation_id: historical.operation_id, operation_type: historical.operation_type,
+        timestamp: historical.timestamp ?? null,
+        previous_revision: historical.previous_revision, next_revision: historical.next_revision,
+        body: historical.body, body_hash: stableHash(historical.body ?? null),
+      } : null,
+      historical_event_matches_blocker: !blocker || (historical?.operation_type === "BLOCK" &&
+        historical.body?.class === blocker.class),
+      scope_diagnosis: classifyScopeBlocker(blocker),
+      completed_predecessors,
+      canonical_ledger: { mandate_id: state.mandate?.mandate_id ?? null,
+        activated_wu_ids: state.activated_wu_ids,
+        budget: { total_seconds: state.budget.total_seconds, used_seconds: state.budget.used_seconds,
+          reserved_seconds: state.budget.reserved_seconds },
+        unfinished_dispatches: Object.entries(state.dispatches)
+          .filter(([, d]) => !["released", "result_reconciled"].includes(d.status))
+          .map(([dispatch_id, d]) => ({ dispatch_id, status: d.status })),
+      },
+    }
+  }
+
   if (action === "block") {
     const cls = String(input.class ?? "")
     if (!cls) throw new Error("block requires class (a BLOCKER_CLASSES value).")
@@ -778,9 +821,20 @@ export async function runExecutionController(projectRoot, input, candidateRegist
     if (isStaleWorktreeScopeBlocker({ class: cls, reason })) {
       throw new Error("SCOPE_WORKTREE_CLASSIFICATION: a stale checkout is tooling/environment reconciliation, not proven business scope drift; use BLOCKED_TOOLING or inspect_scope_worktree")
     }
+    if (cls === "BLOCKED_SCOPE") {
+      const scope = input.scope_cause
+      if (scope?.kind === "WORKTREE_MISMATCH") {
+        throw new Error("SCOPE_WORKTREE_CLASSIFICATION: checkout drift is tooling, never terminal business scope")
+      }
+      if (!scope || scope.kind !== "FUNCTIONAL_SCOPE_CHANGE" ||
+          typeof scope.authority_ref !== "string" || !scope.authority_ref.trim()) {
+        throw new Error("SCOPE_CAUSE_REQUIRED: a new BLOCKED_SCOPE must identify the actual functional scope change and exact authority_ref")
+      }
+    }
+
     if (cls === "BLOCKED_PROCESS" && input.process_kind !== "TDD_ORDER") throw new Error("Typed process deviation required")
     if (!reason) throw new Error("block requires reason (a human-readable explanation of the stop).")
-    const res = await commitObservation(controller, holder, `${executionId}:block`, "BLOCK", { class: cls, reason, ...(input.authority_question ? { authority_question: input.authority_question } : {}), ...(cls === "BLOCKED_PROCESS" ? { kind: input.process_kind } : {}) }, () => true, state => Boolean(state.blocker))
+    const res = await commitObservation(controller, holder, `${executionId}:block`, "BLOCK", { class: cls, reason, ...(input.authority_question ? { authority_question: input.authority_question } : {}), ...(cls === "BLOCKED_SCOPE" ? { scope_cause: input.scope_cause } : {}), ...(cls === "BLOCKED_PROCESS" ? { kind: input.process_kind } : {}) }, () => true, state => Boolean(state.blocker))
     return { action, commit_status: res.status, ...(await summary(controller)) }
   }
 
