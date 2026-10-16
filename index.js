@@ -637,7 +637,10 @@ export default Plugin.define({
               })
             }
           }
-          return json(result)
+          return json(input.action === "audit_recovery"
+            ? { ...result, loaded_plugin_revision: packageRevision,
+                supervisor_runtime: supervisor.status() }
+            : result)
         },
       })
 
