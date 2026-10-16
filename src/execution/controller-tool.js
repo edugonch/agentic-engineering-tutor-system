@@ -450,7 +450,7 @@ export async function runExecutionController(projectRoot, input, candidateRegist
     }
     const snap = await controller.snapshot()
     const previous = snap.events.find(e => e.operation_type === "WU_CONTRACT_STAGE" &&
-      e.body.wu_id === wuId && e.body.contract.source_record_key === sourceId)
+      e.body.wu_id === wuId && (e.body.source_artifact_id === sourceId || e.body.contract.source_record_key === sourceId))
     if (!previous && snap.state.revision !== input.expected_revision) {
       throw new Error(`stage_wu_contract stale revision: expected ${input.expected_revision}, current ${snap.state.revision}`)
     }
@@ -475,7 +475,7 @@ export async function runExecutionController(projectRoot, input, candidateRegist
       return { action, commit_status: replay.status, staged_wu_contract: replay.state.staged_wu_contract ?? null,
         ...(await summary(controller)) }
     }
-    const body = { wu_id: wuId, expected_revision: input.expected_revision, contract }
+    const body = { wu_id: wuId, source_artifact_id: sourceId, expected_revision: input.expected_revision, contract }
     const res = await commitAction(controller, holder,
       `${executionId}:wu-contract-stage:${wuId}:${contract.contract_hash}`, "WU_CONTRACT_STAGE", body)
     return { action, commit_status: res.status, staged_wu_contract: res.state.staged_wu_contract,
@@ -511,7 +511,7 @@ export async function runExecutionController(projectRoot, input, candidateRegist
     // re-select an ambiguous DRAFT or silently replace the staged source.
     const staged = snap.state.staged_wu_contract
     if (staged && input.wu_artifact_id && input.wu_artifact_id !== staged.contract.source_record_key &&
-      input.wu_artifact_id !== staged.contract.source_artifact_id) {
+      input.wu_artifact_id !== staged.source_artifact_id) {
       throw new Error("activate_wu source differs from the preactivation-staged approved contract")
     }
     // Validate lifecycle before loading a successor that is not yet eligible.
