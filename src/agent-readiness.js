@@ -36,7 +36,7 @@ export function inspectAgentModelRouting(response) {
     if (typeof model === "string" && /^[^/]+\/.+/.test(model)) model_id = model
     else if (model && typeof model === "object") {
       const provider = model.providerID ?? model.providerId
-      const name = model.model ?? model.modelID ?? model.modelId
+      const name = model.id ?? model.model ?? model.modelID ?? model.modelId
       if (typeof provider === "string" && typeof name === "string" && provider && name) model_id = `${provider}/${name}`
     }
     return { agent: id, status: model_id ? "CONFIG_RESOLVED" : "MODEL_UNRESOLVED",
