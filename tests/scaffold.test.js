@@ -37,6 +37,12 @@ test("initializes missing files and preserves existing owner files", async () =>
     assert.match(await readFile(join(root, ".harness/templates/ADR.md"), "utf8"), /Verification plan and evidence/)
     const modelConfig = await readFile(join(root, ".harness/OPENCODE-CONFIG-FRAGMENT.jsonc"), "utf8")
     assert.match(modelConfig, /"model": "provider\/orchestrator-model-id"/)
+    // A plural `agents` key is ignored by the OpenCode V2 config schema.
+    assert.match(modelConfig, /"agent"\s*:/)
+    assert.doesNotMatch(modelConfig, /"agents"\s*:/)
+    const parsedConfig = JSON.parse(modelConfig.replace(/^\s*\/\/.*$/gm, ""))
+    assert.ok(parsedConfig.agent && !parsedConfig.agents)
+    assert.deepEqual(Object.keys(parsedConfig.agent).sort(), ["harness-builder", "harness-designer", "harness-researcher", "harness-reviewer"].sort())
     for (const agent of ["builder", "researcher", "designer", "reviewer"]) {
       assert.match(modelConfig, new RegExp(`"harness-${agent}"`))
       assert.match(modelConfig, new RegExp(`provider/${agent}-model-id`))
