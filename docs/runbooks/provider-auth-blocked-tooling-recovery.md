@@ -26,7 +26,7 @@ opencode auth list
 opencode debug config
 ```
 
-Verify the effective `agent.harness-builder.model` and `agent.harness-reviewer.model`, and the plugin SHA actually loaded in the running server. OpenCode V2 uses `agent` (singular). Agent inventory alone does not authenticate the model.
+Verify the effective `agents.harness-builder.model` and `agents.harness-reviewer.model`, and the plugin SHA actually loaded in the running server. OpenCode V2 uses `agents` (plural); older v1 documentation used `agent`. Agent inventory alone does not authenticate the model.
 
 Renew the affected provider in the authorized OpenCode credential store, for example via `opencode auth login`, or choose an explicitly authorized alternative model; never paste/store keys in a git project. Restart or reload the **actual server process in use** through its normal lifecycle. Do not assume that `opencode service restart` exists.
 
