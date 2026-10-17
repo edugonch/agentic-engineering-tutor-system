@@ -23,6 +23,32 @@ function agentId(agent) {
   return agent?.name ?? agent?.id ?? agent?.agentID ?? agent?.identifier ?? null
 }
 
+// OpenCode's loaded registry contains model routing, not proof that a provider
+// credential works. Never call this an authentication check. Models omitted by
+// the SDK are unknown, even when the agents are structurally callable.
+export function inspectAgentModelRouting(response) {
+  const records = agentRecords(response)
+  if (!records) return { status: "UNKNOWN", agents: [], provider_auth: "AUTH_UNCHECKED" }
+  const roles = REQUIRED_WORK_UNIT_AGENTS.map(({ id }) => {
+    const agent = records.find(record => agentId(record) === id)
+    const model = agent?.model
+    let model_id = null
+    if (typeof model === "string" && /^[^/]+\/.+/.test(model)) model_id = model
+    else if (model && typeof model === "object") {
+      const provider = model.providerID ?? model.providerId
+      const name = model.modelID ?? model.modelId
+      if (typeof provider === "string" && typeof name === "string" && provider && name) model_id = `${provider}/${name}`
+    }
+    return { agent: id, status: model_id ? "CONFIG_RESOLVED" : "MODEL_UNRESOLVED",
+      model_id, provider_auth: "AUTH_UNCHECKED" }
+  })
+  return {
+    status: roles.every(role => role.status === "CONFIG_RESOLVED") ? "CONFIG_RESOLVED" : "MODEL_UNRESOLVED",
+    agents: roles, provider_auth: "AUTH_UNCHECKED",
+    note: "Registry and model routing do not probe provider credentials. Require an explicit live Builder and Reviewer canary before governed delivery.",
+  }
+}
+
 export function assessWorkUnitAgentReadiness(response) {
   const records = agentRecords(response)
   if (!records) {
@@ -84,8 +110,11 @@ export async function checkWorkUnitAgentReadiness(agentApi) {
   }
 
   try {
+    const registry = await agentApi.list()
     return {
-      ...assessWorkUnitAgentReadiness(await agentApi.list()),
+      ...assessWorkUnitAgentReadiness(registry),
+      model_routing: inspectAgentModelRouting(registry),
+      operational_ready: false,
       orchestrator_terminal: await inspectOrchestratorTerminal(agentApi),
     }
   } catch (error) {
