@@ -18,7 +18,7 @@ test("accepts required agents from OpenCode's data response when both are subage
 
 test("model routing is not a credential health check", async () => {
   const loaded = [
-    { name: "harness-builder", mode: "subagent", model: { providerID: "opencode", model: "worker-test" } },
+    { name: "harness-builder", mode: "subagent", model: { providerID: "opencode", id: "worker-test" } },
     { name: "harness-reviewer", mode: "subagent", model: "other/reviewer-test" },
   ]
   const read = await checkWorkUnitAgentReadiness({
@@ -36,7 +36,7 @@ test("model routing is not a credential health check", async () => {
 test("missing or malformed model routes never imply verified credentials", () => {
   const routing = inspectAgentModelRouting({ data: [
     { name: "harness-builder", mode: "subagent" },
-    { name: "harness-reviewer", mode: "subagent", model: { model: "no-provider" } },
+    { name: "harness-reviewer", mode: "subagent", model: { id: "no-provider" } },
   ] })
   assert.equal(routing.status, "MODEL_UNRESOLVED")
   assert.deepEqual(routing.agents.map(x => x.model_id), [null, null])
