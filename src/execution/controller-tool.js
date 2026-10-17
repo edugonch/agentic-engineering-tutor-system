@@ -25,6 +25,7 @@ import { inspectStaleWorktreeScope, isStaleWorktreeScopeBlocker, classifyScopeBl
 import { verifyScopeCheckoutRoots } from "./scope-checkout.js"
 import { compileMandateDerivedWu, inspectMandateDerivedWu, isTechnicalWuContractBlocker } from "./jit-contract.js"
 import { inspectAuthorityGap } from "./authority-triage.js"
+import { inspectProviderAuthBlocker } from "./provider-auth-triage.js"
 import { wuBudgetUsage } from "./wu-budget.js"
 import { stableHash } from "./serialize.js"
 import { readLog, validateLog } from "./event-log.js"
@@ -78,6 +79,7 @@ async function summary(controller) {
     verification_phase: state.verification_phase ?? null,
     next_action: recoveryAction(state),
     authority_triage: inspectAuthorityGap(state),
+    provider_auth_triage: inspectProviderAuthBlocker(state),
     last_blocker_resolution: state.last_blocker_resolution ?? null,
     authority_resolutions: state.authority_resolutions ?? {},
     completed: state.completed,
