@@ -9,8 +9,8 @@
   // The primary session runs the orchestrator. Choose its more capable model here.
   "model": "provider/orchestrator-model-id",
 
-  // Explicit worker models prevent them from silently inheriting the orchestrator's model.
-  "agents": {
+  // OpenCode V2 uses the singular `agent` key for per-role overrides.\n  // Explicit worker models prevent them from silently inheriting the orchestrator's model.
+  "agent": {
     "harness-builder": {
       "model": "provider/builder-model-id"
     },
