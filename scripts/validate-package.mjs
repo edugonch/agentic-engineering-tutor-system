@@ -148,7 +148,8 @@ for (const marker of ["harness_check_agent_readiness", "do not record an activat
 }
 
 const modelConfig = await readFile(join(root, "templates/.harness/OPENCODE-CONFIG-FRAGMENT.jsonc"), "utf8")
-for (const marker of ['"default_agent": "harness-orchestrator"', '"model": "provider/orchestrator-model-id"', '"agents": {', '"harness-builder"', '"harness-researcher"', '"harness-designer"', '"harness-reviewer"']) {
+if (/"agents"\s*:/.test(modelConfig)) errors.push('model configuration fragment: obsolete plural agents key')
+for (const marker of ['"default_agent": "harness-orchestrator"', '"model": "provider/orchestrator-model-id"', '"agent": {', '"harness-builder"', '"harness-researcher"', '"harness-designer"', '"harness-reviewer"']) {
   if (!modelConfig.includes(marker)) errors.push(`model configuration fragment: missing ${marker}`)
 }
 
