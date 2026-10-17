@@ -89,7 +89,7 @@ The separately supplied agent/skill/command/plugin source files are preserved in
 
 ## Configure models by agent
 
-Model assignment is part of the orchestrator/worker design. The primary session runs `harness-orchestrator`; set its default model with OpenCode's top-level `model` setting. Set each worker's model under the `agents` object. This lets the owner select a more capable model for orchestration and purpose-fit models for implementation, research, design, and review.
+Model assignment is part of the orchestrator/worker design. The primary session runs `harness-orchestrator`; set its default model with OpenCode's top-level `model` setting. Set each worker's model under the OpenCode V2 `agent` (singular) object. An `agents` key is not the per-agent configuration key. This lets the owner select a more capable model for orchestration and purpose-fit models for implementation, research, design, and review.
 
 The initialization tool creates `.harness/OPENCODE-CONFIG-FRAGMENT.jsonc` with all Harness role names and model placeholders. Replace every placeholder with an available `provider/model-id` from `opencode models` before merging the fragment into the root `opencode.json` or `opencode.jsonc`. The fragment is a template, not a valid configuration until those values are replaced. OpenCode keeps the selected model separately from the selected agent in an existing session; start a new session or select the intended orchestrator model after changing the config.
 
@@ -100,7 +100,7 @@ Example after replacing the placeholders:
   "$schema": "https://opencode.ai/config.json",
   "default_agent": "harness-orchestrator",
   "model": "provider/your-orchestrator-model",
-  "agents": {
+  "agent": {
     "harness-builder": { "model": "provider/your-builder-model" },
     "harness-researcher": { "model": "provider/your-research-model" },
     "harness-designer": { "model": "provider/your-design-model" },
