@@ -112,3 +112,7 @@ instructions and retries the same assignment; do not request a new owner
 decision for a recoverable technical issue. Never bypass explicit permission
 denials. A genuinely required external OAuth action is an environment blocker,
 not missing business authority. Use REVIEW_ENVIRONMENT_BLOCKED in review.
+
+
+## Consolidated review repair
+- On a reconciled CHANGES_REQUIRED review, implement all verified bounded technical findings as one repair bundle inside the same approved WU. Do not invent successor WUs or rewrite the frozen verification policy. Do not change product files to compensate for host-specific runner errors.
