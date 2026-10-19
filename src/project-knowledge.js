@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto"
+import { assertTrustedApproval } from "./trusted-approvals.js"
 import { lstat, mkdir, open, readFile, readdir, rename, unlink, writeFile } from "node:fs/promises"
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path"
 
@@ -619,8 +620,9 @@ export async function readProjectKnowledge(projectRoot, sourceId, startLine = 1,
   }
 }
 
-export async function recordKnowledgeArtifact(projectRoot, input) {
+export async function recordKnowledgeArtifact(projectRoot, input, { attestation = null } = {}) {
   const root = assertRoot(projectRoot)
+  if (process.env.HARNESS_TRUSTED_APPROVALS === "1" && input?.status === "APPROVED") assertTrustedApproval(input, attestation)
   if (!input?.owner_confirmed) throw new Error("Knowledge artifact write stopped: explicit owner authorization for this artifact is required.")
   if (!ARTIFACT_TYPES.has(input.artifact_type)) throw new Error("Unsupported artifact_type.")
   if (!safeId(input.artifact_id)) throw new Error("artifact_id must be a stable ID using letters, numbers, dot, underscore, colon, or hyphen.")

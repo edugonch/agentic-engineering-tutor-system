@@ -33,3 +33,15 @@ test("runtime token messages are deduplicated and persisted without message cont
     assert.equal(JSON.stringify(report).includes("PRIVATE"), false)
   } finally { await rm(dir, { recursive: true, force: true }) }
 })
+
+test("tool response overhead is measured in bytes from actual outputs without storing the content", async () => {
+  const root = await mkdtemp(join(tmpdir(), "harness-tool-metrics-"))
+  try {
+    const metric = createEfficiencyTelemetry(root, { enabled: true })
+    await metric.observeTool("E", "WU-1", "record_finish", { status: "committed", secret: "not persisted" })
+    const report = await createEfficiencyTelemetry(root, { enabled: true }).report("E", "WU-1")
+    assert.equal(report.tool_calls, 1)
+    assert.ok(report.tool_output_bytes > 0)
+    assert.equal(JSON.stringify(report).includes("not persisted"), false)
+  } finally { await rm(root, { recursive: true, force: true }) }
+})

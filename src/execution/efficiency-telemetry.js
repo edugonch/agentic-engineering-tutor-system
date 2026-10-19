@@ -1,6 +1,6 @@
 // Non-normative observed usage data. Never changes a Work Unit ledger or approval.
 // Store message IDs and numeric usage only; prompts, content and secrets are omitted.
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises"
+import { appendFile, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises"
 import { randomUUID } from "node:crypto"
 import { join } from "node:path"
 
@@ -42,7 +42,7 @@ export function createEfficiencyTelemetry(projectRoot, { enabled = false } = {})
     await mkdir(root, { recursive: true, mode: 0o700 })
     const tmp = pathFor(id) + "." + randomUUID() + ".tmp"
     try { await writeFile(tmp, JSON.stringify(value), { mode: 0o600 }); await rename(tmp, pathFor(id)) }
-    finally { /* cleanup only if a failed move left a temporary file */ }
+    finally { await rm(tmp, { force: true }) }
   }
   return {
     enabled,
@@ -60,12 +60,27 @@ export function createEfficiencyTelemetry(projectRoot, { enabled = false } = {})
       state.messages[usage.message_id] = { ...usage, wu_id: link.wu_id, phase: link.phase }
       await store(link.execution_id, state)
     },
+    async observeTool(executionID, wuID, action, response) {
+      if (!enabled || !validId(executionID)) return
+      await mkdir(root, { recursive: true, mode: 0o700 })
+      await appendFile(join(root, executionID + ".tools.ndjson"), JSON.stringify({
+        action, wu_id: wuID ?? null, output_bytes: Buffer.byteLength(JSON.stringify(response))
+      }) + "\n", { mode: 0o600 })
+    },
     async report(executionID, wuID = null) {
       if (!validId(executionID)) throw new Error("efficiency_report requires a safe execution_id")
       if (wuID !== null && !validId(wuID)) throw new Error("efficiency_report wu_id must be a safe identifier")
       const data = enabled ? await load(executionID) : { messages: {} }
+      let tools = []
+      if (enabled) {
+        try { tools = (await readFile(join(root, executionID + ".tools.ndjson"), "utf8"))
+          .split("\n").filter(Boolean).map(JSON.parse).filter(item => wuID === null || item.wu_id === wuID) }
+        catch (error) { if (error.code !== "ENOENT") throw error }
+      }
       return { execution_id: executionID, wu_id: wuID, telemetry_enabled: enabled,
-        ...summarizeUsage(data.messages, wuID), budget_seconds_are_not_tokens: true }
+        ...summarizeUsage(data.messages, wuID), tool_calls: tools.length,
+        tool_output_bytes: tools.reduce((sum, item) => sum + item.output_bytes, 0),
+        budget_seconds_are_not_tokens: true }
     },
   }
 }

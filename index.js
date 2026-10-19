@@ -12,6 +12,7 @@ import { runResilientEventLoop } from "./src/execution/event-loop.js"
 import { presentControllerResponse } from "./src/execution/controller-response.js"
 import { createCausalAttemptPolicy } from "./src/execution/attempt-policy.js"
 import { createEfficiencyTelemetry } from "./src/execution/efficiency-telemetry.js"
+import { findTrustedApproval } from "./src/trusted-approvals.js"
 import { deferPluginStartup } from "./src/plugin-startup.js"
 import { runWithExternalWait } from "./src/execution/external-wait.js"
 import { findExecutionForCandidate, runRebindPR, runAbortMerge } from "./src/execution/merge.js"
@@ -218,6 +219,9 @@ export default Plugin.define({
     // V2 calls this hook before every agent-loop request, including tool continuations.
     await ctx.session.hook("context", async (event) => {
       const executionContext = await workerBudget.inspect(event.sessionID, event.agent)
+      if (executionContext?.execution_id) efficiencyTelemetry.associate(event.sessionID, executionContext.execution_id,
+        executionContext.wu_id, event.agent === "harness-reviewer" ? "REVIEW" :
+          event.agent === "harness-builder" ? "BUILD" : "OTHER")
       if (executionContext) {
         event.system ??= []
         event.system.push({ type: "text", text: `Durable Harness execution context. Follow this WU contract, all applicable authority_resolutions and the scoped process_policy/process_recovery; preserve role permissions and functional verification. Do not reopen an authority question already resolved by this decision.\n${JSON.stringify(executionContext)}` })
@@ -456,9 +460,18 @@ export default Plugin.define({
           parent_refs: { type: "array", items: { type: "string" }, maxItems: 100 },
           owner_confirmed: { type: "boolean" },
         }, ["artifact_type", "artifact_id", "title", "content", "status", "owner_confirmed"]),
-        execute: async (input) => json(await recordArtifactWithActivationGate(
-          requireProjectRoot(), input, ctx.agent, recordKnowledgeArtifact,
-        )),
+        execute: async (input, context) => {
+          let attestation = null
+          if (process.env.HARNESS_TRUSTED_APPROVALS === "1" && input.status === "APPROVED") {
+            if (!context?.sessionID || typeof ctx.session?.context !== "function") {
+              throw new Error("TRUSTED_APPROVAL_REQUIRED: verified runtime user messages are unavailable. Record PROPOSED instead.")
+            }
+            const result = await ctx.session.context({ sessionID: context.sessionID })
+            attestation = findTrustedApproval(result?.data ?? result, context.sessionID, input)
+          }
+          return json(await recordArtifactWithActivationGate(requireProjectRoot(), input, ctx.agent,
+            (root, artifact) => recordKnowledgeArtifact(root, artifact, { attestation })))
+        },
       })
 
       editor.add({
@@ -567,7 +580,7 @@ export default Plugin.define({
         name: "harness_execution_controller",
         description: "Phase 2 durable execution control surface. Drives the recoverable execution machine under .harness/execution/controller/<execution_id>/. Dispatch actions: init (approve a mandate), reserve, prepare_launch, record_launch, mark_ambiguous, resolve_ambiguous_launch (audited AMBIGUOUS -> LAUNCHED recovery using an independently verified external session id), record_finish, reconcile, release, recover (read-only classification), status, verify (read-only invariant check). Authority/lifecycle actions: adopt_process_policy (APPROVED process_policy decision, once per execution), start_process_recovery (TDD_ORDER plus reason/evidence_ref; allows repair under the policy, never acceptance), record_red (executed FAIL receipt before final candidate), record_process_evidence (executed FAIL receipt, baseline/mutation and invariant), record_process_review (review_dispatch_id of independent reconciled reviewer with process_review JSON handoff; acceptance remains bound to exact candidate and all GREEN checks), adopt_planning_estimates (apply an existing owner-approved time_policy decision: WU and dispatch times become estimates; preserve Epic total, consumption and gates; atomically resolve only a WU budget stop after settlement), correct_verification_contract (approved substitution source or delegated additive-only proposal under process_policy.technical_verification, for VERIFICATION ONLY, expected_contract_hash and reason; preserve original WU source/scope/budget/history verbatim; check_mapping is inferred for unchanged IDs and a single split, otherwise supply it, invalidate old candidates, require refreeze and fresh review), approve_mandate, amend_mandate (policy-only amendment from a new APPROVED Epic artifact; preserves budget/scope/history), amend_wu_budget (apply a structured APPROVED decision to extend the active WU allocation and atomically resolve its exact BUDGET_EXHAUSTED blocker; preserve Epic total and history), resolve_authority_blocker (apply an explicit structured APPROVED decision to the exact BLOCKED_AUTHORITY stop, including a staged frozen successor), inspect_authority_gap (read-only typed business/technical decision triage; never clears stops), audit_recovery (read-only exact historical blocker event and predecessor lineage), inspect_next_wu_contract (read-only exact-compiler JIT preflight), stage_wu_contract (pin the exact approved executable successor before activation, with expected_revision), activate_wu, record_candidate (loads the candidate from the registry; the caller cannot supply hashes), record_review, complete_wu (WU close), checkpoint, block, clear_blocker (recoverable blockers only), bind_pr, record_ci. complete remains Epic-level (EPIC_EXECUTION_VERIFIED). It is instrumentation, not new authority: every mutation routes through the controller commit path with operation_id + expected_revision + lease fencing. It never writes state.json or the event log directly, never edits OpenCode config/permissions/agents, and never simulates the model. Use verify after any restart to prove the durable core is intact.",
         input: objectInput({
-          action: { type: "string", enum: ["init", "approve_mandate", "amend_mandate", "amend_wu_budget", "adopt_planning_estimates", "adopt_process_policy", "start_process_recovery", "record_process_evidence", "record_red", "record_process_review", "resolve_authority_blocker", "inspect_authority_gap", "audit_recovery", "inspect_next_wu_contract", "stage_wu_contract", "derive_and_stage_next_wu_contract", "status", "reserve", "prepare_launch", "record_launch", "mark_ambiguous", "resolve_ambiguous_launch", "record_finish", "recover", "reconcile", "release", "verify", "activate_wu", "bind_wu_contract", "correct_verification_contract", "inspect_verification_correction", "record_candidate", "record_review", "complete_wu", "checkpoint", "block", "clear_blocker", "inspect_scope_worktree", "reconcile_stale_worktree_scope", "bind_pr", "record_ci", "complete"], default: "status" },
+          action: { type: "string", enum: ["init", "approve_mandate", "amend_mandate", "amend_wu_budget", "adopt_planning_estimates", "adopt_process_policy", "start_process_recovery", "record_process_evidence", "record_red", "record_process_review", "resolve_authority_blocker", "inspect_authority_gap", "audit_recovery", "inspect_next_wu_contract", "stage_wu_contract", "derive_and_stage_next_wu_contract", "status", "reserve", "prepare_launch", "record_launch", "mark_ambiguous", "resolve_ambiguous_launch", "record_finish", "recover", "reconcile", "release", "verify", "activate_wu", "bind_wu_contract", "correct_verification_contract", "inspect_verification_correction", "inspect_repair_bundle", "record_candidate", "record_review", "complete_wu", "checkpoint", "block", "clear_blocker", "inspect_scope_worktree", "reconcile_stale_worktree_scope", "bind_pr", "record_ci", "complete"], default: "status" },
           response_detail: { type: "string", enum: ["compact", "full"], default: "full", description: "Legacy alias: full remains the default during the compatibility canary. Use response_mode=compact to request a concise mutation receipt." },
           response_mode: { type: "string", enum: ["compact", "full"], default: "full", description: "Opt-in presentation mode. full preserves the legacy payload; compact reduces repeated state for mutations." },
           execution_id: { type: "string", minLength: 1, description: "Stable isolation key; durable state lives under .harness/execution/controller/<execution_id>/." },
@@ -676,10 +689,16 @@ export default Plugin.define({
               })
             }
           }
-          return json(input.action === "audit_recovery"
+          const payload = input.action === "audit_recovery"
             ? { ...result, loaded_plugin_revision: packageRevision,
                 supervisor_runtime: supervisor.status() }
-            : presentControllerResponse(result, { response_detail: input.response_mode ?? input.response_detail ?? "full", dispatch_id: input.dispatch_id, candidate_id: input.candidate_id }))
+            : presentControllerResponse(result, { response_detail: input.response_mode ?? input.response_detail ?? "full", dispatch_id: input.dispatch_id, candidate_id: input.candidate_id })
+          // Auxiliary measurements must never turn a durable committed operation into a retryable failure.
+          if (efficiencyTelemetry.enabled) {
+            try { await efficiencyTelemetry.observeTool(input.execution_id, result.wu?.wu_id ?? null, input.action, payload) }
+            catch { /* telemetry is non-normative; canonical result and receipts take precedence */ }
+          }
+          return json(payload)
         },
       })
 
