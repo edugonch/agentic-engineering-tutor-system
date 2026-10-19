@@ -219,6 +219,9 @@ export default Plugin.define({
     // V2 calls this hook before every agent-loop request, including tool continuations.
     await ctx.session.hook("context", async (event) => {
       const executionContext = await workerBudget.inspect(event.sessionID, event.agent)
+      if (executionContext?.execution_id) efficiencyTelemetry.associate(event.sessionID, executionContext.execution_id,
+        executionContext.wu_id, event.agent === "harness-reviewer" ? "REVIEW" :
+          event.agent === "harness-builder" ? "BUILD" : "OTHER")
       if (executionContext) {
         event.system ??= []
         event.system.push({ type: "text", text: `Durable Harness execution context. Follow this WU contract, all applicable authority_resolutions and the scoped process_policy/process_recovery; preserve role permissions and functional verification. Do not reopen an authority question already resolved by this decision.\n${JSON.stringify(executionContext)}` })
@@ -686,10 +689,12 @@ export default Plugin.define({
               })
             }
           }
-          return json(input.action === "audit_recovery"
+          const payload = input.action === "audit_recovery"
             ? { ...result, loaded_plugin_revision: packageRevision,
                 supervisor_runtime: supervisor.status() }
-            : presentControllerResponse(result, { response_detail: input.response_mode ?? input.response_detail ?? "full", dispatch_id: input.dispatch_id, candidate_id: input.candidate_id }))
+            : presentControllerResponse(result, { response_detail: input.response_mode ?? input.response_detail ?? "full", dispatch_id: input.dispatch_id, candidate_id: input.candidate_id })
+          await efficiencyTelemetry.observeTool(input.execution_id, result.wu?.wu_id ?? null, input.action, payload)
+          return json(payload)
         },
       })
 

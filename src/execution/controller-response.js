@@ -1,63 +1,38 @@
-// Presentation-only projection. It never changes controller state, receipts, or hashes.
-// Full state remains default during compatibility canary; compact is explicit.
-const FULL_ACTIONS = new Set([
-  "status", "recover", "verify", "audit_recovery", "inspect_authority_gap",
-  "inspect_next_wu_contract", "inspect_scope_worktree",
-])
-
-function count(collection) {
-  return collection && typeof collection === "object" ? Object.keys(collection).length : 0
-}
-
+// Presentation-only; never changes controller state, receipts, or hashes.
+// Compatibility: full remains the default for every action.
+import { stableHash } from "./serialize.js"
+const pick = (object, keys) => Object.fromEntries(keys.filter(key => object?.[key] !== undefined).map(key => [key, object[key]]))
+const count = object => object && typeof object === "object" ? Object.keys(object).length : 0
 export function presentControllerResponse(result, { response_detail = "full", dispatch_id, candidate_id } = {}) {
-  if (response_detail === "full" || FULL_ACTIONS.has(result.action)) return result
+  if (response_detail === "full") return result
   if (response_detail !== "compact") throw new Error("response_detail must be compact or full.")
-  const compact = { ...result, response_detail: "compact" }
-  if (result.mandate) {
-    const { mandate_id, authority_kind, source_artifact_id, merge_policy, required_ci_checks, wu_sequence } = result.mandate
-    compact.mandate = { mandate_id, authority_kind, source_artifact_id, merge_policy, required_ci_checks,
-      wu_count: wu_sequence?.length ?? null }
+  const budget = pick(result.budget, ["total_seconds", "used_seconds", "reserved_seconds", "available_seconds", "exhausted"])
+  const compact = {
+    ...pick(result, ["action","commit_status","status","execution_id","revision","fencing_token",
+      "dispatch_id","candidate_id","found","contract_status","passed"]),
+    response_detail: "compact",
+    wu_id: result.wu?.wu_id ?? null,
+    blocker: result.blocker ? pick(result.blocker, ["class","at_revision"]) : null,
+    next_action: typeof result.next_action === "object" ?
+      pick(result.next_action, ["kind","action","blocked_at_revision"]) : null,
+    budget, budget_summary: budget,
+    state_digest: stableHash(result),
+    dispatch_count: Array.isArray(result.dispatches) ? result.dispatches.length : 0,
+    candidate_count: count(result.candidates),
+    review_count: count(result.reviews),
   }
-  if (result.wu) {
-    const { wu_id, completed, origin, execution_authorization, contract } = result.wu
-    compact.wu = { wu_id, completed, origin, execution_authorization,
-      contract_hash: contract?.contract_hash ?? null,
-      verification_contract_hash: contract?.verification_contract_hash ?? null }
+  if (result.mandate) compact.mandate = pick(result.mandate, ["mandate_id","authority_kind"])
+  if (result.wu) compact.wu = { ...pick(result.wu, ["wu_id","completed","origin"]),
+    contract_hash: result.wu.contract?.contract_hash ?? null }
+  if (dispatch_id && Array.isArray(result.dispatches)) {
+    compact.dispatches = result.dispatches.filter(d=>d.dispatch_id===dispatch_id)
+      .map(d=>pick(d, ["dispatch_id","status","session_id","reservation_status","reserved_seconds","actual_consumption","consumption_basis"]))
   }
-  if (Array.isArray(result.dispatches)) {
-    compact.dispatch_count = result.dispatches.length
-    compact.dispatches = dispatch_id
-      ? result.dispatches.filter(dispatch => dispatch.dispatch_id === dispatch_id).map(dispatch => ({
-          dispatch_id: dispatch.dispatch_id, status: dispatch.status,
-          session_id: dispatch.session_id ?? null,
-          reservation_status: dispatch.reservation_status,
-          reserved_seconds: dispatch.reserved_seconds,
-          actual_consumption: dispatch.actual_consumption,
-          consumption_basis: dispatch.consumption_basis ?? null,
-        }))
-      : []
+  if (candidate_id && result.candidates?.[candidate_id]) {
+    compact.candidates = { [candidate_id]: pick(result.candidates[candidate_id], ["wu_id","tree_hash","manifest_hash"]) }
   }
-  if (result.candidates) {
-    compact.candidate_count = count(result.candidates)
-    compact.candidates = candidate_id && result.candidates[candidate_id]
-      ? { [candidate_id]: { wu_id: result.candidates[candidate_id].wu_id,
-          tree_hash: result.candidates[candidate_id].tree_hash } }
-      : {}
+  if (candidate_id && result.reviews?.[candidate_id]) {
+    compact.reviews = { [candidate_id]: pick(result.reviews[candidate_id], ["verdict","verification_evidence_ids"]) }
   }
-  if (result.reviews) {
-    compact.review_count = count(result.reviews)
-    compact.reviews = candidate_id && result.reviews[candidate_id]
-      ? { [candidate_id]: { verdict: result.reviews[candidate_id].verdict,
-          assessment: result.reviews[candidate_id].assessment,
-          verification_evidence_ids: result.reviews[candidate_id].verification_evidence_ids } }
-      : {}
-  }
-  for (const field of ["authority_resolutions", "wu_budget_amendments", "pr_bindings", "merges", "ci_evidence"]) {
-    if (result[field] !== undefined) {
-      compact[`${field}_count`] = count(result[field])
-      delete compact[field]
-    }
-  }
-  delete compact.checkpoint
   return compact
 }
