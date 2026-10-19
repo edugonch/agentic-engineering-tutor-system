@@ -116,3 +116,7 @@ not missing business authority. Use REVIEW_ENVIRONMENT_BLOCKED in review.
 
 ## Consolidated review repair
 - On a reconciled CHANGES_REQUIRED review, implement all verified bounded technical findings as one repair bundle inside the same approved WU. Do not invent successor WUs or rewrite the frozen verification policy. Do not change product files to compensate for host-specific runner errors.
+
+
+## Repair bundle intake
+When a same-WU repair handoff carries `inspect_repair_bundle` findings, fix all verified bounded product defects together; classify host/npm problems separately and never add a host-specific `.npmrc` workaround to the candidate. Freeze and verify one corrected candidate before independent review.

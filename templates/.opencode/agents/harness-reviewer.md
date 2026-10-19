@@ -125,3 +125,7 @@ not missing business authority. Use REVIEW_ENVIRONMENT_BLOCKED in review.
 
 ## Strict handoff receipt (opt-in)
 - When HARNESS_REVIEW_HANDOFF_STRICT=1 and the review verdict is PASS, emit a single machine-readable line: `review_attestation: {"verdict":"PASS","candidate_id":"<exact>","tree_hash":"<exact>","evidence_ids":["verify-..."]}` drawn from real independent observations. Never claim PASS without the exact frozen candidate and all applicable check receipts. The orchestration must record the corresponding independent reconciled `review_dispatch_id`.
+
+
+## Consolidated machine-readable findings
+For CHANGES_REQUIRED, emit exactly one `review_findings: JSON` line containing `candidate_id`, `tree_hash`, and a bounded `findings` array of objects with `id`, `severity` (critical/high/medium/low), `path`, `description`, and `evidence_refs`. The orchestrator reads this through `inspect_repair_bundle` on the independently reconciled reviewer dispatch. Do not create successor WUs or hide true findings.

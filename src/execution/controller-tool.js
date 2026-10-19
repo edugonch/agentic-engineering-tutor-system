@@ -24,6 +24,7 @@ import { join } from "node:path"
 import { compileWuContract } from "./wu-contract.js"
 import { validateContractCorrection } from "./contract-correction.js"
 import { assertTrustedReviewHandoff } from "./review-handoff.js"
+import { inspectRepairBundle } from "./repair-plan.js"
 import { inspectStaleWorktreeScope, isStaleWorktreeScopeBlocker, classifyScopeBlocker } from "./scope-recovery.js"
 import { verifyScopeCheckoutRoots } from "./scope-checkout.js"
 import { compileMandateDerivedWu, inspectMandateDerivedWu, isTechnicalWuContractBlocker } from "./jit-contract.js"
@@ -428,6 +429,11 @@ export async function runExecutionController(projectRoot, input, candidateRegist
     return { action, commit_status: res.status, amendment_receipt: body, ...(await summary(controller)) }
   }
 
+  if (action === "inspect_repair_bundle") {
+    const { state } = await controller.snapshot()
+    const result = inspectRepairBundle(state, String(input.review_dispatch_id ?? ""), String(input.candidate_id ?? ""))
+    return { action, revision: state.revision, ...result }
+  }
   if (action === "correct_verification_contract" || action === "inspect_verification_correction") {
     const snap = await controller.snapshot(), wu = snap.state.wu
     if (!wu || wu.completed) throw new Error("Contract correction requires an active WU")
