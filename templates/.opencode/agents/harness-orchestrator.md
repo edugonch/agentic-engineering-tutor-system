@@ -375,3 +375,9 @@ instructions and retries the same assignment; do not request a new owner
 decision for a recoverable technical issue. Never bypass explicit permission
 denials. A genuinely required external OAuth action is an environment blocker,
 not missing business authority. Use REVIEW_ENVIRONMENT_BLOCKED in review.
+
+
+## Efficient controller receipts (compatibility canary)
+- For ordinary mutations, explicitly request `response_mode: "compact"` once the relevant plugin version has been verified. The legacy default remains `full` and is always available when required to inspect prior fields.
+- Use detailed `status`/read-only recovery queries when a next action depends on historic evidence; never infer missing data from a shortened receipt.
+- For verification-correction work, call read-only `inspect_verification_correction` on the existing authorized WU artifact before mutating the contract; preserve owner authority and all immutable check gates.

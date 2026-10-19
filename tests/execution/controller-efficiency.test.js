@@ -52,7 +52,7 @@ test("controller presentation trims large histories but preserves recovery, iden
     pr_bindings: { z: long }, merges: { k: long }, ci_evidence: { one: long },
     checkpoint: { note: long },
   }
-  const receipt = presentControllerResponse(full, { dispatch_id: "dispatch-1", candidate_id: "cand" })
+  const receipt = presentControllerResponse(full, { response_detail: "compact", dispatch_id: "dispatch-1", candidate_id: "cand" })
   assert.equal(receipt.response_detail, "compact")
   assert.equal(receipt.revision, 856)
   assert.equal(receipt.fencing_token, 42)
@@ -64,6 +64,7 @@ test("controller presentation trims large histories but preserves recovery, iden
   assert.equal(receipt.candidate_count, 1)
   assert.equal(receipt.review_count, 1)
   assert.ok(JSON.stringify(receipt).length < JSON.stringify(full).length * 0.25)
+  assert.deepEqual(presentControllerResponse(full), full)
   assert.deepEqual(presentControllerResponse(full, { response_detail: "full" }), full)
   assert.deepEqual(presentControllerResponse({ ...full, action: "status" }), { ...full, action: "status" })
   assert.throws(() => presentControllerResponse(full, { response_detail: "unknown" }), /response_detail/)

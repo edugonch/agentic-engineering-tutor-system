@@ -1,5 +1,5 @@
 // Presentation-only projection. It never changes controller state, receipts, or hashes.
-// Full state remains available with response_detail=full and read-only status/recover.
+// Full state remains default during compatibility canary; compact is explicit.
 const FULL_ACTIONS = new Set([
   "status", "recover", "verify", "audit_recovery", "inspect_authority_gap",
   "inspect_next_wu_contract", "inspect_scope_worktree",
@@ -9,7 +9,7 @@ function count(collection) {
   return collection && typeof collection === "object" ? Object.keys(collection).length : 0
 }
 
-export function presentControllerResponse(result, { response_detail = "compact", dispatch_id, candidate_id } = {}) {
+export function presentControllerResponse(result, { response_detail = "full", dispatch_id, candidate_id } = {}) {
   if (response_detail === "full" || FULL_ACTIONS.has(result.action)) return result
   if (response_detail !== "compact") throw new Error("response_detail must be compact or full.")
   const compact = { ...result, response_detail: "compact" }
