@@ -693,7 +693,11 @@ export default Plugin.define({
             ? { ...result, loaded_plugin_revision: packageRevision,
                 supervisor_runtime: supervisor.status() }
             : presentControllerResponse(result, { response_detail: input.response_mode ?? input.response_detail ?? "full", dispatch_id: input.dispatch_id, candidate_id: input.candidate_id })
-          await efficiencyTelemetry.observeTool(input.execution_id, result.wu?.wu_id ?? null, input.action, payload)
+          // Auxiliary measurements must never turn a durable committed operation into a retryable failure.
+          if (efficiencyTelemetry.enabled) {
+            try { await efficiencyTelemetry.observeTool(input.execution_id, result.wu?.wu_id ?? null, input.action, payload) }
+            catch { /* telemetry is non-normative; canonical result and receipts take precedence */ }
+          }
           return json(payload)
         },
       })
