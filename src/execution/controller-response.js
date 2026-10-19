@@ -27,7 +27,13 @@ export function presentControllerResponse(result, { response_detail = "compact",
   if (Array.isArray(result.dispatches)) {
     compact.dispatch_count = result.dispatches.length
     compact.dispatches = dispatch_id
-      ? result.dispatches.filter(dispatch => dispatch.dispatch_id === dispatch_id)
+      ? result.dispatches.filter(dispatch => dispatch.dispatch_id === dispatch_id).map(dispatch => ({
+          dispatch_id: dispatch.dispatch_id, status: dispatch.status,
+          session_id: dispatch.session_id ?? null,
+          reservation_status: dispatch.reservation_status,
+          reserved_seconds: dispatch.reserved_seconds,
+          actual_consumption: dispatch.actual_consumption,
+        }))
       : []
   }
   if (result.candidates) {
