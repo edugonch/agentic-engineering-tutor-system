@@ -23,6 +23,7 @@ import { recoveryAction } from "./progress.js"
 import { join } from "node:path"
 import { compileWuContract } from "./wu-contract.js"
 import { validateContractCorrection } from "./contract-correction.js"
+import { assertTrustedReviewHandoff } from "./review-handoff.js"
 import { inspectStaleWorktreeScope, isStaleWorktreeScopeBlocker, classifyScopeBlocker } from "./scope-recovery.js"
 import { verifyScopeCheckoutRoots } from "./scope-checkout.js"
 import { compileMandateDerivedWu, inspectMandateDerivedWu, isTechnicalWuContractBlocker } from "./jit-contract.js"
@@ -754,8 +755,10 @@ export async function runExecutionController(projectRoot, input, candidateRegist
       if (verdict === "PASS" && receipt.status !== "PASS") throw new Error(`record_review: PASS verdict requires all-PASS evidence; ${evidenceId} is ${receipt.status}.`)
       verifiedCheckIds.push(receipt.check_id)
     }
+    const provenance = process.env.HARNESS_REVIEW_HANDOFF_STRICT === "1" && verdict === "PASS"
+      ? assertTrustedReviewHandoff(snap.state, input) : null
     const res = await controller.commit(
-      { operation_id: `${executionId}:review:${candidateId}:${stableHash({ verdict, evidenceIds, reviewer: input.reviewer ?? null })}`, operation_type: "RECORD_REVIEW", body: { candidate_id: candidateId, verdict, candidate_hashes: { manifest_hash: frozenCandidate.manifest_hash, tree_hash: frozenCandidate.tree_hash }, reviewer: input.reviewer ?? null, verification_evidence_ids: evidenceIds, verification_contract_hash: contractHash, verified_check_ids: verifiedCheckIds } },
+      { operation_id: `${executionId}:review:${candidateId}:${stableHash({ verdict, evidenceIds, reviewer: input.reviewer ?? null, provenance })}`, operation_type: "RECORD_REVIEW", body: { candidate_id: candidateId, verdict, candidate_hashes: { manifest_hash: frozenCandidate.manifest_hash, tree_hash: frozenCandidate.tree_hash }, reviewer: input.reviewer ?? null, verification_evidence_ids: evidenceIds, verification_contract_hash: contractHash, verified_check_ids: verifiedCheckIds, ...(provenance ?? {}) } },
       { holder_session_id: holder, expected_revision: snap.state.revision, lease_fencing_token: lease.fencing_token },
     )
     return { action, commit_status: res.status, candidate_id: candidateId, ...(await summary(controller)) }

@@ -12,6 +12,7 @@ import { runResilientEventLoop } from "./src/execution/event-loop.js"
 import { presentControllerResponse } from "./src/execution/controller-response.js"
 import { createCausalAttemptPolicy } from "./src/execution/attempt-policy.js"
 import { createEfficiencyTelemetry } from "./src/execution/efficiency-telemetry.js"
+import { findTrustedApproval } from "./src/trusted-approvals.js"
 import { deferPluginStartup } from "./src/plugin-startup.js"
 import { runWithExternalWait } from "./src/execution/external-wait.js"
 import { findExecutionForCandidate, runRebindPR, runAbortMerge } from "./src/execution/merge.js"
@@ -456,9 +457,18 @@ export default Plugin.define({
           parent_refs: { type: "array", items: { type: "string" }, maxItems: 100 },
           owner_confirmed: { type: "boolean" },
         }, ["artifact_type", "artifact_id", "title", "content", "status", "owner_confirmed"]),
-        execute: async (input) => json(await recordArtifactWithActivationGate(
-          requireProjectRoot(), input, ctx.agent, recordKnowledgeArtifact,
-        )),
+        execute: async (input, context) => {
+          let attestation = null
+          if (process.env.HARNESS_TRUSTED_APPROVALS === "1" && input.status === "APPROVED") {
+            if (!context?.sessionID || typeof ctx.session?.context !== "function") {
+              throw new Error("TRUSTED_APPROVAL_REQUIRED: verified runtime user messages are unavailable. Record PROPOSED instead.")
+            }
+            const result = await ctx.session.context({ sessionID: context.sessionID })
+            attestation = findTrustedApproval(result?.data ?? result, context.sessionID, input)
+          }
+          return json(await recordArtifactWithActivationGate(requireProjectRoot(), input, ctx.agent,
+            (root, artifact) => recordKnowledgeArtifact(root, artifact, { attestation })))
+        },
       })
 
       editor.add({

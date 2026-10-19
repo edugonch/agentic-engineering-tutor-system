@@ -121,3 +121,7 @@ not missing business authority. Use REVIEW_ENVIRONMENT_BLOCKED in review.
 
 ## Independent consolidated findings
 - Review the exact final frozen candidate; provide all demonstrable bounded technical defects together with file/evidence references. Never require administrative version proliferation. Retain CHANGES_REQUIRED when real findings remain, and demand a new candidate and applicable receipts after any fix.
+
+
+## Strict handoff receipt (opt-in)
+- When HARNESS_REVIEW_HANDOFF_STRICT=1 and the review verdict is PASS, emit a single machine-readable line: `review_attestation: {"verdict":"PASS","candidate_id":"<exact>","tree_hash":"<exact>","evidence_ids":["verify-..."]}` drawn from real independent observations. Never claim PASS without the exact frozen candidate and all applicable check receipts. The orchestration must record the corresponding independent reconciled `review_dispatch_id`.
