@@ -33,6 +33,7 @@ export function presentControllerResponse(result, { response_detail = "compact",
           reservation_status: dispatch.reservation_status,
           reserved_seconds: dispatch.reserved_seconds,
           actual_consumption: dispatch.actual_consumption,
+          consumption_basis: dispatch.consumption_basis ?? null,
         }))
       : []
   }
