@@ -11,6 +11,7 @@ import { resolveScopeRuntimeCheckout } from "./src/execution/scope-checkout.js"
 import { runResilientEventLoop } from "./src/execution/event-loop.js"
 import { presentControllerResponse } from "./src/execution/controller-response.js"
 import { createCausalAttemptPolicy } from "./src/execution/attempt-policy.js"
+import { createEfficiencyTelemetry } from "./src/execution/efficiency-telemetry.js"
 import { deferPluginStartup } from "./src/plugin-startup.js"
 import { runWithExternalWait } from "./src/execution/external-wait.js"
 import { findExecutionForCandidate, runRebindPR, runAbortMerge } from "./src/execution/merge.js"
@@ -96,6 +97,7 @@ export default Plugin.define({
       return projectRoot
     }
     const causalPolicy = createCausalAttemptPolicy(requireProjectRoot(), { enabled: process.env.HARNESS_SEMANTIC_RETRY_GUARD === "1" })
+    const efficiencyTelemetry = createEfficiencyTelemetry(requireProjectRoot(), { enabled: process.env.HARNESS_EFFICIENCY_TELEMETRY === "1" })
 
     const supervisor = createExecutionSupervisor(ctx, requireProjectRoot(), { enabled: process.env.HARNESS_SUPERVISOR_ENABLED !== "0" })
     const sessionRecovery = createSessionRecovery(ctx, requireProjectRoot())
@@ -555,6 +557,13 @@ export default Plugin.define({
       })
 
       editor.add({
+        name: "harness_efficiency_report",
+        description: "Read-only observed-token summary for an execution/WU. Missing runtime measurements remain unknown; this is never an Epic budget or approval.",
+        input: objectInput({ execution_id: { type: "string", minLength: 1 }, wu_id: { type: "string" } }, ["execution_id"]),
+        execute: input => efficiencyTelemetry.report(input.execution_id, input.wu_id ?? null).then(json),
+      })
+
+      editor.add({
         name: "harness_execution_controller",
         description: "Phase 2 durable execution control surface. Drives the recoverable execution machine under .harness/execution/controller/<execution_id>/. Dispatch actions: init (approve a mandate), reserve, prepare_launch, record_launch, mark_ambiguous, resolve_ambiguous_launch (audited AMBIGUOUS -> LAUNCHED recovery using an independently verified external session id), record_finish, reconcile, release, recover (read-only classification), status, verify (read-only invariant check). Authority/lifecycle actions: adopt_process_policy (APPROVED process_policy decision, once per execution), start_process_recovery (TDD_ORDER plus reason/evidence_ref; allows repair under the policy, never acceptance), record_red (executed FAIL receipt before final candidate), record_process_evidence (executed FAIL receipt, baseline/mutation and invariant), record_process_review (review_dispatch_id of independent reconciled reviewer with process_review JSON handoff; acceptance remains bound to exact candidate and all GREEN checks), adopt_planning_estimates (apply an existing owner-approved time_policy decision: WU and dispatch times become estimates; preserve Epic total, consumption and gates; atomically resolve only a WU budget stop after settlement), correct_verification_contract (approved substitution source or delegated additive-only proposal under process_policy.technical_verification, for VERIFICATION ONLY, expected_contract_hash and reason; preserve original WU source/scope/budget/history verbatim; check_mapping is inferred for unchanged IDs and a single split, otherwise supply it, invalidate old candidates, require refreeze and fresh review), approve_mandate, amend_mandate (policy-only amendment from a new APPROVED Epic artifact; preserves budget/scope/history), amend_wu_budget (apply a structured APPROVED decision to extend the active WU allocation and atomically resolve its exact BUDGET_EXHAUSTED blocker; preserve Epic total and history), resolve_authority_blocker (apply an explicit structured APPROVED decision to the exact BLOCKED_AUTHORITY stop, including a staged frozen successor), inspect_authority_gap (read-only typed business/technical decision triage; never clears stops), audit_recovery (read-only exact historical blocker event and predecessor lineage), inspect_next_wu_contract (read-only exact-compiler JIT preflight), stage_wu_contract (pin the exact approved executable successor before activation, with expected_revision), activate_wu, record_candidate (loads the candidate from the registry; the caller cannot supply hashes), record_review, complete_wu (WU close), checkpoint, block, clear_blocker (recoverable blockers only), bind_pr, record_ci. complete remains Epic-level (EPIC_EXECUTION_VERIFIED). It is instrumentation, not new authority: every mutation routes through the controller commit path with operation_id + expected_revision + lease fencing. It never writes state.json or the event log directly, never edits OpenCode config/permissions/agents, and never simulates the model. Use verify after any restart to prove the durable core is intact.",
         input: objectInput({
@@ -652,6 +661,7 @@ export default Plugin.define({
             throw error
           }
           await causalPolicy.success(input, result)
+          if (context?.sessionID && input.execution_id) efficiencyTelemetry.associate(context.sessionID, input.execution_id, result.wu?.wu_id)
           if (supervisor.enabled && result.mandate?.authority_kind === "OWNER_APPROVED_EPIC") await supervisor.bind(input.execution_id, context?.sessionID ?? input.session_id)
           if (input.action === "release") launchBindings.release(input.execution_id, input.dispatch_id)
           // Wave B: after a successful prepare_launch with a named launch_agent,
@@ -1006,7 +1016,7 @@ export default Plugin.define({
       })
     })
 
-    if (continuation.enabled || supervisor.enabled) {
+    if (continuation.enabled || supervisor.enabled || efficiencyTelemetry.enabled) {
       runResilientEventLoop({
         subscribe: args => ctx.event.subscribe(args),
         signal: eventSubscription.signal,
@@ -1014,6 +1024,7 @@ export default Plugin.define({
         onEvent: async event => {
           await continuation.onEvent(event).catch(error => continuation.recordSubscriptionError(error?.message ?? String(error)))
           await supervisor.onEvent(event)
+          await efficiencyTelemetry.onEvent(event)
         },
       }).catch(error => continuation.recordSubscriptionError(error?.message ?? String(error)))
     }
