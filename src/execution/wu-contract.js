@@ -13,7 +13,7 @@ export function compileWuContract(wuId, definition) {
   const match = durations[0]
   const documented = match ? Number(match[1]) * (/^(h|hour)/i.test(match[2]) ? 3600 : /^(m|min)/i.test(match[2]) ? 60 : 1) : null
   const seconds = typed?.active_seconds ?? documented
-  if (!Number.isSafeInteger(seconds) || seconds <= 0) throw new Error("WU contract requires a finite active_seconds or Active-time limit")
+  if (!Number.isSafeInteger(seconds) || seconds <= 0) throw new Error('WU contract requires a finite active_seconds or Active-time limit. Specify an exact line: execution_contract: {"active_seconds":120} or Active-time limit: 120 seconds. YAML frontmatter active_seconds alone is not an executable contract.')
   if (documented !== null && documented !== seconds) throw new Error("WU documented and executable budgets disagree")
   validateProcessObligations(typed?.process_obligations ?? [])
   const verification = typed?.verification_contract ?? null
