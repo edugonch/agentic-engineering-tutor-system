@@ -1,4 +1,5 @@
 import { processReviewAttestation, applicableAuthority, blockerFingerprint, activeRecovery } from "./process-recovery.js"
+import { validateControllerPreflight } from "./controller-preflight.js"
 import { PLANNING_ESTIMATES } from "./time-policy.js"
 import { deriveVerificationCorrection, correctionCheckMapping } from "./contract-correction.js"
 import { recoveryAction } from "./progress.js"
@@ -206,6 +207,7 @@ export async function claimDispatchLaunch(projectRoot, { execution_id, dispatch_
 }
 
 export async function runExecutionController(projectRoot, input, candidateRegistry, options = {}) {
+  validateControllerPreflight(input)
   const executionId = sanitizeId(input.execution_id, "execution_id")
   const dir = join(projectRoot, ".harness", "execution", "controller", executionId)
   const controller = await createExecutionController({ dir, lease_ttl_ms: 30000 })
