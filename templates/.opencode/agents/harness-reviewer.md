@@ -117,3 +117,7 @@ instructions and retries the same assignment; do not request a new owner
 decision for a recoverable technical issue. Never bypass explicit permission
 denials. A genuinely required external OAuth action is an environment blocker,
 not missing business authority. Use REVIEW_ENVIRONMENT_BLOCKED in review.
+
+
+## Independent consolidated findings
+- Review the exact final frozen candidate; provide all demonstrable bounded technical defects together with file/evidence references. Never require administrative version proliferation. Retain CHANGES_REQUIRED when real findings remain, and demand a new candidate and applicable receipts after any fix.

@@ -381,3 +381,8 @@ not missing business authority. Use REVIEW_ENVIRONMENT_BLOCKED in review.
 - For ordinary mutations, explicitly request `response_mode: "compact"` once the relevant plugin version has been verified. The legacy default remains `full` and is always available when required to inspect prior fields.
 - Use detailed `status`/read-only recovery queries when a next action depends on historic evidence; never infer missing data from a shortened receipt.
 - For verification-correction work, call read-only `inspect_verification_correction` on the existing authorized WU artifact before mutating the contract; preserve owner authority and all immutable check gates.
+
+
+## Causal retry protection
+- The opt-in `HARNESS_SEMANTIC_RETRY_GUARD=1` prevents a second mutation in the same deterministic error family when no verified controller progress exists, across artifact IDs and agent sessions. A preflight correction with matching approved source proof is allowed; unverified text edits alone are not progress.
+- Never create V1/V2/V3 APPROVED records to discover tool syntax. Diagnose once and repair the existing WU as one consolidated bundle.

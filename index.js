@@ -10,6 +10,7 @@ import { createExecutionSupervisor } from "./src/execution/supervisor.js"
 import { resolveScopeRuntimeCheckout } from "./src/execution/scope-checkout.js"
 import { runResilientEventLoop } from "./src/execution/event-loop.js"
 import { presentControllerResponse } from "./src/execution/controller-response.js"
+import { createCausalAttemptPolicy } from "./src/execution/attempt-policy.js"
 import { deferPluginStartup } from "./src/plugin-startup.js"
 import { runWithExternalWait } from "./src/execution/external-wait.js"
 import { findExecutionForCandidate, runRebindPR, runAbortMerge } from "./src/execution/merge.js"
@@ -94,6 +95,7 @@ export default Plugin.define({
       if (!projectRoot) throw new Error("OpenCode did not provide this plugin location's canonical project root.")
       return projectRoot
     }
+    const causalPolicy = createCausalAttemptPolicy(requireProjectRoot(), { enabled: process.env.HARNESS_SEMANTIC_RETRY_GUARD === "1" })
 
     const supervisor = createExecutionSupervisor(ctx, requireProjectRoot(), { enabled: process.env.HARNESS_SUPERVISOR_ENABLED !== "0" })
     const sessionRecovery = createSessionRecovery(ctx, requireProjectRoot())
@@ -624,9 +626,32 @@ export default Plugin.define({
           const scopeRoots = scopeAction
             ? await resolveScopeRuntimeCheckout(ctx, requireProjectRoot(), context?.sessionID)
             : null
-          const result = await guard.runHarness(context?.sessionID ?? input.session_id, "harness_execution_controller", input,
-            () => runExecutionController(requireProjectRoot(), input, candidateRegistry,
-              scopeRoots ? { checkoutRoot: scopeRoots.checkoutRoot } : {}))
+          let causalEvidence = null
+          if (["correct_verification_contract", "stage_wu_contract", "derive_and_stage_next_wu_contract"].includes(input.action) &&
+              /^[A-Za-z0-9._-]+$/.test(input.execution_id ?? "") &&
+              existsSync(join(requireProjectRoot(), ".harness", "execution", "controller", input.execution_id, "events.ndjson"))) {
+            const prior = await runExecutionController(requireProjectRoot(), {
+              action: "status", execution_id: input.execution_id, session_id: input.session_id,
+            }, candidateRegistry)
+            causalEvidence = {
+              wu_id: prior.wu?.wu_id ?? null,
+              contract_hash: prior.wu?.contract?.contract_hash ?? null,
+              blocker_fingerprint: prior.blocker_fingerprint ?? null,
+              candidate_hashes: Object.entries(prior.candidates ?? {}).map(([id, c]) => [id, c.tree_hash]).sort(),
+              completed_wus: Object.keys(prior.completed_wus ?? {}).sort(),
+            }
+          }
+          await causalPolicy.before(input, causalEvidence)
+          let result
+          try {
+            result = await guard.runHarness(context?.sessionID ?? input.session_id, "harness_execution_controller", input,
+              () => runExecutionController(requireProjectRoot(), input, candidateRegistry,
+                scopeRoots ? { checkoutRoot: scopeRoots.checkoutRoot } : {}))
+          } catch (error) {
+            await causalPolicy.failure(input, causalEvidence, error)
+            throw error
+          }
+          await causalPolicy.success(input, result)
           if (supervisor.enabled && result.mandate?.authority_kind === "OWNER_APPROVED_EPIC") await supervisor.bind(input.execution_id, context?.sessionID ?? input.session_id)
           if (input.action === "release") launchBindings.release(input.execution_id, input.dispatch_id)
           // Wave B: after a successful prepare_launch with a named launch_agent,
