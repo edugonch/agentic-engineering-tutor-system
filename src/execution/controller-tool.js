@@ -1,4 +1,5 @@
 import { processReviewAttestation, applicableAuthority, blockerFingerprint, activeRecovery } from "./process-recovery.js"
+import { validateControllerPreflight } from "./controller-preflight.js"
 import { PLANNING_ESTIMATES } from "./time-policy.js"
 import { deriveVerificationCorrection, correctionCheckMapping } from "./contract-correction.js"
 import { recoveryAction } from "./progress.js"
@@ -21,6 +22,7 @@ import { recoveryAction } from "./progress.js"
 
 import { join } from "node:path"
 import { compileWuContract } from "./wu-contract.js"
+import { validateContractCorrection } from "./contract-correction.js"
 import { inspectStaleWorktreeScope, isStaleWorktreeScopeBlocker, classifyScopeBlocker } from "./scope-recovery.js"
 import { verifyScopeCheckoutRoots } from "./scope-checkout.js"
 import { compileMandateDerivedWu, inspectMandateDerivedWu, isTechnicalWuContractBlocker } from "./jit-contract.js"
@@ -206,6 +208,7 @@ export async function claimDispatchLaunch(projectRoot, { execution_id, dispatch_
 }
 
 export async function runExecutionController(projectRoot, input, candidateRegistry, options = {}) {
+  validateControllerPreflight(input)
   const executionId = sanitizeId(input.execution_id, "execution_id")
   const dir = join(projectRoot, ".harness", "execution", "controller", executionId)
   const controller = await createExecutionController({ dir, lease_ttl_ms: 30000 })
@@ -424,7 +427,7 @@ export async function runExecutionController(projectRoot, input, candidateRegist
     return { action, commit_status: res.status, amendment_receipt: body, ...(await summary(controller)) }
   }
 
-  if (action === "correct_verification_contract") {
+  if (action === "correct_verification_contract" || action === "inspect_verification_correction") {
     const snap = await controller.snapshot(), wu = snap.state.wu
     if (!wu || wu.completed) throw new Error("Contract correction requires an active WU")
     if (!input.wu_artifact_id) throw new Error("Select the exact approved corrected WU artifact")
@@ -449,6 +452,13 @@ export async function runExecutionController(projectRoot, input, candidateRegist
     const contract = deriveVerificationCorrection(baseline, proposal)
     const body = { mode: "verification_only", contract, expected_contract_hash: input.expected_contract_hash, reason: input.reason,
       check_mapping: correctionCheckMapping(baseline.verification_contract, contract.verification_contract, input.check_mapping) }
+    if (action === "inspect_verification_correction") {
+      validateContractCorrection(snap.state, body)
+      return { action, status: "ADMISSIBLE_READ_ONLY", revision: snap.state.revision,
+        wu_id: wu.wu_id, original_contract_hash: baseline.contract_hash,
+        proposed_contract_hash: contract.contract_hash, required_check_mapping: body.check_mapping,
+        next_action: "Use correct_verification_contract with this exact already-approved source when appropriate." }
+    }
     const res = await commitAction(controller, holder, operation, "WU_CONTRACT_CORRECT", body)
     return { action, commit_status: res.status, next_action: "Clear only the resolved tooling blocker, refreeze the same code with the corrected contract, rerun every check and fresh independent review. Prior receipts remain historical.", ...(await summary(controller)) }
   }
