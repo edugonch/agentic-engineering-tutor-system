@@ -8,10 +8,38 @@
 // returned as BLOCKED_CAPABILITY rather than silently ignored).
 
 import { spawn } from "node:child_process"
+import { createHash } from "node:crypto"
+import { mkdtemp, readFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { disposeWorkspace, materializeCandidate } from "./verification-workspace.js"
 
 const MAX_OUTPUT_BYTES = 1_048_576 // 1 MiB
+let ephemeralRunnerCache = null
+
+// Runner-owned, process-scoped cache; never commit a host path to a product tree.
+// Disabled unless explicitly enabled by the operator for the runner canary.
+export async function runnerEnvironment(workspace, program, { enableCache = process.env.HARNESS_RUNNER_CACHE === "1" } = {}) {
+  const env = sanitizedEnv(workspace)
+  if (program !== "npm" || !enableCache) return env
+  if (!ephemeralRunnerCache) ephemeralRunnerCache = mkdtemp(join(tmpdir(), "harness-npm-cache-"))
+  return { ...env, npm_config_cache: await ephemeralRunnerCache }
+}
+
+export function classifyRunnerFailure(stderr = "") {
+  const text = String(stderr)
+  if (/EACCES|EPERM/.test(text)) return { kind: "RUNNER_SETUP", code: "NPM_PERMISSION" }
+  if (/ENOTFOUND|EAI_AGAIN/.test(text)) return { kind: "NETWORK", code: "NPM_DNS" }
+  if (/ETIMEDOUT|ECONNRESET/.test(text)) return { kind: "NETWORK", code: "NPM_TRANSPORT" }
+  if (/EINTEGRITY|TAR_BAD_ARCHIVE/.test(text)) return { kind: "RUNNER_SETUP", code: "NPM_CACHE_INTEGRITY" }
+  if (/EUSAGE|package-lock\.json.*(missing|out of sync)|Missing:.*from lock file/is.test(text)) return { kind: "RUNNER_SETUP", code: "NPM_LOCKFILE" }
+  return { kind: "UNKNOWN", code: "UNCLASSIFIED" }
+}
+async function lockfileSha(workspace) {
+  try { return createHash("sha256").update(await readFile(join(workspace, "package-lock.json"))).digest("hex") }
+  catch (error) { if (error.code === "ENOENT") return null; throw error }
+}
 
 export function validateVerificationContract(contract) {
   if (!contract || typeof contract !== "object") throw new Error("verification contract must be an object.")
@@ -156,13 +184,13 @@ export async function runDeclaredCheck(candidate, contract, checkId, { timeoutMs
   try {
     for (const setup of contract.setup ?? []) {
       if (remaining() <= 0) return { status: "BLOCKED_BUDGET", check_id: checkId, setup_results: setupResults }
-      const result = await runCommand(setup.program, setup.args, { cwd: workspace, signal, timeoutMs: Math.min(setup.timeout_ms ?? 300000, remaining()) })
+      const result = await runCommand(setup.program, setup.args, { cwd: workspace, env: await runnerEnvironment(workspace, setup.program), signal, timeoutMs: Math.min(setup.timeout_ms ?? 300000, remaining()) })
       setupResults.push({ id: setup.id, ...result })
       if (!result.ok) return { status: "FAIL", candidate_id: candidate.candidate_id, check_id: checkId,
-        reason: `Declared setup ${setup.id} failed`, setup_results: setupResults, ...result }
+        reason: `Declared setup ${setup.id} failed`, runner_diagnosis: classifyRunnerFailure(result.stderr), setup_results: setupResults, ...result }
     }
     if (remaining() <= 0) return { status: "BLOCKED_BUDGET", check_id: checkId, setup_results: setupResults }
-    const result = await runCommand(check.program, check.args, { cwd: workspace, env: sanitizedEnv(workspace), signal, timeoutMs: Math.min(timeoutMs ?? check.timeout_ms ?? 30000, remaining()) })
+    const result = await runCommand(check.program, check.args, { cwd: workspace, env: await runnerEnvironment(workspace, check.program), signal, timeoutMs: Math.min(timeoutMs ?? check.timeout_ms ?? 30000, remaining()) })
     return {
       status: result.ok ? "PASS" : "FAIL",
       setup_results: setupResults,
@@ -173,7 +201,9 @@ export async function runDeclaredCheck(candidate, contract, checkId, { timeoutMs
       tree_hash: candidate.tree_hash,
       ...result,
       network_policy: policy,
-      fingerprint: { node: process.version, cwd: workspace, timestamp: new Date().toISOString() },
+      fingerprint: { node: process.version, platform: process.platform, arch: process.arch,
+        npm_cache_mode: process.env.HARNESS_RUNNER_CACHE === "1" ? "runner_ephemeral" : "workspace_isolated",
+        lockfile_sha256: await lockfileSha(workspace), cwd: workspace, timestamp: new Date().toISOString() },
     }
   } finally {
     await disposeWorkspace(workspace)
