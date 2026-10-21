@@ -24,7 +24,7 @@ import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { createDispatchHandoffReader } from "./src/execution/dispatch-handoff.js"
 import { registerOrchestratorSteps, registerSpecialistSteps, inspectOrchestratorSteps } from "./src/orchestrator-steps.js"
-import { createSessionRecovery } from "./src/execution/session-recovery.js"
+import { createSessionRecovery, assertSessionNotOrphanFenced } from "./src/execution/session-recovery.js"
 import { createOrchestratorOwnership } from "./src/orchestrator-ownership.js"
 import { Plugin } from "@opencode/plugin"
 import { fileURLToPath } from "node:url"
@@ -256,6 +256,7 @@ export default Plugin.define({
     // Count tool calls and delegations for the session that actually ran them,
     // and (Wave B) claim a bound prepared dispatch at the launch boundary.
     await ctx.tool.hook("execute.before", async (event) => {
+      await assertSessionNotOrphanFenced(requireProjectRoot(), event.sessionID)
       await ownership.beforeTool(event)
       await workerBudget.inspect(event.sessionID, event.agent)
       // Run the circuit breaker first. If it trips, the subagent is rejected and
@@ -321,6 +322,8 @@ export default Plugin.define({
     // boundary too. Prompt instructions and a read-only preflight are not a
     // delegation guard; an unavailable Harness role must be denied here.
     await ctx.permission.hook("evaluate", async (event) => {
+      try { await assertSessionNotOrphanFenced(requireProjectRoot(), event.sessionID) }
+      catch (error) { event.effect = "deny"; event.message = error.message; return }
       await guardHarnessSubagentPermission(event, ctx.agent)
       // D2 hard-stop primitive: a registered probe session requesting a
       // forbidden action is denied and blocked; the driver never continues it

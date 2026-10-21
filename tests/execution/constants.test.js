@@ -12,6 +12,8 @@ test("DISPATCH_STATUS exposes the full Phase 2 lifecycle with distinct values", 
     RESERVED: "reserved",
     PENDING_LAUNCH: "pending_launch",
     LAUNCHED: "launched",
+    ABANDONED: "abandoned",
+    ABANDONED_RECONCILED: "abandoned_reconciled",
     FINISHED: "finished",
     RESULT_RECONCILED: "result_reconciled",
     RELEASED: "released",
@@ -49,9 +51,9 @@ test("TERMINAL_DISPATCH_STATUSES are exactly the absorbing statuses", () => {
   // RELEASED are absorbing too. Pre-terminal statuses must NOT be terminal.
   assert.deepEqual(
     [...TERMINAL_DISPATCH_STATUSES].sort(),
-    [DISPATCH_STATUS.RESULT_RECONCILED, DISPATCH_STATUS.RELEASED, DISPATCH_STATUS.AMBIGUOUS].sort(),
+    [DISPATCH_STATUS.RESULT_RECONCILED, DISPATCH_STATUS.ABANDONED_RECONCILED, DISPATCH_STATUS.RELEASED, DISPATCH_STATUS.AMBIGUOUS].sort(),
   )
-  for (const preTerminal of [DISPATCH_STATUS.RESERVED, DISPATCH_STATUS.PENDING_LAUNCH, DISPATCH_STATUS.LAUNCHED, DISPATCH_STATUS.FINISHED]) {
+  for (const preTerminal of [DISPATCH_STATUS.RESERVED, DISPATCH_STATUS.PENDING_LAUNCH, DISPATCH_STATUS.LAUNCHED, DISPATCH_STATUS.FINISHED, DISPATCH_STATUS.ABANDONED]) {
     assert.equal(TERMINAL_DISPATCH_STATUSES.has(preTerminal), false)
   }
   assert.equal(TERMINAL_DISPATCH_STATUSES.has(DISPATCH_STATUS.AMBIGUOUS), true)
@@ -61,6 +63,9 @@ test("OPERATION_TYPES includes the Phase 2 dispatch operations and stays unique"
   assert.ok(OPERATION_TYPES.includes("DISPATCH_RELEASE"))
   assert.ok(OPERATION_TYPES.includes("DISPATCH_MARK_AMBIGUOUS"))
   assert.ok(OPERATION_TYPES.includes("DISPATCH_RECONCILE"))
+  assert.ok(OPERATION_TYPES.includes("DISPATCH_FENCE"))
+  assert.ok(OPERATION_TYPES.includes("DISPATCH_ABANDON"))
+  assert.ok(OPERATION_TYPES.includes("DISPATCH_RECONCILE_ABANDONED"))
   // Typed vocab must not contain duplicate verbs.
   assert.equal(new Set(OPERATION_TYPES).size, OPERATION_TYPES.length)
 })

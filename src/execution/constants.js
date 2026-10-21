@@ -38,6 +38,9 @@ export const OPERATION_TYPES = Object.freeze([
   "DISPATCH_USAGE", // runtime-observed worker envelope, never model-reported elapsed time
   "DISPATCH_FINISH", // launched -> finished, attach result
   "DISPATCH_RECONCILE", // finished -> result_reconciled, settle reservation into consumption
+  "DISPATCH_FENCE", // launched -> launched; irreversible denial of this child at tool/permission boundaries
+  "DISPATCH_ABANDON", // fenced launched -> abandoned (never success)
+  "DISPATCH_RECONCILE_ABANDONED", // abandoned -> abandoned_reconciled, conservatively charge once
   "DISPATCH_RELEASE", // reserved/pending_launch (never launched) -> released, return reservation
   "DISPATCH_MARK_AMBIGUOUS", // reserved/pending_launch -> ambiguous (identity unknown); reservation stays held
   "DISPATCH_RESOLVE_AMBIGUOUS_LAUNCH", // ambiguous -> launched after exact external session identity is independently recovered
@@ -76,6 +79,8 @@ export const DISPATCH_STATUS = Object.freeze({
   RESERVED: "reserved",
   PENDING_LAUNCH: "pending_launch",
   LAUNCHED: "launched",
+  ABANDONED: "abandoned",
+  ABANDONED_RECONCILED: "abandoned_reconciled",
   FINISHED: "finished",
   RESULT_RECONCILED: "result_reconciled",
   RELEASED: "released",
@@ -92,6 +97,7 @@ export const DISPATCH_STATUS = Object.freeze({
 //   RESULT_RECONCILED = the result has been durably incorporated.
 export const TERMINAL_DISPATCH_STATUSES = new Set([
   DISPATCH_STATUS.RESULT_RECONCILED,
+  DISPATCH_STATUS.ABANDONED_RECONCILED,
   DISPATCH_STATUS.RELEASED,
   DISPATCH_STATUS.AMBIGUOUS,
 ])

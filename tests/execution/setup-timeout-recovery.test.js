@@ -66,7 +66,7 @@ async function fixture(t, { blockClass = "BLOCKED_TOOLING", reason = "Frozen npm
 test("setup retry with a historical immutable timed-out receipt clears only the matched tooling stop after full-check PASS", async t => {
   const f = await fixture(t)
   const before = (await f.c.snapshot()).state
-  assert.equal(recoveryAction(before).action, "harness_retry_blocked_verification")
+  assert.equal(recoveryAction(before).action, "clear_blocker", "text alone is not enough to recommend a billed retry")
   const result = await retryBlockedFrozenVerification({
     ...f.params,
     run: async (_candidate, check, { budgetMs }) => {
