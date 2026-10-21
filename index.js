@@ -698,7 +698,8 @@ export default Plugin.define({
             : ["operational_status", "prepare_review_evidence"].includes(input.action) ? result
             : presentControllerResponse(result, { response_detail: input.response_mode ?? input.response_detail ?? "full", dispatch_id: input.dispatch_id, candidate_id: input.candidate_id })
           // Auxiliary measurements must never turn a durable committed operation into a retryable failure.
-          if (efficiencyTelemetry.enabled) {
+          if (efficiencyTelemetry.enabled && input.action !== "prepare_review_evidence") {
+            // Receipt inspection promises no filesystem writes, including auxiliary telemetry.
             try { await efficiencyTelemetry.observeTool(input.execution_id, result.wu?.wu_id ?? null, input.action, payload) }
             catch { /* telemetry is non-normative; canonical result and receipts take precedence */ }
           }
