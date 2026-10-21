@@ -42,6 +42,9 @@ export async function summary(controller) {
     fencing_token: lease?.fencing_token ?? null,
     blocker: state.blocker,
     blocker_fingerprint: state.blocker ? blockerFingerprint(state.blocker) : null,
+    // Read-only compatibility diagnostics: a historical marker is evidence of
+    // an unknown former runtime operation, NOT an approved recovery decision.
+    historical_recovery_markers: state.historical_recovery_markers ?? [],
     ...applicableAuthority(state),
     external_wait: state.external_wait ?? null,
     verification_phase: state.verification_phase ?? null,
