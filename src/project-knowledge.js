@@ -1024,3 +1024,53 @@ export async function readWorkUnitDefinition(projectRoot, wuId, epicId, sourceId
   if (requireProposed && !/^---\r?\nartifact_id: [^\n]+\r?\nartifact_type: "work-unit"\r?\nstatus: "PROPOSED"\r?\n/.test(bytes.toString("utf8"))) throw new Error("Delegated correction requires a PROPOSED WU source; rejected or superseded sources cannot be reused")
   return { ...(requireApproved ? { source_authority: "APPROVED" } : {}), content: bytes.toString("utf8"), source_record_key: record.record_key, source_hash: record.sha256, source_revision: record.source_revision }
 }
+
+/**
+ * Exact, independently indexed owner authority for orphan abandonment.
+ * A narrative decision is preserved as historical evidence, but cannot be
+ * promoted into executable authority without a typed, hash-verified binding.
+ * A pre-existing owner decision may be normalized separately under the
+ * existing governance mechanism; this reader never edits the artifact.
+ */
+export async function findApprovedDispatchAbandonment(projectRoot, artifactId) {
+  const root = assertRoot(projectRoot)
+  if (!safeId(artifactId)) throw new Error("ORPHAN_AUTHORITY_REQUIRED: exact decision_artifact_id required")
+  const index = await readIndex(root)
+  const matches = index.records.filter(record =>
+    record.classification === "DECISION" &&
+    record.declared_authority === "APPROVED" &&
+    record.import_status === "OWNER_APPROVED_ARTIFACT" &&
+    record.source_system === "harness-artifact" &&
+    (record.source_id === artifactId || record.record_key === artifactId))
+  if (matches.length !== 1) throw new Error("ORPHAN_AUTHORITY_REQUIRED: exactly one indexed APPROVED owner decision is required")
+  const record = matches[0]
+  const path = resolve(root, record.archive_path)
+  if (!inside(root, path)) throw new Error("ORPHAN_AUTHORITY_INTEGRITY: path escapes project root")
+  await ensureSafeParents(root, path)
+  const info = await lstat(path)
+  if (!info.isFile() || info.isSymbolicLink()) throw new Error("ORPHAN_AUTHORITY_INTEGRITY: expected regular file")
+  const bytes = await readFile(path)
+  const hash = sha256(bytes)
+  if (hash !== record.sha256 || hash !== record.source_revision)
+    throw new Error("ORPHAN_AUTHORITY_INTEGRITY: approved decision hash does not match the indexed source")
+  const text = bytes.toString("utf8")
+  const lines = text.split(/\r?\n/).filter(line => line.startsWith("dispatch_abandonment: "))
+  if (lines.length !== 1) throw new Error("ORPHAN_AUTHORITY_UNMAPPED: decision needs one typed dispatch_abandonment contract; prose alone does not authorize settlement")
+  const raw = lines[0].slice("dispatch_abandonment: ".length)
+  const fields = ["action", "execution_id", "wu_id", "dispatch_id", "child_session_id"]
+  // Duplicate JSON keys must not silently shadow an earlier approved target.
+  const rawKeys = [...raw.matchAll(/("(?:\\.|[^"\\])*")\s*:/g)].map(match => JSON.parse(match[1]))
+  if (rawKeys.length !== fields.length || new Set(rawKeys).size !== fields.length ||
+      !fields.every(field => rawKeys.includes(field)))
+    throw new Error("ORPHAN_AUTHORITY_UNMAPPED: duplicate or missing dispatch_abandonment fields")
+  let decision
+  try { decision = JSON.parse(raw) } catch { throw new Error("ORPHAN_AUTHORITY_UNMAPPED: invalid JSON") }
+  if (!decision || Array.isArray(decision) || typeof decision !== "object" ||
+      Object.keys(decision).length !== fields.length ||
+      !fields.every(field => Object.hasOwn(decision, field)) ||
+      decision.action !== "ABANDON_ORPHAN_DISPATCH" ||
+      fields.slice(1).some(field => !safeId(decision[field])))
+    throw new Error("ORPHAN_AUTHORITY_UNMAPPED: invalid action or target identity")
+  return { ...decision, source_artifact_id: record.source_id,
+    source_record_key: record.record_key, source_hash: record.sha256 }
+}
