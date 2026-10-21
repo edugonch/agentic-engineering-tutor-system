@@ -1,4 +1,8 @@
 import { summary, verify, auditRecovery } from "./controller-inspection.js"
+import { prepareReviewEvidence } from "./review-evidence.js"
+import { inspectAcceptanceCoverage } from "./acceptance-coverage.js"
+import { readLog, validateLog } from "./event-log.js"
+import { project } from "./state.js"
 import { projectOperationalView } from "./operational-view.js"
 import { processReviewAttestation, applicableAuthority, blockerFingerprint, activeRecovery } from "./process-recovery.js"
 import { validateControllerPreflight } from "./controller-preflight.js"
@@ -102,10 +106,22 @@ export async function runExecutionController(projectRoot, input, candidateRegist
   validateControllerPreflight(input)
   const executionId = sanitizeId(input.execution_id, "execution_id")
   const dir = join(projectRoot, ".harness", "execution", "controller", executionId)
+  const action = String(input.action ?? "status")
+  if (action === "prepare_review_evidence") {
+    // Bypass controller construction and its mutex/lease path: this call
+    // reads only an existing journal and immutable verification receipts.
+    const events = validateLog(await readLog(join(dir, "events.ndjson")))
+    if (!events.length) return { action, status: "EXECUTION_NOT_FOUND", execution_id: executionId, ready_for_review: false }
+    const state = project(events)
+    return { action, ...(await prepareReviewEvidence(projectRoot, state, {
+      execution_id: executionId, wu_id: String(input.wu_id ?? ""),
+      candidate_id: String(input.candidate_id ?? ""),
+      verification_evidence_ids: input.verification_evidence_ids ?? [],
+    })) }
+  }
   const controller = await createExecutionController({ dir, lease_ttl_ms: 30000 })
   const registry = candidateRegistry ?? createCandidateRegistry({ dir: join(projectRoot, ".harness", "execution") })
   const holder = String(input.session_id ?? `controller:${executionId}`)
-  const action = String(input.action ?? "status")
 
   if (action === "init") {
     const mandateId = String(input.mandate_id ?? `${executionId}-MANDATE-001`)
@@ -393,6 +409,7 @@ export async function runExecutionController(projectRoot, input, candidateRegist
       return { action, status: contract.normalization_required ? "NORMALIZATION_REQUIRED" : "EXECUTABLE_SOURCE_READY",
         next_wu_id: next, source_record_key: contract.source_record_key,
         contract_hash: contract.contract_hash, verification_contract_hash: contract.verification_contract_hash,
+        acceptance_coverage: inspectAcceptanceCoverage(contract.verification_contract),
         revision: state.revision,
         note: "Read-only source inspection; executable status is not approval or activation authority" }
     } catch (error) {
