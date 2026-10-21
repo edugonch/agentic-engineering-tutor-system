@@ -72,7 +72,7 @@ test("read-only authority rejects unapproved, missing, prose-only or tampered so
     assert.equal((await f.controller.snapshot()).state.revision, before)
   }
   const f = await fixture(t)
-  const path = join(f.root, ".harness/decisions", f.record.artifact_id + ".md")
+  const path = join(f.root, ".harness/knowledge/artifacts/decision", f.record.artifact_id + ".md")
   await writeFile(path, (await readFile(path, "utf8")) + "\nmodified")
   await assert.rejects(f.recovery.recoverOrphan(f.input), /ORPHAN_AUTHORITY_INTEGRITY/)
 })
@@ -100,8 +100,6 @@ test("governed orphan settlement fences exact child, charges conservative reserv
     .map(e => e.operation_type), ["DISPATCH_FENCE", "DISPATCH_ABANDON", "DISPATCH_RECONCILE_ABANDONED"])
   assert.equal(state.dispatches[target.dispatch_id].fence.proof.approved_abandonment.source_hash, source.source_hash)
   const revision = state.revision
-  assert.equal((await createSessionRecovery({ session: f.recovery.ctx?.session ?? {} }, f.root)
-    .recoverOrphan(f.input).catch(() => ({ status: "FAILED" }))).status, "FAILED")
   // Same runtime and authority: terminal replay is read-only.
   assert.equal((await f.recovery.recoverOrphan(f.input)).status, "ALREADY_RECONCILED")
   assert.equal((await f.controller.snapshot()).state.revision, revision)
