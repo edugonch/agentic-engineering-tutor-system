@@ -75,7 +75,7 @@ export function createExecutionSupervisor(ctx, projectRoot, { enabled = true, no
           state = (await c.snapshot()).state
         }
       }
-      const unsettled = Object.values(state.dispatches).some(d => ["reserved", "pending_launch", "launched", "ambiguous"].includes(d.status))
+      const unsettled = Object.values(state.dispatches).some(d => ["reserved", "pending_launch", "launched", "abandoned", "ambiguous"].includes(d.status))
       // The root may inspect/recover existing work but cannot start duplicates;
       // public controller admission enforces those limits.
       // One diagnostic wake per exact tooling blocker; checkpoints cannot retrigger it.
