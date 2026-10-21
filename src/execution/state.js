@@ -43,6 +43,12 @@ const setsEqual = (a, b) => {
   return sa.size === sb.size && [...sa].every((x) => sb.has(x))
 }
 
+function isDispatchSettled(d) {
+  return d.status === DISPATCH_STATUS.RESULT_RECONCILED ||
+    d.status === DISPATCH_STATUS.RELEASED ||
+    d.status === DISPATCH_STATUS.ORPHANED
+}
+
 // Structural governed-merge gate. The merge policy can never come from a tool
 // input; this evaluates durable state against the immutable PR binding, the PASS
 // review, exact-head CI evidence, and settled dispatches. Pure and exported so it
@@ -102,8 +108,7 @@ export function canVerifyExternalMerge(state) {
   }
   if (state.mandate?.merge_policy !== "human") return { allowed: false, reason: `merge policy is ${state.mandate?.merge_policy ?? "none"}, not human` }
   if (state.blocker) return { allowed: false, reason: `unresolved blocker ${state.blocker.class}` }
-  const settled = new Set([DISPATCH_STATUS.RESULT_RECONCILED, DISPATCH_STATUS.RELEASED])
-  const unsettled = Object.values(state.dispatches).filter((d) => !settled.has(d.status))
+  const unsettled = Object.values(state.dispatches).filter((d) => !isDispatchSettled(d))
   if (unsettled.length > 0) return { allowed: false, reason: `${unsettled.length} unsettled dispatch(es)` }
   return { allowed: true }
 }
@@ -629,6 +634,18 @@ export function applyEvent(previous, event, { historicalReplay = false } = {}) {
     case "DISPATCH_PREPARE": {
       const d = state.dispatches[body.dispatch_id]
       if (!d || d.status !== DISPATCH_STATUS.RESERVED) throw new Error(`Cannot prepare dispatch ${body.dispatch_id}: not reserved.`)
+      const wuIdPrepare = state.wu?.wu_id ?? null
+      if (wuIdPrepare && body.expected_agent === "harness-builder") {
+        const competing = Object.entries(state.dispatches).find(([id, existing]) =>
+          id !== body.dispatch_id &&
+          existing.wu_id === wuIdPrepare &&
+          !isDispatchSettled(existing) &&
+          (existing.expected_agent === "harness-builder" || (!existing.expected_agent && [DISPATCH_STATUS.LAUNCHED, DISPATCH_STATUS.FINISHED, DISPATCH_STATUS.PENDING_LAUNCH].includes(existing.status)))
+        )
+        if (competing) {
+          throw new Error(`Cannot prepare a replacement builder for ${wuIdPrepare}: existing builder dispatch ${competing[0]} is not settled.`)
+        }
+      }
       if (body.process_review_candidate_id) d.prepared_process_candidate_id = body.process_review_candidate_id
       d.status = DISPATCH_STATUS.PENDING_LAUNCH
       // Launch-intent binding (Wave B): when the orchestrator prepares a launch it
@@ -664,6 +681,18 @@ export function applyEvent(previous, event, { historicalReplay = false } = {}) {
       const d = state.dispatches[body.dispatch_id]
       if (!d || (d.status !== DISPATCH_STATUS.RESERVED && d.status !== DISPATCH_STATUS.PENDING_LAUNCH)) {
         throw new Error(`Cannot launch dispatch ${body.dispatch_id}: not reserved/pending.`)
+      }
+      const wuIdLaunch = state.wu?.wu_id ?? null
+      if (wuIdLaunch && d.expected_agent === "harness-builder") {
+        const competing = Object.entries(state.dispatches).find(([id, existing]) =>
+          id !== body.dispatch_id &&
+          existing.wu_id === wuIdLaunch &&
+          !isDispatchSettled(existing) &&
+          (existing.expected_agent === "harness-builder" || (!existing.expected_agent && [DISPATCH_STATUS.LAUNCHED, DISPATCH_STATUS.FINISHED, DISPATCH_STATUS.PENDING_LAUNCH].includes(existing.status)))
+        )
+        if (competing) {
+          throw new Error(`Cannot launch a replacement builder for ${wuIdLaunch}: existing builder dispatch ${competing[0]} is not settled.`)
+        }
       }
       if (!body.session_id) throw new Error("DISPATCH_LAUNCH requires session_id.")
       // New-contract dispatches (prepared under Wave B with claim_required) must
@@ -789,6 +818,41 @@ export function applyEvent(previous, event, { historicalReplay = false } = {}) {
       }
       // Reservation remains held exactly as it was. Normal record_finish ->
       // reconcile settles it once the recovered launched session is accounted for.
+      break
+    }
+
+    case "DISPATCH_ORPHAN": {
+      const d = state.dispatches[body.dispatch_id]
+      if (!d) throw new Error(`Cannot orphan unknown dispatch ${body.dispatch_id}.`)
+      if (d.status !== DISPATCH_STATUS.LAUNCHED) {
+        throw new Error(`Cannot orphan dispatch ${body.dispatch_id}: not launched (status ${d.status}).`)
+      }
+      if (d.session_id !== body.session_id) {
+        throw new Error(`Cannot orphan dispatch ${body.dispatch_id}: evidence session_id does not match bound child.`)
+      }
+      if (d.reservation_status !== RESERVATION_STATUS.RESERVED) {
+        throw new Error(`Cannot orphan dispatch ${body.dispatch_id}: reservation already ${d.reservation_status}.`)
+      }
+      const reserved = d.reserved_seconds
+      // Conservative liquidation: unknown real consumption is charged the reservation.
+      const usageSeconds = d.usage?.seconds
+      const actual = body.actual_consumption !== undefined && body.actual_consumption !== null
+        ? body.actual_consumption
+        : (usageSeconds !== undefined && usageSeconds !== null ? usageSeconds : reserved)
+      if (!Number.isFinite(actual) || actual < 0) throw new Error("DISPATCH_ORPHAN actual_consumption must be a finite non-negative number.")
+      if (actual > reserved && usageSeconds === undefined) {
+        throw new Error(`DISPATCH_ORPHAN consumption ${actual} exceeds reservation ${reserved} without observed usage; overrun requires an explicit transition.`)
+      }
+      d.status = DISPATCH_STATUS.ORPHANED
+      d.reservation_status = RESERVATION_STATUS.CONSUMED
+      d.actual_consumption = actual
+      d.consumption_basis = usageSeconds !== undefined && usageSeconds !== null ? "observed_wall_upper_bound" : "conservative_reservation"
+      d.orphan_evidence = body.evidence ?? null
+      d.orphan_evidence_hash = body.evidence_hash ?? null
+      d.orphan_fencing_token = body.fencing_token ?? null
+      d.orphan_reason = body.reason ?? null
+      state.budget.reserved_seconds -= reserved
+      state.budget.used_seconds += actual
       break
     }
 
@@ -1199,8 +1263,7 @@ export function applyEvent(previous, event, { historicalReplay = false } = {}) {
       if (!historicalReplay && (!Array.isArray(review.verification_evidence_ids) || review.verification_evidence_ids.length === 0)) {
         throw new Error("WU_COMPLETE: PASS review lacks verification evidence; reverify and review the candidate.")
       }
-      const settled = new Set([DISPATCH_STATUS.RESULT_RECONCILED, DISPATCH_STATUS.RELEASED])
-      const unsettled = Object.entries(state.dispatches).filter(([, d]) => !settled.has(d.status))
+      const unsettled = Object.entries(state.dispatches).filter(([, d]) => !isDispatchSettled(d))
       if (unsettled.length > 0) {
         throw new Error(`WU_COMPLETE: ${unsettled.length} dispatch(es) not settled (must be RESULT_RECONCILED or RELEASED): ${unsettled.map(([id]) => id).join(", ")}.`)
       }

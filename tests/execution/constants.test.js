@@ -16,6 +16,7 @@ test("DISPATCH_STATUS exposes the full Phase 2 lifecycle with distinct values", 
     RESULT_RECONCILED: "result_reconciled",
     RELEASED: "released",
     AMBIGUOUS: "ambiguous",
+    ORPHANED: "orphaned",
   })
   // No two statuses may silently alias; the launch-boundary names must stay
   // distinguishable, or recovery classification becomes ambiguous.
@@ -49,7 +50,7 @@ test("TERMINAL_DISPATCH_STATUSES are exactly the absorbing statuses", () => {
   // RELEASED are absorbing too. Pre-terminal statuses must NOT be terminal.
   assert.deepEqual(
     [...TERMINAL_DISPATCH_STATUSES].sort(),
-    [DISPATCH_STATUS.RESULT_RECONCILED, DISPATCH_STATUS.RELEASED, DISPATCH_STATUS.AMBIGUOUS].sort(),
+    [DISPATCH_STATUS.RESULT_RECONCILED, DISPATCH_STATUS.RELEASED, DISPATCH_STATUS.AMBIGUOUS, DISPATCH_STATUS.ORPHANED].sort(),
   )
   for (const preTerminal of [DISPATCH_STATUS.RESERVED, DISPATCH_STATUS.PENDING_LAUNCH, DISPATCH_STATUS.LAUNCHED, DISPATCH_STATUS.FINISHED]) {
     assert.equal(TERMINAL_DISPATCH_STATUSES.has(preTerminal), false)
@@ -61,6 +62,7 @@ test("OPERATION_TYPES includes the Phase 2 dispatch operations and stays unique"
   assert.ok(OPERATION_TYPES.includes("DISPATCH_RELEASE"))
   assert.ok(OPERATION_TYPES.includes("DISPATCH_MARK_AMBIGUOUS"))
   assert.ok(OPERATION_TYPES.includes("DISPATCH_RECONCILE"))
+  assert.ok(OPERATION_TYPES.includes("DISPATCH_ORPHAN"))
   // Typed vocab must not contain duplicate verbs.
   assert.equal(new Set(OPERATION_TYPES).size, OPERATION_TYPES.length)
 })

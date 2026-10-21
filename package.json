@@ -27,7 +27,7 @@
     "@opencode/plugin": "2.0.25"
   },
   "scripts": {
-    "test": "node --test",
+    "test": "node scripts/run-tests-sequential.mjs",
     "validate": "node scripts/validate-package.mjs",
     "check": "npm run validate && npm test",
     "test:recovery": "node --test tests/execution/process-recovery.test.js tests/execution/external-wait.test.js tests/execution/supervisor.test.js tests/execution/contract-correction.test.js tests/execution/retrospective-seed.test.js",
