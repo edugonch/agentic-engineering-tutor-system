@@ -106,3 +106,37 @@ test("a reconciled builder without candidate must not be dispatched again", () =
   assert.equal(x.phase, "BUILDING");
   assert.equal(x.next_action, "INSPECT_BUILDER_RESULT_BEFORE_RELAUNCH");
 });
+
+test("finished builder is reconciled first; no second mutating child is launched", () => {
+  const x = projectOperationalView(state({ dispatches: {
+    d1: { wu_id: "WU-01", expected_agent: "harness-builder", status: "finished", session_id: "child" },
+  } }));
+  assert.equal(x.phase, "BLOCKED");
+  assert.equal(x.next_action, "RECONCILE_FINISHED_DISPATCH");
+});
+test("PASS cannot skip unsettled dispatch even with verified merge", () => {
+  const x = projectOperationalView(state({ candidates: candidate,
+    reviews: { C1: { verdict: "PASS" } }, merge: { status: "VERIFIED", candidate_id: "C1" },
+    dispatches: { d1: { wu_id: "WU-01", status: "launched", expected_agent: "harness-reviewer" } },
+  }));
+  assert.equal(x.next_action, "AWAIT_INDEPENDENT_REVIEW");
+  const after = projectOperationalView(state({ candidates: candidate,
+    reviews: { C1: { verdict: "PASS" } }, merge: { status: "VERIFIED", candidate_id: "C1" },
+    dispatches: { d1: { wu_id: "WU-01", status: "finished", expected_agent: "harness-reviewer" } },
+  }));
+  assert.equal(after.next_action, "RECONCILE_FINISHED_DISPATCH");
+});
+test("completed same-WU repair after CHANGES_REQUIRED requires inspecting changes, not another builder", () => {
+  const x = state({ candidates: candidate,
+    reviews: { C1: { verdict: "CHANGES_REQUIRED" } },
+    dispatches: { fix: { wu_id: "WU-01", expected_agent: "harness-builder", status: "result_reconciled" } },
+  });
+  assert.equal(projectOperationalView(x, {events: [
+    { sequence: 10, operation_type: "RECORD_REVIEW", body: { candidate_id: "C1" } },
+    { sequence: 13, operation_type: "DISPATCH_RECONCILE", body: { dispatch_id: "fix" } },
+  ]}).next_action, "INSPECT_REPAIR_RESULT_BEFORE_RELAUNCH");
+  assert.equal(projectOperationalView(x, {events: [
+    { sequence: 9, operation_type: "DISPATCH_RECONCILE", body: { dispatch_id: "fix" } },
+    { sequence: 10, operation_type: "RECORD_REVIEW", body: { candidate_id: "C1" } },
+  ]}).next_action, "REPAIR_SAME_WU");
+});

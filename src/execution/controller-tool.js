@@ -522,8 +522,8 @@ export async function runExecutionController(projectRoot, input, candidateRegist
   }
 
   if (action === "operational_status") {
-    const { state } = await controller.snapshot()
-    return { action, ...projectOperationalView(state) }
+    const { state, events } = await controller.snapshot()
+    return { action, ...projectOperationalView(state, { events }) }
   }
 
   if (action === "reserve") {

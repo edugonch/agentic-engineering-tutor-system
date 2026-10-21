@@ -1,8 +1,9 @@
 // Presentation only. The controller's event log is the sole authority.
-const LIVE = new Set(["reserved", "pending_launch", "launched", "ambiguous", "abandoned"]);
+const LIVE = new Set(["reserved", "pending_launch", "launched", "finished", "ambiguous", "abandoned"]);
+const SETTLED = new Set(["released", "result_reconciled", "abandoned_reconciled"]);
 const known = value => value === undefined || value === null ? "UNKNOWN" : value;
 
-export function projectOperationalView(state) {
+export function projectOperationalView(state, { events = [] } = {}) {
   const wu = state.wu && !state.wu.completed ? state.wu : null;
   const wuId = wu?.wu_id ?? null;
   const sequence = Array.isArray(state.mandate?.wu_sequence) ? state.mandate.wu_sequence : [];
@@ -19,11 +20,22 @@ export function projectOperationalView(state) {
   }, 0) : 0;
   const dispatches = Object.entries(state.dispatches ?? {}).filter(([, d]) => wuId && d.wu_id === wuId);
   const active = dispatches.filter(([, d]) => LIVE.has(d.status));
+  // WU_COMPLETE checks all dispatches across this execution, not only the current WU.
+  const unsettled = Object.entries(state.dispatches ?? {}).filter(([, d]) => !SETTLED.has(d.status));
+  // Derive temporal ordering from the already-validated journal, never a new cursor.
+  const lastReviewIndex = [...events].reverse().findIndex(e =>
+    e.operation_type === "RECORD_REVIEW" && e.body?.candidate_id === candidateId);
+  const reviewSequence = lastReviewIndex < 0 ? null : events[events.length - 1 - lastReviewIndex].sequence;
+  const builderSettledAfterReview = reviewSequence !== null && events.some(e =>
+    e.sequence > reviewSequence && e.operation_type === "DISPATCH_RECONCILE" &&
+    state.dispatches?.[e.body?.dispatch_id]?.wu_id === wuId &&
+    state.dispatches?.[e.body?.dispatch_id]?.expected_agent === "harness-builder");
   const latestSession = agent => known(dispatches.filter(([, d]) => d.expected_agent === agent).at(-1)?.[1].session_id);
   const reviewerActive = active.some(([, d]) => d.expected_agent === "harness-reviewer");
   const builderActive = active.some(([, d]) => d.expected_agent === "harness-builder");
   const builderReconciled = dispatches.some(([, d]) => d.expected_agent === "harness-builder" && d.status === "result_reconciled");
   const ambiguous = active.some(([, d]) => ["ambiguous", "abandoned"].includes(d.status));
+  const finished = active.some(([, d]) => d.status === "finished");
   const budget = state.budget ?? {};
   const budgetRemaining = [budget.total_seconds, budget.used_seconds, budget.reserved_seconds]
     .every(Number.isFinite)
@@ -39,6 +51,8 @@ export function projectOperationalView(state) {
     phase = "BLOCKED"; nextAction = "REQUIRE_APPROVED_EPIC";
   } else if (ambiguous) {
     phase = "BLOCKED"; nextAction = "INSPECT_EXISTING_DISPATCH_ONCE";
+  } else if (finished) {
+    phase = "BLOCKED"; nextAction = "RECONCILE_FINISHED_DISPATCH";
   } else if (state.verification_phase) {
     phase = "VERIFYING"; nextAction = "OBSERVE_EXISTING_VERIFICATION";
   } else if (reviewerActive) {
@@ -56,11 +70,17 @@ export function projectOperationalView(state) {
   } else if (review?.verdict === "BLOCKED") {
     phase = "BLOCKED"; nextAction = "DIAGNOSE_ONCE_OR_STOP";
   } else if (review?.verdict === "CHANGES_REQUIRED") {
-    phase = changeRequests > 2 ? "BLOCKED" : "REPAIRING";
-    nextAction = changeRequests > 2 ? "STOP_REPAIR_LIMIT" : "REPAIR_SAME_WU";
+    if (changeRequests > 2) {
+      phase = "BLOCKED"; nextAction = "STOP_REPAIR_LIMIT";
+    } else if (builderSettledAfterReview) {
+      phase = "REPAIRING"; nextAction = "INSPECT_REPAIR_RESULT_BEFORE_RELAUNCH";
+    } else {
+      phase = "REPAIRING"; nextAction = "REPAIR_SAME_WU";
+    }
   } else if (review?.verdict === "PASS") {
     phase = "MERGING";
-    nextAction = state.mandate?.merge_policy === "none" ||
+    nextAction = unsettled.length ? "SETTLE_EXISTING_DISPATCH" :
+      state.mandate?.merge_policy === "none" ||
       (state.merge?.status === "VERIFIED" && state.merge?.candidate_id === candidateId)
       ? "COMPLETE_WU" : state.mandate?.merge_policy === "human"
         ? "WAIT_FOR_AUTHORIZED_EXTERNAL_MERGE" : "APPLY_GOVERNED_MERGE_GATES";
@@ -81,6 +101,7 @@ export function projectOperationalView(state) {
     candidate_id: known(candidateId),
     verification: review?.verdict === "PASS" ? "PASS" : "UNKNOWN",
     review: known(review?.verdict),
+    unsettled_dispatch_count: unsettled.length,
     ci: "UNKNOWN", // Exact-head CI is external evidence; do not invent a result.
     change_requests_seen: changeRequests,
     repair_rounds_used: "UNKNOWN", // Not an authoritative durable attempt counter.

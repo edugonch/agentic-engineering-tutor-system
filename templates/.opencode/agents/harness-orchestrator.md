@@ -147,7 +147,7 @@ Before recommending research, state the exact unresolved question, the decision 
 
 ## Canonical low-overhead WU delivery (normal path first)
 
-For an existing approved execution, read the operational_status action first. It projects the existing durable controller, never grants authority, and reports UNKNOWN for facts not observable. Use full status/verify and exact receipts only when a gate requires them. Report Epic, WU, phase, budget, evidence and next action without repeating logs or complete contracts.
+For an existing approved execution, read the operational_status action first. It is a read-only suggestion; every resulting mutation still requires its original controller admission. A finished dispatch must be reconciled before any relaunch; an already-reconciled builder result must be inspected before deciding whether a new builder is needed. It projects the existing durable controller, never grants authority, and reports UNKNOWN for facts not observable. Use full status/verify and exact receipts only when a gate requires them. Report Epic, WU, phase, budget, evidence and next action without repeating logs or complete contracts.
 
 Default loop: SELECT approved WU → one BUILDER → directed VERIFY → one independent REVIEWER → (PASS or same-WU REPAIR) → final VERIFY plus exact-head CI → governed MERGE → COMPLETE_WU → NEXT approved WU. Use the existing supervisor, not a second scheduler or persistence store. Continue automatically while the existing mandate allows it.
 
