@@ -98,3 +98,11 @@ test("operational_status integrates as a read-only controller action", async () 
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("a reconciled builder without candidate must not be dispatched again", () => {
+  const x = projectOperationalView(state({ dispatches: {
+    d: { wu_id: "WU-01", expected_agent: "harness-builder", status: "result_reconciled" },
+  } }));
+  assert.equal(x.phase, "BUILDING");
+  assert.equal(x.next_action, "INSPECT_BUILDER_RESULT_BEFORE_RELAUNCH");
+});

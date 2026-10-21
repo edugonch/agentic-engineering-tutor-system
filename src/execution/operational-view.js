@@ -22,6 +22,7 @@ export function projectOperationalView(state) {
   const latestSession = agent => known(dispatches.filter(([, d]) => d.expected_agent === agent).at(-1)?.[1].session_id);
   const reviewerActive = active.some(([, d]) => d.expected_agent === "harness-reviewer");
   const builderActive = active.some(([, d]) => d.expected_agent === "harness-builder");
+  const builderReconciled = dispatches.some(([, d]) => d.expected_agent === "harness-builder" && d.status === "result_reconciled");
   const ambiguous = active.some(([, d]) => ["ambiguous", "abandoned"].includes(d.status));
   const budget = state.budget ?? {};
   const budgetRemaining = [budget.total_seconds, budget.used_seconds, budget.reserved_seconds]
@@ -65,6 +66,9 @@ export function projectOperationalView(state) {
         ? "WAIT_FOR_AUTHORIZED_EXTERNAL_MERGE" : "APPLY_GOVERNED_MERGE_GATES";
   } else if (candidateId) {
     phase = "VERIFYING"; nextAction = "VERIFY_THEN_INDEPENDENT_REVIEW";
+  } else if (builderReconciled) {
+    // A terminal builder may have written code not yet frozen as a candidate.
+    phase = "BUILDING"; nextAction = "INSPECT_BUILDER_RESULT_BEFORE_RELAUNCH";
   } else {
     phase = "BUILDING"; nextAction = "LAUNCH_ONE_BUILDER";
   }
