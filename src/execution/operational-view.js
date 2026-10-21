@@ -36,8 +36,6 @@ export function projectOperationalView(state) {
     phase = "BLOCKED"; nextAction = "DIAGNOSE_ONCE_OR_STOP";
   } else if (state.mandate?.authority_kind !== "OWNER_APPROVED_EPIC") {
     phase = "BLOCKED"; nextAction = "REQUIRE_APPROVED_EPIC";
-  } else if (budgetRemaining === 0) {
-    phase = "BLOCKED"; nextAction = "STOP_EPIC_BUDGET";
   } else if (ambiguous) {
     phase = "BLOCKED"; nextAction = "INSPECT_EXISTING_DISPATCH_ONCE";
   } else if (state.verification_phase) {
@@ -46,6 +44,11 @@ export function projectOperationalView(state) {
     phase = "REVIEWING"; nextAction = "AWAIT_INDEPENDENT_REVIEW";
   } else if (builderActive) {
     phase = "BUILDING"; nextAction = "AWAIT_EXISTING_BUILDER";
+  } else if (active.length) {
+    // Legacy dispatch without an agent binding is still live; never launch over it.
+    phase = "BLOCKED"; nextAction = "INSPECT_EXISTING_DISPATCH_ONCE";
+  } else if (budgetRemaining === 0) {
+    phase = "BLOCKED"; nextAction = "STOP_EPIC_BUDGET";
   } else if (!wu) {
     phase = "READY";
     nextAction = nextWuId ? "ACTIVATE_NEXT_APPROVED_WU" : "CHECK_EPIC_TERMINAL_CONDITION";

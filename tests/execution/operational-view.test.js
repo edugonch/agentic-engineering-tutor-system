@@ -1,6 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { projectOperationalView } from "../../src/execution/operational-view.js";
+import { runExecutionController } from "../../src/execution/controller-tool.js";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 function state(overrides = {}) {
   return {
@@ -62,4 +66,35 @@ test("blocker, ambiguous dispatch, budget stop and unapproved mandate fail close
   assert.equal(projectOperationalView(state({ budget: { total_seconds: 12, used_seconds: 12, reserved_seconds: 0 } })).phase, "BLOCKED");
   assert.equal(projectOperationalView(state({ completed: true })).phase, "DONE");
   assert.equal(projectOperationalView(state({ mandate: null })).next_action, "REQUIRE_APPROVED_EPIC");
+});
+
+test("full reservation does not block an already running child; unknown owner fails closed", () => {
+  const b = projectOperationalView(state({
+    budget: { total_seconds: 100, used_seconds: 10, reserved_seconds: 90 },
+    dispatches: { d: { wu_id: "WU-01", expected_agent: "harness-builder",
+      status: "launched", session_id: "child" } },
+  }));
+  assert.equal(b.phase, "BUILDING");
+  assert.equal(b.budget_remaining_seconds, 0);
+  const legacy = projectOperationalView(state({
+    dispatches: { d: { wu_id: "WU-01", status: "pending_launch" } },
+  }));
+  assert.equal(legacy.next_action, "INSPECT_EXISTING_DISPATCH_ONCE");
+});
+
+test("operational_status integrates as a read-only controller action", async () => {
+  const root = await mkdtemp(join(tmpdir(), "operational-view-"));
+  try {
+    const init = await runExecutionController(root,
+      { action: "init", execution_id: "E1", session_id: "ses-1", total_seconds: 50 });
+    const result = await runExecutionController(root,
+      { action: "operational_status", execution_id: "E1", session_id: "ses-1" });
+    assert.equal(result.action, "operational_status");
+    assert.equal(result.revision, init.revision);
+    assert.equal(result.phase, "BLOCKED"); // Probe mandate is not approved Epic authority.
+    assert.equal(result.next_action, "REQUIRE_APPROVED_EPIC");
+    assert.equal(result.budget_remaining_seconds, 50);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
