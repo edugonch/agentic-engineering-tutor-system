@@ -49,6 +49,7 @@ export const OPERATION_TYPES = Object.freeze([
   "WU_COMPLETE", // close one WU: candidate + PASS review + settled dispatches (distinct from EPIC COMPLETE)
   "CHECKPOINT", // persist a resumable checkpoint
   "BLOCK", // record a governed stop (typed blocker class)
+  "BLOCKER_RECOVERY_AUTHORIZE", // historical replay-only marker; never grants authority in this runtime
   "AUTHORITY_RESOLVE", // apply an explicit approved decision to an exact authority stop
   "CLEAR_BLOCKER", // resolve one explicitly recoverable blocker after its cause is repaired
   "VERIFICATION_RETRY_ATTEMPT", // one auditable, bounded frozen-check retry under exact failed setup blocker
