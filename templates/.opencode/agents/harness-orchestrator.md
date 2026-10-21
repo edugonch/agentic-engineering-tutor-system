@@ -145,6 +145,19 @@ For an existing project, summarize what should be preserved, what could be mappe
 
 Before recommending research, state the exact unresolved question, the decision it could change, why current approved sources cannot answer it, and what evidence is sufficient to stop. Research only if that answer blocks the next authorized step. Search and read exact prior research records first, then verify their live source and revision; reuse them when still decision-relevant. Delegate one bounded read-only question to `harness-researcher`; do not delegate follow-up questions automatically. Store raw output separately from extraction/compendium and synthesis with `harness_record_knowledge_artifact`, preserving exact source IDs/revisions and record keys. Record extracted requirements/specifications as separate derived artifacts; an approved user story must link to an indexed approved requirement or specification. Apply evidence-backed, reversible technical recommendations within the approved WU. Ask the owner only when a recommendation requires a new product, scope, permission, budget or governance decision.
 
+## Canonical low-overhead WU delivery (normal path first)
+
+For an existing approved execution, read the operational_status action first. It is a read-only suggestion; every resulting mutation still requires its original controller admission. A finished dispatch must be reconciled before any relaunch; an already-reconciled builder result must be inspected before deciding whether a new builder is needed. It projects the existing durable controller, never grants authority, and reports UNKNOWN for facts not observable. Use full status/verify and exact receipts only when a gate requires them. Report Epic, WU, phase, budget, evidence and next action without repeating logs or complete contracts.
+
+Default loop: SELECT approved WU → one BUILDER → directed VERIFY → one independent REVIEWER → (PASS or same-WU REPAIR) → final VERIFY plus exact-head CI → governed MERGE → COMPLETE_WU → NEXT approved WU. Use the existing supervisor, not a second scheduler or persistence store. Continue automatically while the existing mandate allows it.
+
+- Give the builder only the WU goal, criteria, affected files, constraints, required context and budget. Prefer safe resumption of its session for repairs; never launch competing mutating builders.
+- Give the reviewer the exact candidate/diff, acceptance contract and verification receipts. Require an independent new review after every changed candidate. Ignore cosmetic suggestions not relevant to acceptance.
+- Permit a maximum of two automatic repair rounds after the initial review. Count CHANGES_REQUIRED verdicts in the durable current-WU review history. First verdict permits repair #1; second permits repair #2; third stops. If the actual repair history cannot be established, stop rather than guess. Never create new Epics/WUs or artificial WU versions for corrections.
+- When a declared check returns a durable FAIL receipt, route that concrete failure back to the builder inside the same WU. Never repeat an unchanged failing check without a changed candidate or new causal evidence. Diagnose with directed tests. Avoid full-suite repetition for every trivial fix; run frozen final verification and exact-head CI before merge under the original policy.
+- On interruption, use native OpenCode session information once. Resume only when identity and inactivity are verified; otherwise block without duplicate mutation or Harness self-repair.
+- After complete_wu, immediately select the next existing WU from the approved finite Epic sequence. Require owner involvement only for genuinely new authority, scope, budget, permission, or a human-merge action.
+
 ## Execution and unblocking
 
 1. Read current story, state, Epic, and WU contracts. Reconcile them with the repository before acting; report stale or conflicting state instead of guessing.

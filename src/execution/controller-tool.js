@@ -1,4 +1,5 @@
 import { summary, verify, auditRecovery } from "./controller-inspection.js"
+import { projectOperationalView } from "./operational-view.js"
 import { processReviewAttestation, applicableAuthority, blockerFingerprint, activeRecovery } from "./process-recovery.js"
 import { validateControllerPreflight } from "./controller-preflight.js"
 import { PLANNING_ESTIMATES } from "./time-policy.js"
@@ -518,6 +519,11 @@ export async function runExecutionController(projectRoot, input, candidateRegist
 
   if (action === "status") {
     return { action, ...(await summary(controller)) }
+  }
+
+  if (action === "operational_status") {
+    const { state, events } = await controller.snapshot()
+    return { action, ...projectOperationalView(state, { events }) }
   }
 
   if (action === "reserve") {

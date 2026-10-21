@@ -152,7 +152,7 @@ test("tooling blocker receives one non-billable diagnostic wake, then ordinary c
   assert.equal(await f.s.tick("E"), true)
   const prompts = [...f.prompts.values()]
   assert.equal(prompts.length, 2)
-  assert.match(prompts[1].text, /Continue execution E from durable status/)
+  assert.match(prompts[1].text, /Continue execution E from operational_status first/)
 })
 
 test("authority and scope blockers never receive autonomous diagnostic wake", async t => {
