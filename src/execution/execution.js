@@ -36,6 +36,10 @@ function classifyDispatch(status) {
       return "KNOWN_RUNNING_OR_LAUNCHED"
     case DISPATCH_STATUS.FINISHED:
       return "FINISHED_UNRECONCILED"
+    case DISPATCH_STATUS.ABANDONED:
+      return "ABANDONED_UNRECONCILED"
+    case DISPATCH_STATUS.ABANDONED_RECONCILED:
+      return "ABANDONED_SETTLED"
     case DISPATCH_STATUS.AMBIGUOUS:
       return "AMBIGUOUS"
     case DISPATCH_STATUS.RESULT_RECONCILED:
@@ -90,6 +94,9 @@ export async function createExecutionController({ root, dir, now = () => Date.no
 
   const acquire = async (holder_session_id) =>
     withMutex(mutexPath, async () => {
+      const { state } = await load()
+      if (Object.values(state.dispatches).some(d => d.fence?.child_session_id === holder_session_id))
+        throw new Error("ORPHAN_CHILD_FENCED: stale child cannot acquire controller authority")
       const lease = nextLease(await readLease(leasePath), { holder_session_id, now, ttl_ms: lease_ttl_ms })
       await writeLease(leasePath, lease)
       return lease
@@ -99,6 +106,9 @@ export async function createExecutionController({ root, dir, now = () => Date.no
     withMutex(mutexPath, async () => {
       const { events, state, lease } = await load()
 
+      if (Object.values(state.dispatches).some(d => d.fence?.child_session_id === holder_session_id)) {
+        throw new Error("ORPHAN_CHILD_FENCED: stale child cannot commit controller mutations")
+      }
       if (!lease || isLeaseExpired(lease, now)) {
         throw new Error("No valid execution lease; acquire one before committing.")
       }
@@ -136,6 +146,22 @@ export async function createExecutionController({ root, dir, now = () => Date.no
           dispatchID !== operation.body?.dispatch_id && (d.wu_id ?? null) === wu &&
           (d.status === "ambiguous" || (d.status === "pending_launch" && d.launch_call_id)))
         if (ambiguous) throw new Error(`HARNESS_UNRESOLVED_LAUNCH: recover dispatch ${ambiguous[0]} before authorizing more work for this WU.`)
+      }
+
+      // Admission-time guard. A prior builder from the SAME WU must have a
+      // durably settled result or fenced abandonment before another builder
+      // may be prepared or launched. Reviewers/other WUs are not competing.
+      if (["DISPATCH_PREPARE", "DISPATCH_LAUNCH", "DISPATCH_LAUNCH_CLAIM"].includes(operation.operation_type)) {
+        const target = state.dispatches[operation.body?.dispatch_id]
+        if (target?.expected_agent === "harness-builder" ||
+            (operation.operation_type === "DISPATCH_PREPARE" && operation.body?.expected_agent === "harness-builder")) {
+          const competing = Object.entries(state.dispatches).find(([id, d]) =>
+            id !== operation.body?.dispatch_id &&
+            d.wu_id === target?.wu_id &&
+            d.expected_agent === "harness-builder" &&
+            !["released", "result_reconciled", "abandoned_reconciled"].includes(d.status))
+          if (competing) throw new Error(`HARNESS_UNSETTLED_BUILDER: reconcile builder ${competing[0]} before preparing a replacement`)
+        }
       }
 
       // Avoid billing the same worker interval through both phase and dispatch.
@@ -259,6 +285,8 @@ export async function createExecutionController({ root, dir, now = () => Date.no
         never_launched: byClassification("NEVER_LAUNCHED"),
         running_or_launched: byClassification("KNOWN_RUNNING_OR_LAUNCHED"),
         finished_unreconciled: byClassification("FINISHED_UNRECONCILED"),
+        abandoned_unreconciled: byClassification("ABANDONED_UNRECONCILED"),
+        abandoned_settled: byClassification("ABANDONED_SETTLED"),
         ambiguous: byClassification("AMBIGUOUS"),
         resolved: {
           reconciled: byClassification("RECONCILED"),
@@ -345,6 +373,7 @@ export async function createExecutionController({ root, dir, now = () => Date.no
         throw new Error("Remote effect requires a current execution lease.")
       if (state.revision !== expected_revision) throw new Error("State changed before remote effect; revalidate.")
       if (state.completed) throw new Error("Execution completed.")
+      if (Object.values(state.dispatches).some(d => d.fence?.child_session_id === holder_session_id)) throw new Error("ORPHAN_CHILD_FENCED: remote effect denied")
       validate(state)
       return effect(state)
     })
