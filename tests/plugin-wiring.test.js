@@ -178,3 +178,15 @@ test("registered recovery audit identifies loaded plugin runtime and exposes imm
   assert.equal(audit.blocker_event, null)
   assert.equal(typeof audit.supervisor_runtime.enabled, "boolean")
 })
+
+test("orphan recovery is exposed but cannot mutate without an indexed owner decision", async t => {
+  const f = await host(t)
+  assert.ok(f.definitions.has("harness_recover_orphan_dispatch"))
+  const tool = f.definitions.get("harness_recover_orphan_dispatch")
+  assert.deepEqual(tool.input.required, ["execution_id", "dispatch_id", "decision_artifact_id"])
+  const result = tool.execute({
+    execution_id: "ALFRAN", dispatch_id: "e0507-build-2",
+    decision_artifact_id: "DECISION-E05-07-DISPATCH-ABANDON-2026-10-21",
+  }, { sessionID: "ses_root" })
+  await assert.rejects(result, /ORPHAN_AUTHORITY_REQUIRED/)
+})
