@@ -65,7 +65,7 @@ export function canStartMerge(state, { historicalReplay = false } = {}) {
   }
   if (state.mandate?.merge_policy !== "governed_auto") return { allowed: false, reason: `merge policy is ${state.mandate?.merge_policy ?? "none"}, not governed_auto` }
   if (state.blocker) return { allowed: false, reason: `unresolved blocker ${state.blocker.class}` }
-  const settled = new Set([DISPATCH_STATUS.RESULT_RECONCILED, DISPATCH_STATUS.RELEASED])
+  const settled = new Set([DISPATCH_STATUS.RESULT_RECONCILED, DISPATCH_STATUS.ABANDONED_RECONCILED, DISPATCH_STATUS.RELEASED])
   const unsettled = Object.values(state.dispatches).filter((d) => !settled.has(d.status))
   if (unsettled.length > 0) return { allowed: false, reason: `${unsettled.length} unsettled dispatch(es)` }
   const required = state.mandate?.required_ci_checks ?? []
@@ -102,7 +102,7 @@ export function canVerifyExternalMerge(state) {
   }
   if (state.mandate?.merge_policy !== "human") return { allowed: false, reason: `merge policy is ${state.mandate?.merge_policy ?? "none"}, not human` }
   if (state.blocker) return { allowed: false, reason: `unresolved blocker ${state.blocker.class}` }
-  const settled = new Set([DISPATCH_STATUS.RESULT_RECONCILED, DISPATCH_STATUS.RELEASED])
+  const settled = new Set([DISPATCH_STATUS.RESULT_RECONCILED, DISPATCH_STATUS.ABANDONED_RECONCILED, DISPATCH_STATUS.RELEASED])
   const unsettled = Object.values(state.dispatches).filter((d) => !settled.has(d.status))
   if (unsettled.length > 0) return { allowed: false, reason: `${unsettled.length} unsettled dispatch(es)` }
   return { allowed: true }
@@ -402,7 +402,7 @@ export function applyEvent(previous, event, { historicalReplay = false } = {}) {
       if (state.completed || !state.mandate || body.mode !== PLANNING_ESTIMATES) throw new Error("Invalid time policy transition")
       if (`${body.execution_id}:exec` !== state.execution_id || body.mandate_id !== state.mandate.mandate_id || body.epic_total_seconds !== state.budget.total_seconds) throw new Error("Time policy authority target mismatch")
       if (!body.source_artifact_id || !body.source_record_key || !/^[a-f0-9]{64}$/.test(body.source_hash ?? "")) throw new Error("Time policy requires approved decision provenance")
-      if (state.budget.active_phase || Object.values(state.dispatches).some(d => ![DISPATCH_STATUS.RESULT_RECONCILED, DISPATCH_STATUS.RELEASED].includes(d.status))) throw new Error("Settle existing dispatches and phases before adopting the time policy")
+      if (state.budget.active_phase || Object.values(state.dispatches).some(d => ![DISPATCH_STATUS.RESULT_RECONCILED, DISPATCH_STATUS.ABANDONED_RECONCILED, DISPATCH_STATUS.RELEASED].includes(d.status))) throw new Error("Settle existing dispatches and phases before adopting the time policy")
       if ((state.blocker?.at_revision ?? null) !== body.blocked_at_revision) throw new Error("Time policy blocker baseline changed")
       if (state.blocker && state.blocker.class !== "BUDGET_EXHAUSTED") throw new Error("Time policy cannot resolve an unrelated blocker")
       state.time_policy = { ...body, at_revision: state.revision }
@@ -423,7 +423,7 @@ export function applyEvent(previous, event, { historicalReplay = false } = {}) {
       if (!body.source_artifact_id || !body.source_record_key || !/^[a-f0-9]{64}$/.test(body.source_hash ?? "")) throw new Error("WU_BUDGET_AMEND requires approved decision provenance")
       if (body.epic_total_seconds !== state.budget.total_seconds) throw new Error("WU_BUDGET_AMEND cannot change the Epic total")
       const usage = wuBudgetUsage(state, body.wu_id)
-      if (state.budget.active_phase || Object.values(state.dispatches).some(d => d.wu_id === body.wu_id && ![DISPATCH_STATUS.RESULT_RECONCILED, DISPATCH_STATUS.RELEASED].includes(d.status))) {
+      if (state.budget.active_phase || Object.values(state.dispatches).some(d => d.wu_id === body.wu_id && ![DISPATCH_STATUS.RESULT_RECONCILED, DISPATCH_STATUS.ABANDONED_RECONCILED, DISPATCH_STATUS.RELEASED].includes(d.status))) {
         throw new Error("WU_BUDGET_AMEND requires settled WU dispatches and no active phase")
       }
       if (body.expected_used_seconds !== usage.used_seconds) throw new Error("WU_BUDGET_AMEND stale consumed budget baseline")
@@ -680,6 +680,7 @@ export function applyEvent(previous, event, { historicalReplay = false } = {}) {
     case "DISPATCH_HANDOFF": {
       const d = state.dispatches[body.dispatch_id]
       if (!d || d.session_id !== body.session_id || d.launch_call_id !== body.call_id) throw new Error("Handoff identity mismatch")
+      if (d.fence) throw new Error("Fenced dispatch cannot accept a late success handoff")
       if (d.handoff) throw new Error("Handoff already recorded")
       d.handoff = { content: body.content, content_hash: body.content_hash, truncated: body.truncated,
         source: "execute.after", acceptance: "UNVERIFIED", at_revision: state.revision }
@@ -689,6 +690,7 @@ export function applyEvent(previous, event, { historicalReplay = false } = {}) {
     case "DISPATCH_USAGE": {
       const d = state.dispatches[body.dispatch_id]
       if (!d || d.status !== DISPATCH_STATUS.LAUNCHED || d.session_id !== body.session_id || d.launch_call_id !== body.call_id) throw new Error("Runtime usage identity mismatch")
+      if (d.fence) throw new Error("Fenced dispatch cannot accept post-fence runtime usage")
       if (d.usage) throw new Error("Runtime usage already captured")
       if (body.source !== "runtime.monotonic_dispatch_envelope" || !Number.isFinite(body.seconds) || body.seconds < 0) throw new Error("Invalid runtime usage")
       d.usage = { seconds: body.seconds, source: body.source, call_id: body.call_id, at_revision: state.revision }
@@ -698,8 +700,71 @@ export function applyEvent(previous, event, { historicalReplay = false } = {}) {
     case "DISPATCH_FINISH": {
       const d = state.dispatches[body.dispatch_id]
       if (!d || d.status !== DISPATCH_STATUS.LAUNCHED) throw new Error(`Cannot finish dispatch ${body.dispatch_id}: not launched.`)
+      if (d.fence) throw new Error("Fenced dispatch cannot be recorded as conventionally finished")
       d.status = DISPATCH_STATUS.FINISHED
       d.result = body.result ?? null
+      break
+    }
+
+    case "DISPATCH_FENCE": {
+      const d = state.dispatches[body.dispatch_id]
+      if (!d || d.status !== DISPATCH_STATUS.LAUNCHED || d.reservation_status !== RESERVATION_STATUS.RESERVED ||
+          !d.claim_required || !d.launch_call_id || !d.session_id ||
+          !d.prepared_by_session_id || !d.expected_agent || !d.wu_id ||
+          body.child_session_id !== d.session_id || body.parent_session_id !== d.prepared_by_session_id ||
+          body.launch_call_id !== d.launch_call_id || body.agent !== d.expected_agent || body.wu_id !== d.wu_id ||
+          body.expected_revision !== state.revision || d.fence ||
+          body.proof?.kind !== "VERIFIED_QUIESCENT_CHILD" ||
+          body.proof.child_session_id !== d.session_id ||
+          body.proof.parent_session_id !== d.prepared_by_session_id ||
+          body.proof.launch_call_id !== d.launch_call_id ||
+          body.proof.agent !== d.expected_agent ||
+          body.proof.runtime_quiescent !== true || body.proof.pending_tools !== 0 ||
+          body.proof.interrupted !== true || body.proof.fence_hook_installed !== true ||
+          typeof body.proof.observation_hash !== "string" || !/^[a-f0-9]{64}$/.test(body.proof.observation_hash)) {
+        throw new Error("DISPATCH_FENCE requires a live root-sourced exact-identity quiescence proof and matching revision")
+      }
+      d.fence = { child_session_id: d.session_id, generation: state.revision + 1,
+        proof: structuredClone(body.proof), at_revision: state.revision, timestamp: event.timestamp }
+      break
+    }
+
+    case "DISPATCH_ABANDON": {
+      const d = state.dispatches[body.dispatch_id]
+      if (!d || d.status !== DISPATCH_STATUS.LAUNCHED || !d.fence ||
+          d.fence.child_session_id !== body.child_session_id ||
+          body.fence_generation !== d.fence.generation ||
+          body.proof?.kind !== "POST_FENCE_QUIESCENCE" ||
+          body.proof.child_session_id !== d.session_id ||
+          body.proof.pending_tools !== 0 || body.proof.runtime_quiescent !== true ||
+          body.proof.fence_enforced !== true ||
+          typeof body.proof.observation_hash !== "string" || !/^[a-f0-9]{64}$/.test(body.proof.observation_hash)) {
+        throw new Error("DISPATCH_ABANDON requires enforced durable fencing and fresh post-fence quiescence")
+      }
+      d.status = DISPATCH_STATUS.ABANDONED
+      d.abandonment = { reason: "ORPHANED_INTERRUPTED", evidence: structuredClone(body.proof), at_revision: state.revision }
+      break
+    }
+
+    case "DISPATCH_RECONCILE_ABANDONED": {
+      const d = state.dispatches[body.dispatch_id]
+      if (!d || d.status !== DISPATCH_STATUS.ABANDONED ||
+          d.reservation_status !== RESERVATION_STATUS.RESERVED || !d.fence ||
+          body.fence_generation !== d.fence.generation) {
+        throw new Error("DISPATCH_RECONCILE_ABANDONED requires a fenced, abandoned, unsettled dispatch")
+      }
+      // A zero-length reservation cannot account for an unknown runtime. A
+      // measured envelope may exceed the original reservation, leaving visible debt.
+      const recorded = d.usage?.seconds
+      const charge = Math.max(d.reserved_seconds, recorded ?? 0)
+      if (!Number.isFinite(charge) || charge <= 0) throw new Error("Unknown orphan consumption requires a positive conservative reservation")
+      d.status = DISPATCH_STATUS.ABANDONED_RECONCILED
+      d.reservation_status = RESERVATION_STATUS.CONSUMED
+      d.actual_consumption = charge
+      d.consumption_basis = recorded == null ? "conservative_orphan_reservation" : "max_observed_envelope_or_reservation"
+      d.reconciled = { verdict: "ABANDONED_NOT_SUCCESS", evidence: d.abandonment.evidence, at_revision: state.revision }
+      state.budget.reserved_seconds -= d.reserved_seconds
+      state.budget.used_seconds += charge
       break
     }
 
@@ -910,7 +975,7 @@ export function applyEvent(previous, event, { historicalReplay = false } = {}) {
         throw new Error("SCOPE_WORKTREE_RECONCILE requires the exact stale-worktree blocker and verified predecessor provenance")
       }
       if (state.budget.active_phase || state.external_wait || state.verification_phase ||
-          Object.values(state.dispatches).some(d => !["released", "result_reconciled"].includes(d.status)) ||
+          Object.values(state.dispatches).some(d => !["released", "result_reconciled", "abandoned_reconciled"].includes(d.status)) ||
           Object.values(state.candidates).some(c => c.wu_id === state.wu.wu_id)) {
         throw new Error("SCOPE_WORKTREE_RECONCILE rejects unsettled or already frozen active work")
       }
@@ -945,7 +1010,7 @@ export function applyEvent(previous, event, { historicalReplay = false } = {}) {
           !/^verify-[a-f0-9]{64}$/.test(body.failure_evidence_id) ||
           body.verification_contract_hash !== wu.contract.verification_contract_hash ||
           state.verification_phase || state.budget.active_phase ||
-          Object.values(state.dispatches).some(d => !["released", "result_reconciled"].includes(d.status))) {
+          Object.values(state.dispatches).some(d => !["released", "result_reconciled", "abandoned_reconciled"].includes(d.status))) {
         throw new Error("VERIFICATION_RETRY_ATTEMPT requires matching active WU, frozen check, failure receipt and exact tooling blocker")
       }
       if (state.verification_retry?.blocked_at_revision === blocker.at_revision) {
@@ -1199,7 +1264,7 @@ export function applyEvent(previous, event, { historicalReplay = false } = {}) {
       if (!historicalReplay && (!Array.isArray(review.verification_evidence_ids) || review.verification_evidence_ids.length === 0)) {
         throw new Error("WU_COMPLETE: PASS review lacks verification evidence; reverify and review the candidate.")
       }
-      const settled = new Set([DISPATCH_STATUS.RESULT_RECONCILED, DISPATCH_STATUS.RELEASED])
+      const settled = new Set([DISPATCH_STATUS.RESULT_RECONCILED, DISPATCH_STATUS.ABANDONED_RECONCILED, DISPATCH_STATUS.RELEASED])
       const unsettled = Object.entries(state.dispatches).filter(([, d]) => !settled.has(d.status))
       if (unsettled.length > 0) {
         throw new Error(`WU_COMPLETE: ${unsettled.length} dispatch(es) not settled (must be RESULT_RECONCILED or RELEASED): ${unsettled.map(([id]) => id).join(", ")}.`)
