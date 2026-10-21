@@ -5,6 +5,7 @@ import { join } from "node:path"
 import { readdir } from "node:fs/promises"
 import { createExecutionController } from "./execution.js"
 import { stableHash } from "./serialize.js"
+import { findApprovedDispatchAbandonment } from "../project-knowledge.js"
 
 const unwrap = value => value?.data ?? value
 const id = value => {
@@ -173,6 +174,12 @@ export function createSessionRecovery(ctx, projectRoot) {
   // live OpenCode APIs. The same controller commit path writes all transitions.
   async function recoverOrphan(input) {
     const execution = id(input.execution_id)
+    // Authority is verified before even opening a controller or reading runtime
+    // liveness. No caller can supply a boolean "approved" or forge a target.
+    const authority = await findApprovedDispatchAbandonment(projectRoot, input.decision_artifact_id)
+    if (authority.execution_id !== execution || authority.dispatch_id !== input.dispatch_id) {
+      throw new Error("ORPHAN_AUTHORITY_MISMATCH: decision does not authorize this execution/dispatch")
+    }
     return exclusive(execution, async () => {
       const controller = await createExecutionController({ dir: join(projectRoot, ".harness", "execution", "controller", execution) })
       let snap = await controller.snapshot()
@@ -182,6 +189,14 @@ export function createSessionRecovery(ctx, projectRoot) {
         status, reason, execution_id: execution, dispatch_id: input.dispatch_id,
         safe_to_relaunch: false, next_action: "Hold dispatch and reservation; do not record_finish or launch a replacement."
       })
+      if (snap.state.mandate?.authority_kind !== "OWNER_APPROVED_EPIC" ||
+          !snap.state.wu || snap.state.wu.completed ||
+          snap.state.wu.wu_id !== authority.wu_id ||
+          d.wu_id !== authority.wu_id || d.session_id !== authority.child_session_id) {
+        return stop("Approved decision must bind the active WU and exact child session", "ORPHAN_AUTHORITY_MISMATCH")
+      }
+      const approval = { source_artifact_id: authority.source_artifact_id,
+        source_record_key: authority.source_record_key, source_hash: authority.source_hash }
       if (!input.session_id || !["launched", "abandoned", "abandoned_reconciled"].includes(d.status) ||
           !d.session_id || !d.launch_call_id || !d.claim_required || !d.prepared_by_session_id ||
           !d.expected_agent || !d.wu_id) return stop("Exact claimed, launched child identity required")
@@ -246,7 +261,8 @@ export function createSessionRecovery(ctx, projectRoot) {
         const proof = { kind: "VERIFIED_QUIESCENT_CHILD", child_session_id: childID,
           parent_session_id: parentID, launch_call_id: d.launch_call_id, agent: d.expected_agent,
           runtime_quiescent: true, pending_tools: 0, interrupted: true,
-          fence_hook_installed: true, observation_hash: stableHash([first, second]) }
+          fence_hook_installed: true, observation_hash: stableHash([first, second]),
+          approved_abandonment: approval }
         const lease = await controller.acquire(input.session_id)
         try { await controller.commit({
           operation_id: `${execution}:orphan-fence:${input.dispatch_id}:${childID}`,
@@ -276,7 +292,7 @@ export function createSessionRecovery(ctx, projectRoot) {
             fence_generation: d.fence.generation, proof: {
               kind: "POST_FENCE_QUIESCENCE", child_session_id: childID,
               runtime_quiescent: true, pending_tools: 0, fence_enforced: true,
-              observation_hash: stableHash(after) } },
+              observation_hash: stableHash(after), approved_abandonment: approval } },
         }, { holder_session_id: input.session_id, expected_revision: observed.state.revision, lease_fencing_token: lease.fencing_token })
         snap = await controller.snapshot()
         d = snap.state.dispatches[input.dispatch_id]
@@ -293,7 +309,7 @@ export function createSessionRecovery(ctx, projectRoot) {
       }, { holder_session_id: input.session_id, expected_revision: observed.state.revision, lease_fencing_token: lease.fencing_token })
       return { status: "ABANDONED_RECONCILED", classification: "ABANDONED_NOT_SUCCESS",
         child_session_id: childID, charged_seconds: settled.state.dispatches[input.dispatch_id].actual_consumption,
-        safe_to_relaunch: true, blocker: settled.state.blocker,
+        safe_to_relaunch: true, blocker: settled.state.blocker, approved_abandonment: approval,
         next_action: "Clear ONLY the independently resolved tooling blocker; reuse the existing WU and protect partial files." }
     })
   }
