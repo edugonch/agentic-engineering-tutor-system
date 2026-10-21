@@ -155,6 +155,15 @@ export function applyEvent(previous, event, { historicalReplay = false } = {}) {
   const state = structuredClone(previous)
   const body = event.body ?? {}
 
+  // BLOCKER_RECOVERY_AUTHORIZE appears in durable journals produced by another
+  // runtime revision, but there is no published normative handler for its body.
+  // Replay it as non-authoritative audit evidence ONLY. Never allow this build
+  // to emit the event or treat it as approval, a blocker clear or permission
+  // to restart a worker.
+  if (event.operation_type === "BLOCKER_RECOVERY_AUTHORIZE" && !historicalReplay) {
+    throw new Error("BLOCKER_RECOVERY_AUTHORIZE is historical replay-only; use an exact indexed APPROVED decision and the governed recovery tool.")
+  }
+
   // A terminal blocker is a hard stop: no new WU, billable phase, or dispatch
   // may follow. Audit/record operations remain allowed so evidence and
   // reconciliation can still be committed.
@@ -163,6 +172,27 @@ export function applyEvent(previous, event, { historicalReplay = false } = {}) {
   }
 
   switch (event.operation_type) {
+    case "BLOCKER_RECOVERY_AUTHORIZE": {
+      // Compatibility with a previously recorded operation vocabulary. The
+      // payload's authority semantics are not known in this release, so no
+      // field in it is projected as trusted owner authority. Preserve the
+      // pre-existing blocker, reservations, dispatch statuses and fences.
+      // Without an existing stop this purported authorization is unsafe to
+      // interpret as a historical recovery marker.
+      if (!state.blocker || !state.wu || state.wu.completed) {
+        throw new Error("LEGACY_RECOVERY_MARKER_UNSAFE: expected an active WU and existing blocker; cannot infer authority from an unknown event.")
+      }
+      state.historical_recovery_markers ??= []
+      state.historical_recovery_markers.push({
+        operation_id: event.operation_id,
+        event_id: event.event_id,
+        at_revision: state.revision,
+        body_hash: stableHash(body),
+        interpretation: "UNVERIFIED_NON_AUTHORITATIVE",
+      })
+      break
+    }
+
     case "PROCESS_POLICY_ADOPT":
     case "PROCESS_RECOVERY_START":
     case "PROCESS_EVIDENCE":
