@@ -322,6 +322,8 @@ export default Plugin.define({
     // boundary too. Prompt instructions and a read-only preflight are not a
     // delegation guard; an unavailable Harness role must be denied here.
     await ctx.permission.hook("evaluate", async (event) => {
+      try { await assertSessionNotOrphanFenced(requireProjectRoot(), event.sessionID) }
+      catch (error) { event.effect = "deny"; event.message = error.message; return }
       await guardHarnessSubagentPermission(event, ctx.agent)
       // D2 hard-stop primitive: a registered probe session requesting a
       // forbidden action is denied and blocked; the driver never continues it
