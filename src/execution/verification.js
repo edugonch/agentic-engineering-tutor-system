@@ -1,3 +1,4 @@
+import { inspectAcceptanceCoverage } from "./acceptance-coverage.js"
 // Verification contract + declared-check runner (P3/P4, hardened).
 //
 // A Work Unit declares its verification checks up front as `program` + `args`
@@ -70,6 +71,15 @@ export function validateVerificationContract(contract) {
   const policy = contract.environment?.network_policy ?? "UNRESTRICTED"
   if (policy !== "UNRESTRICTED" && policy !== "NETWORK_FORBIDDEN") {
     throw new Error(`verification contract has an unknown network_policy: ${policy}.`)
+  }
+  const coverage = inspectAcceptanceCoverage(contract)
+  if (coverage.status === "INVALID_ACCEPTANCE_COVERAGE") {
+    throw new Error("INVALID_ACCEPTANCE_COVERAGE: " + coverage.reason)
+  }
+  if (coverage.status === "REQUIRED_CHECK_UNMAPPED") {
+    throw new Error("REQUIRED_CHECK_UNMAPPED: " + JSON.stringify({
+      missing_criteria: coverage.missing_criteria, invalid_mappings: coverage.invalid_mappings,
+    }))
   }
   return true
 }
