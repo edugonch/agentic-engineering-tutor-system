@@ -72,3 +72,23 @@ test("invalid version and malformed criteria never silently claim complete cover
     withCoverage({ schema_version: 1, mode: "REQUIRED", criteria: ["A", "A"], check_mapping: { A: ["unit"] } }),
   ]) assert.throws(() => validateVerificationContract(c), /INVALID_ACCEPTANCE_COVERAGE/)
 })
+
+test("explicit API requirement outside web-only write scope is rejected without permission expansion", () => {
+  const c = withCoverage({ schema_version: 1, mode: "REQUIRED",
+    criteria: ["public-availability"], check_mapping: { "public-availability": ["unit"] },
+    write_scope: { allowed_roots: ["experience/web"], required_paths: ["apps/api/routes/public/availability.js"] } })
+  const preflight = inspectAcceptanceCoverage(c)
+  assert.equal(preflight.status, "WRITE_SCOPE_CONFLICT")
+  assert.equal(preflight.classification, "CONTRACT_VIOLATION")
+  assert.deepEqual(preflight.paths_outside_scope, ["apps/api/routes/public/availability.js"])
+  assert.throws(() => validateVerificationContract(c), /WRITE_SCOPE_CONFLICT/)
+})
+
+test("no source-defined scope metadata means UNKNOWN rather than an invented conflict", () => {
+  const c = withCoverage({ schema_version: 1, mode: "REQUIRED",
+    criteria: ["public-availability"], check_mapping: { "public-availability": ["unit"] } })
+  const preflight = inspectAcceptanceCoverage(c)
+  assert.equal(preflight.write_scope_status, "NOT_STRUCTURED")
+  assert.deepEqual(preflight.paths_outside_scope, [])
+  assert.equal(validateVerificationContract(c), true)
+})
