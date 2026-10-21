@@ -19,6 +19,7 @@ export function verificationContractHash(contract) {
     ...(contract?.setup ? { setup: contract.setup } : {}),
     capabilities: contract?.capabilities ?? [],
     environment: contract?.environment ?? {},
+    ...(contract && Object.hasOwn(contract, "acceptance_coverage") ? { acceptance_coverage: contract.acceptance_coverage } : {}),
   }
   return stableHash(normative)
 }
