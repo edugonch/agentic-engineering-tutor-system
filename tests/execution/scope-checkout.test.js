@@ -1,6 +1,6 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises"
+import { mkdtemp, mkdir, realpath, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { execFileSync } from "node:child_process"
@@ -32,8 +32,8 @@ async function roots(t) {
 test("verified linked checkout is distinct from canonical state root and remains the current session checkout", async t => {
   const f = await roots(t)
   const resolved = await resolveScopeRuntimeCheckout(f.ctx, f.root, "ses_orchestrator")
-  assert.equal(resolved.checkoutRoot, f.linked)
-  assert.equal(resolved.canonicalRoot, f.root)
+  assert.equal(await realpath(resolved.checkoutRoot), await realpath(f.linked))
+  assert.equal(await realpath(resolved.canonicalRoot), await realpath(f.root))
 })
 
 test("a source checkout from an unrelated repository cannot provide scope-clearing proof", async t => {
@@ -69,5 +69,5 @@ test("subdirectory of a verified linked checkout resolves to the actual git topl
   await mkdir(join(f.linked, "nested"), { recursive: true })
   f.session.location.directory = join(f.linked, "nested")
   const result = await resolveScopeRuntimeCheckout(f.ctx, f.root, "ses_orchestrator")
-  assert.equal(result.checkoutRoot, f.linked)
+  assert.equal(await realpath(result.checkoutRoot), await realpath(f.linked))
 })

@@ -134,11 +134,12 @@ async function verify(controller) {
 
   // Terminal dispatch invariants: AMBIGUOUS retains its reservation; RELEASED
   // and RESULT_RECONCILED hold no live reservation (their reservation_status is
-  // the authority, not the historical reserved_seconds field).
+  // the authority, not the historical reserved_seconds field). ORPHANED consumes
+  // its reservation at declaration time.
   checks["terminal dispatches satisfy reservation invariants"] = Object.entries(state.dispatches).every(([, d]) => {
     if (d.status === DISPATCH_STATUS.AMBIGUOUS) return d.reservation_status === RESERVATION_STATUS.RESERVED
     if (d.status === DISPATCH_STATUS.RELEASED) return d.reservation_status === RESERVATION_STATUS.RELEASED
-    if (d.status === DISPATCH_STATUS.RESULT_RECONCILED) return d.reservation_status === RESERVATION_STATUS.CONSUMED
+    if (d.status === DISPATCH_STATUS.RESULT_RECONCILED || d.status === DISPATCH_STATUS.ORPHANED) return d.reservation_status === RESERVATION_STATUS.CONSUMED
     return true
   })
 
@@ -197,7 +198,7 @@ async function commitAction(controller, holder, operation_id, operation_type, bo
 export async function claimDispatchLaunch(projectRoot, { execution_id, dispatch_id, call_id, session_id }) {
   const executionId = sanitizeId(execution_id, "execution_id")
   const dir = join(projectRoot, ".harness", "execution", "controller", executionId)
-  const controller = await createExecutionController({ dir, lease_ttl_ms: 30000 })
+  const controller = await createExecutionController({ dir, lease_ttl_ms: Number(process.env.HARNESS_LEASE_TTL_MS ?? 30000) })
   const holder = String(session_id)
   const operation_id = `${executionId}:claim:${dispatch_id}:${call_id}`
   const lease = await controller.acquire(holder)
@@ -213,7 +214,7 @@ export async function runExecutionController(projectRoot, input, candidateRegist
   validateControllerPreflight(input)
   const executionId = sanitizeId(input.execution_id, "execution_id")
   const dir = join(projectRoot, ".harness", "execution", "controller", executionId)
-  const controller = await createExecutionController({ dir, lease_ttl_ms: 30000 })
+  const controller = await createExecutionController({ dir, lease_ttl_ms: Number(process.env.HARNESS_LEASE_TTL_MS ?? 30000) })
   const registry = candidateRegistry ?? createCandidateRegistry({ dir: join(projectRoot, ".harness", "execution") })
   const holder = String(input.session_id ?? `controller:${executionId}`)
   const action = String(input.action ?? "status")
@@ -704,6 +705,57 @@ export async function runExecutionController(projectRoot, input, candidateRegist
       launch_session_id: launchSessionId,
       ...(await summary(controller)),
     }
+  }
+
+
+  if (action === "declare_orphan_dispatch") {
+    const dispatchId = requireDispatchId(input)
+    const evidence = input.evidence ?? {}
+    const resolution = String(input.resolution ?? "")
+    if (!resolution.trim()) throw new Error("declare_orphan_dispatch requires resolution.")
+    if (!evidence.child_session_id || typeof evidence.child_session_id !== "string") {
+      throw new Error("declare_orphan_dispatch requires evidence.child_session_id.")
+    }
+    if (evidence.unsettled_tools !== false) {
+      throw new Error("declare_orphan_dispatch requires evidence.unsettled_tools === false.")
+    }
+    if (!["observed", "interrupted", "aborted"].includes(evidence.idle_observation)) {
+      throw new Error("declare_orphan_dispatch requires evidence.idle_observation in {observed, interrupted, aborted}.")
+    }
+    const lease = await controller.acquire(holder)
+    const snap = await controller.snapshot()
+    const dispatch = snap.state.dispatches[dispatchId]
+    if (!dispatch) throw new Error(`Unknown dispatch ${dispatchId}.`)
+    if (dispatch.status !== DISPATCH_STATUS.LAUNCHED) {
+      throw new Error(`declare_orphan_dispatch requires dispatch ${dispatchId} to be launched (status ${dispatch.status}).`)
+    }
+    if (dispatch.session_id !== evidence.child_session_id) {
+      throw new Error(`declare_orphan_dispatch evidence child_session_id does not match bound dispatch session.`)
+    }
+    const body = {
+      dispatch_id: dispatchId,
+      session_id: evidence.child_session_id,
+      actual_consumption: input.actual_consumption ?? null,
+      evidence,
+      evidence_hash: stableHash(evidence),
+      reason: resolution,
+      fencing_token: lease.fencing_token,
+    }
+    const orphanRes = await controller.commit(
+      { operation_id: `${executionId}:orphan:${dispatchId}:${body.evidence_hash}`, operation_type: "DISPATCH_ORPHAN", body },
+      { holder_session_id: holder, expected_revision: snap.state.revision, lease_fencing_token: lease.fencing_token },
+    )
+    let cleared = null
+    if (orphanRes.state.blocker?.class === "BLOCKED_TOOLING") {
+      const blocker = orphanRes.state.blocker
+      const clearRes = await controller.commit(
+        { operation_id: `${executionId}:clear-blocker:${blocker.at_revision}`, operation_type: "CLEAR_BLOCKER",
+          body: { blocker_class: blocker.class, blocked_at_revision: blocker.at_revision, resolution } },
+        { holder_session_id: holder, expected_revision: orphanRes.state.revision, lease_fencing_token: lease.fencing_token },
+      )
+      cleared = { class: blocker.class, blocked_at_revision: blocker.at_revision, resolution }
+    }
+    return { action, commit_status: orphanRes.status, dispatch_id: dispatchId, dispatch_status: orphanRes.state.dispatches[dispatchId].status, orphan_evidence_hash: body.evidence_hash, cleared_blocker: cleared, ...(await summary(controller)) }
   }
 
   if (action === "record_finish") {

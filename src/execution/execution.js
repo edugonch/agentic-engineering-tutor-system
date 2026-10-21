@@ -72,7 +72,7 @@ function isSameOperation(event, operation) {
   )
 }
 
-export async function createExecutionController({ root, dir, now = () => Date.now(), lease_ttl_ms = 60000 } = {}) {
+export async function createExecutionController({ root, dir, now = () => Date.now(), lease_ttl_ms = Number(process.env.HARNESS_LEASE_TTL_MS ?? 60000) } = {}) {
   const execDir = dir ?? join(root, ".harness", "execution")
   await mkdir(execDir, { recursive: true })
   const logPath = join(execDir, "events.ndjson")

@@ -4,7 +4,7 @@
 // in the canonical project root; Git proof MUST use session worktree.
 import test from "node:test"
 import assert from "node:assert/strict"
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises"
+import { mkdtemp, mkdir, realpath, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { execFileSync } from "node:child_process"
@@ -99,7 +99,7 @@ test("RED multi-WU: moved session clean at WU-03 merge must reconcile via canoni
   }, f.registry, { checkoutRoot: f.recoveryRoot })
   assert.equal(report.status, "VERIFIED_RECONCILABLE")
   assert.equal(report.proof.head_sha, f.verifiedHead)
-  assert.equal(report.proof.checkout_root, f.recoveryRoot)
+  assert.equal(await realpath(report.proof.checkout_root), await realpath(f.recoveryRoot))
   assert.deepEqual(report.proof.predecessor_files.map(x => x.path), f.recorded.map(x => x.path))
   assert.equal((await f.controller.snapshot()).state.revision, statusBefore.state.revision)
   const result = await runExecutionController(f.root, {

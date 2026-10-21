@@ -41,6 +41,7 @@ export const OPERATION_TYPES = Object.freeze([
   "DISPATCH_RELEASE", // reserved/pending_launch (never launched) -> released, return reservation
   "DISPATCH_MARK_AMBIGUOUS", // reserved/pending_launch -> ambiguous (identity unknown); reservation stays held
   "DISPATCH_RESOLVE_AMBIGUOUS_LAUNCH", // ambiguous -> launched after exact external session identity is independently recovered
+  "DISPATCH_ORPHAN", // launched -> orphaned after verifiable inactivity/interruption evidence and durable fencing
   "FREEZE_CANDIDATE", // pin an immutable candidate (manifest hash + tree hash), bound to the active WU
   "RECORD_REVIEW", // bind a review verdict to one exact candidate's hashes
   "WU_COMPLETE", // close one WU: candidate + PASS review + settled dispatches (distinct from EPIC COMPLETE)
@@ -80,6 +81,7 @@ export const DISPATCH_STATUS = Object.freeze({
   RESULT_RECONCILED: "result_reconciled",
   RELEASED: "released",
   AMBIGUOUS: "ambiguous",
+  ORPHANED: "orphaned",
 })
 
 // Naming encodes the launch boundary, and the values are intentionally
@@ -94,6 +96,7 @@ export const TERMINAL_DISPATCH_STATUSES = new Set([
   DISPATCH_STATUS.RESULT_RECONCILED,
   DISPATCH_STATUS.RELEASED,
   DISPATCH_STATUS.AMBIGUOUS,
+  DISPATCH_STATUS.ORPHANED,
 ])
 
 // Reservation sub-state, independent of the dispatch lifecycle. A dispatch may
