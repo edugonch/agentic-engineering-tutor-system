@@ -3,7 +3,7 @@ import assert from "node:assert/strict"
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { stableHash } from "../../src/execution/serialize.js"
+import { stableHash, operationIdentityHash } from "../../src/execution/serialize.js"
 import { project, applyEvent } from "../../src/execution/state.js"
 import { readLog, validateLog } from "../../src/execution/event-log.js"
 import { createExecutionController } from "../../src/execution/execution.js"
@@ -107,4 +107,18 @@ test("unknown historical recovery authorization cannot substitute for indexed AP
     session_id:"ses_root",decision_artifact_id:"DECISION-E05-07-DISPATCH-ABANDON-2026-10-21",
   }),/ORPHAN_AUTHORITY_REQUIRED/)
   assert.equal((await readFile(path,"utf8")),original)
+})
+
+test("v2 operation identity hashes also replay without authorizing recovery", () => {
+  const journal = events(steps).map(e => ({
+    ...e, operation_hash_version: 2, operation_hash: operationIdentityHash(e),
+  }))
+  assert.equal(validateLog(journal).length, journal.length)
+  const state = project(journal)
+  assert.equal(state.blocker.class, "BLOCKED_TOOLING")
+  assert.equal(state.dispatches["e0507-build-2"].status, "launched")
+  assert.equal(state.budget.reserved_seconds, 5000)
+  assert.equal(state.historical_recovery_markers[0].interpretation, "UNVERIFIED_NON_AUTHORITATIVE")
+  journal.at(-1).body.purported_approval = false
+  assert.throws(() => validateLog(journal), /Event integrity mismatch/)
 })
