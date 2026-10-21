@@ -27,7 +27,8 @@ test("canonical same-WU correction survives replay, then advances within approve
   const view = () => runExecutionController(root, { action: "operational_status", execution_id: "E1" });
   await commit("MANDATE_APPROVE", {
     execution_id: "E1", mandate_id: "M1", total_seconds: 100, max_wus: 2,
-    authority_kind: "OWNER_APPROVED_EPIC", wu_sequence: ["WU1", "WU2"], merge_policy: "none",
+    authority_kind: "OWNER_APPROVED_EPIC", source_artifact_id: "epic", source_record_key: "record", source_hash: "source-hash",
+    wu_sequence: ["WU1", "WU2"], merge_policy: "none",
   });
   await commit("WU_ACTIVATE", { wu_id: "WU1", mandate_id: "M1" });
   assert.equal((await view()).next_action, "LAUNCH_ONE_BUILDER");
