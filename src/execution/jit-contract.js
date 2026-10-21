@@ -15,7 +15,7 @@ export const isTechnicalWuContractBlocker = blocker => {
   // This prevents the reproduced "NOT a WU_CONTRACT_REQUIRED" false positive;
   // it does not grant permission to mutate or clear an existing blocker.
   const reason = String(blocker.reason ?? "")
-  if (/\\b(?:NOT|isn't|is\\s+not)\\b(?:\\s+[A-Za-z]+){0,3}\\s+(?:WU_CONTRACT_REQUIRED|execution_contract|normaliz(?:ation|e))/i.test(reason)) return false
+  if (/\b(?:NOT|isn't|is\s+not)\b(?:\s+[A-Za-z]+){0,3}\s+(?:WU_CONTRACT_REQUIRED|execution_contract|normaliz(?:ation|e))/i.test(reason)) return false
   return /(?:no executable approved contract|no executable contract|needs a selected approved contract|finite active_seconds|execution_contract|WU_CONTRACT_REQUIRED|normaliz(?:ation|e).*contract)/i.test(reason)
 }
 
