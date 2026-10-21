@@ -99,3 +99,14 @@ test("candidate/WU/contract mismatch fail closed without filesystem side effects
   assert.equal((await run(root, state)).status, "STALE_OR_UNBOUND_CANDIDATE")
   await assert.rejects(access(join(root, ".harness")))
 })
+
+test("public controller action does not initialize missing execution or create lease", async t => {
+  const { runExecutionController } = await import("../../src/execution/controller-tool.js")
+  const root = await mkdtemp(join(tmpdir(), "harness-review-action-"))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const response = await runExecutionController(root, {
+    action: "prepare_review_evidence", execution_id: "absent", wu_id: "WU-01",
+    candidate_id: "cand-1" })
+  assert.equal(response.status, "EXECUTION_NOT_FOUND")
+  await assert.rejects(access(join(root, ".harness")))
+})
