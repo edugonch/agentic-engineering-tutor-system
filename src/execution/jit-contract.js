@@ -7,10 +7,17 @@ import { stableHash } from "./serialize.js"
 import { epicExecutionRemaining, usesPlanningEstimates } from "./time-policy.js"
 import { inspectAcceptanceCoverage } from "./acceptance-coverage.js"
 
-export const isTechnicalWuContractBlocker = blocker =>
-  blocker?.class === "BLOCKED_AUTHORITY" &&
-  (!blocker.authority_question || blocker.authority_question.domain === "governance") &&
-  /(?:no executable approved contract|no executable contract|needs a selected approved contract|finite active_seconds|execution_contract|WU_CONTRACT_REQUIRED|normaliz(?:ation|e).*contract)/i.test(String(blocker.reason ?? ""))
+export const isTechnicalWuContractBlocker = blocker => {
+  if (blocker?.class !== "BLOCKED_AUTHORITY" ||
+      (blocker.authority_question && blocker.authority_question.domain !== "governance")) return false
+  // Legacy prose is at most an advisory recovery hint. A negated occurrence
+  // must never be promoted to authority for mandate-derived normalization.
+  // This prevents the reproduced "NOT a WU_CONTRACT_REQUIRED" false positive;
+  // it does not grant permission to mutate or clear an existing blocker.
+  const reason = String(blocker.reason ?? "")
+  if (/\\b(?:NOT|isn't|is\\s+not)\\b(?:\\s+[A-Za-z]+){0,3}\\s+(?:WU_CONTRACT_REQUIRED|execution_contract|normaliz(?:ation|e))/i.test(reason)) return false
+  return /(?:no executable approved contract|no executable contract|needs a selected approved contract|finite active_seconds|execution_contract|WU_CONTRACT_REQUIRED|normaliz(?:ation|e).*contract)/i.test(reason)
+}
 
 const SCRIPT_ORDER = ["format:check", "lint", "typecheck", "arch", "governance:verify", "governance:test", "test"]
 const FORBIDDEN_SCRIPTS = /(?:^|:)(?:deploy|publish|release|production|migrate|seed|reset|delete|write)(?:$|:)/i
