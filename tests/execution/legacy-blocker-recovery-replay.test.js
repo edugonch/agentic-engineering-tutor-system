@@ -91,3 +91,20 @@ test("tool boundary reads a legacy marker but continues to deny a durably fenced
   await assert.rejects(assertSessionNotOrphanFenced(root,"ses_child"),/ORPHAN_CHILD_FENCED/)
   assert.equal(await readFile(path,"utf8"),rawBefore)
 })
+
+test("unknown historical recovery authorization cannot substitute for indexed APPROVED dispatch abandonment", async t => {
+  const root = await mkdtemp(join(tmpdir(), "harness-recovery-not-authority-"))
+  t.after(() => rm(root,{recursive:true,force:true}))
+  const dir = join(root,".harness/execution/controller/alfran-epic05-delivery")
+  await mkdir(dir,{recursive:true})
+  const path = join(dir,"events.ndjson")
+  const original = events(steps).map(e=>JSON.stringify(e)).join("\n")+"\n"
+  await writeFile(path,original)
+  const { createSessionRecovery } = await import("../../src/execution/session-recovery.js")
+  const recovery = createSessionRecovery({},root)
+  await assert.rejects(recovery.recoverOrphan({
+    execution_id:"alfran-epic05-delivery", dispatch_id:"e0507-build-2",
+    session_id:"ses_root",decision_artifact_id:"DECISION-E05-07-DISPATCH-ABANDON-2026-10-21",
+  }),/ORPHAN_AUTHORITY_REQUIRED/)
+  assert.equal((await readFile(path,"utf8")),original)
+})
