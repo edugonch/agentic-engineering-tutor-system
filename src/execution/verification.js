@@ -76,6 +76,9 @@ export function validateVerificationContract(contract) {
   if (coverage.status === "INVALID_ACCEPTANCE_COVERAGE") {
     throw new Error("INVALID_ACCEPTANCE_COVERAGE: " + coverage.reason)
   }
+  if (coverage.status === "WRITE_SCOPE_CONFLICT") {
+    throw new Error("WRITE_SCOPE_CONFLICT: " + JSON.stringify(coverage.paths_outside_scope))
+  }
   if (coverage.status === "REQUIRED_CHECK_UNMAPPED") {
     throw new Error("REQUIRED_CHECK_UNMAPPED: " + JSON.stringify({
       missing_criteria: coverage.missing_criteria, invalid_mappings: coverage.invalid_mappings,
