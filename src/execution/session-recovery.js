@@ -2,6 +2,7 @@
 // session.context contains projected assistant.content tool entries, after the
 // last compaction only. Missing evidence is never proof of a failed launch.
 import { join } from "node:path"
+import { readdir } from "node:fs/promises"
 import { createExecutionController } from "./execution.js"
 import { stableHash } from "./serialize.js"
 
@@ -20,6 +21,36 @@ async function readRuntime(run) {
   } finally { clearTimeout(timer) }
 }
 const key = (session, call) => JSON.stringify([session, call])
+
+
+/**
+ * Fail-closed durable tool boundary. The journal fence is authoritative across
+ * plugin restarts: no in-memory flag or old session outcome can unfence a child.
+ * An unreadable existing controller is not assumed to be safe.
+ */
+export async function assertSessionNotOrphanFenced(projectRoot, sessionID) {
+  if (!sessionID) throw new Error("ORPHAN_FENCE_IDENTITY_REQUIRED")
+  const dir = join(projectRoot, ".harness", "execution", "controller")
+  let executions
+  try { executions = await readdir(dir, { withFileTypes: true }) }
+  catch (error) { if (error.code === "ENOENT") return; throw error }
+  for (const entry of executions) {
+    if (!entry.isDirectory()) continue
+    const controller = await createExecutionController({ dir: join(dir, entry.name) })
+    const { state } = await controller.snapshot()
+    if (Object.values(state.dispatches).some(d => d.fence?.child_session_id === sessionID)) {
+      throw new Error("ORPHAN_CHILD_FENCED: this child was abandoned and may not execute further tools")
+    }
+  }
+}
+const unresolvedTools = messages => (Array.isArray(messages) ? messages : []).some(message =>
+  (Array.isArray(message.content) ? message.content : []).some(part =>
+    part.type === "tool" && !["completed", "error", "failed", "cancelled", "canceled"].includes(part.state?.status)))
+const callEvidence = (messages, callID) => (Array.isArray(messages) ? messages : [])
+  .filter(message => message.type === "assistant")
+  .flatMap(message => (Array.isArray(message.content) ? message.content : [])
+    .filter(part => part.type === "tool" && part.id === callID)
+    .map(part => ({ part, message_id: message.id ?? null })))
 
 export function createSessionRecovery(ctx, projectRoot) {
   const launches = new Map()
@@ -137,8 +168,139 @@ export function createSessionRecovery(ctx, projectRoot) {
     })
   }
 
+
+  // No caller-supplied liveness claims: all proof fields originate from the
+  // live OpenCode APIs. The same controller commit path writes all transitions.
+  async function recoverOrphan(input) {
+    const execution = id(input.execution_id)
+    return exclusive(execution, async () => {
+      const controller = await createExecutionController({ dir: join(projectRoot, ".harness", "execution", "controller", execution) })
+      let snap = await controller.snapshot()
+      let d = snap.state.dispatches[input.dispatch_id]
+      if (!d) throw new Error("Unknown dispatch")
+      const stop = (reason, status = "EVIDENCE_INSUFFICIENT") => ({
+        status, reason, execution_id: execution, dispatch_id: input.dispatch_id,
+        safe_to_relaunch: false, next_action: "Hold dispatch and reservation; do not record_finish or launch a replacement."
+      })
+      if (!input.session_id || !["launched", "abandoned", "abandoned_reconciled"].includes(d.status) ||
+          !d.session_id || !d.launch_call_id || !d.claim_required || !d.prepared_by_session_id ||
+          !d.expected_agent || !d.wu_id) return stop("Exact claimed, launched child identity required")
+      if (d.status === "abandoned_reconciled") return { status: "ALREADY_RECONCILED",
+        child_session_id: d.session_id, charged_seconds: d.actual_consumption,
+        classification: "ABANDONED_NOT_SUCCESS", safe_to_relaunch: true }
+      if (typeof ctx.session?.get !== "function" || typeof ctx.session.context !== "function" ||
+          typeof ctx.session.wait !== "function" || typeof ctx.session.interrupt !== "function") {
+        return stop("OpenCode get/context/wait/interrupt are all required", "CAPABILITY_UNAVAILABLE")
+      }
+      let caller
+      try { caller = unwrap(await readRuntime(() => ctx.session.get({ sessionID: input.session_id }))) }
+      catch { return stop("Cannot verify root caller", "CAPABILITY_UNAVAILABLE") }
+      if (caller?.id !== input.session_id || caller.parentID || caller.agent !== "harness-orchestrator")
+        return stop("Only the actual root orchestrator may recover an orphan", "IDENTITY_CONFLICT")
+      if (!d.fence && d.status !== "launched") return stop("Unfenced abandonment is invalid", "EVIDENCE_CONFLICT")
+      const childID = d.session_id, parentID = d.prepared_by_session_id
+      const loadChild = async () => {
+        const [child, childContext, parentContext] = await Promise.all([
+          readRuntime(() => ctx.session.get({ sessionID: childID })),
+          readRuntime(() => ctx.session.context({ sessionID: childID })),
+          readRuntime(() => ctx.session.context({ sessionID: parentID })),
+        ])
+        return { child: unwrap(child), childContext: unwrap(childContext), parentContext: unwrap(parentContext) }
+      }
+      const valid = evidence => {
+        const { child, childContext, parentContext } = evidence
+        if (child?.id !== childID || child.parentID !== parentID || child.agent !== d.expected_agent ||
+            !child.projectID || !caller.projectID || child.projectID !== caller.projectID ||
+            !Array.isArray(childContext) || !Array.isArray(parentContext)) return false
+        const matches = callEvidence(parentContext, d.launch_call_id)
+        if (matches.length !== 1) return false
+        const call = matches[0].part
+        return call.name === "subagent" && call.state?.input?.agent === d.expected_agent &&
+          call.state?.metadata?.sessionID === childID &&
+          call.state?.status !== "completed" && call.state?.metadata?.status !== "completed" &&
+          child.outcome !== "succeeded" && !unresolvedTools(childContext)
+      }
+      async function idle() {
+        try { await readRuntime(() => ctx.session.wait({ sessionID: childID })); return true }
+        catch { return false }
+      }
+      let first
+      try { first = await loadChild() } catch { return stop("Cannot inspect child and exact parent call", "CAPABILITY_UNAVAILABLE") }
+      if (!valid(first)) return stop("Child/parent/project identity conflicts, context incomplete, tool unsettled, or terminal success exists", "EVIDENCE_CONFLICT")
+      // A wait timeout is UNKNOWN, never permission to interrupt a live tool.
+      if (!(await idle())) return stop("Child is active or cannot be proven quiescent", "CHILD_ACTIVITY_UNKNOWN")
+      let second
+      try { second = await loadChild() } catch { return stop("Second independent session read failed", "CAPABILITY_UNAVAILABLE") }
+      if (!valid(second) || stableHash(first) !== stableHash(second))
+        return stop("Session or parent call changed across fresh idle observations", "SNAPSHOT_CHANGED")
+      if (!d.fence) {
+        // An acknowledged interrupt prevents queued continuation during the
+        // fence window. The tool hooks independently refuse all future mutations.
+        try { await readRuntime(() => ctx.session.interrupt({ sessionID: childID, continue: false })) }
+        catch { return stop("Cannot interrupt child before durable fencing", "CAPABILITY_UNAVAILABLE") }
+        if (!(await idle())) return stop("Child not quiescent after interruption", "CHILD_ACTIVITY_UNKNOWN")
+        const before = await controller.snapshot()
+        const current = before.state.dispatches[input.dispatch_id]
+        if (before.state.revision !== snap.state.revision || current.status !== "launched" ||
+            current.session_id !== childID) return stop("Controller changed during pre-fence observation", "SNAPSHOT_CHANGED")
+        const proof = { kind: "VERIFIED_QUIESCENT_CHILD", child_session_id: childID,
+          parent_session_id: parentID, launch_call_id: d.launch_call_id, agent: d.expected_agent,
+          runtime_quiescent: true, pending_tools: 0, interrupted: true,
+          fence_hook_installed: true, observation_hash: stableHash([first, second]) }
+        const lease = await controller.acquire(input.session_id)
+        try { await controller.commit({
+          operation_id: `${execution}:orphan-fence:${input.dispatch_id}:${childID}`,
+          operation_type: "DISPATCH_FENCE", body: { dispatch_id: input.dispatch_id, expected_revision: before.state.revision,
+            child_session_id: childID, parent_session_id: parentID, launch_call_id: d.launch_call_id,
+            agent: d.expected_agent, wu_id: d.wu_id, proof },
+        }, { holder_session_id: input.session_id, expected_revision: before.state.revision, lease_fencing_token: lease.fencing_token }) }
+        catch (error) { return stop(`Fence rejected: ${error.message}`, "SNAPSHOT_CHANGED") }
+      }
+      // Fence exists durably before post-fence observation or settlement.
+      snap = await controller.snapshot()
+      d = snap.state.dispatches[input.dispatch_id]
+      if (!d.fence || d.fence.child_session_id !== childID) return stop("Missing durable fence", "EVIDENCE_CONFLICT")
+      try { await readRuntime(() => ctx.session.interrupt({ sessionID: childID, continue: false })) }
+      catch { return stop("Post-fence interruption not acknowledged", "CAPABILITY_UNAVAILABLE") }
+      if (!(await idle())) return stop("Post-fence session is still active", "CHILD_ACTIVITY_UNKNOWN")
+      let after
+      try { after = await loadChild() } catch { return stop("Cannot read post-fence session", "CAPABILITY_UNAVAILABLE") }
+      if (!valid(after)) return stop("Post-fence child identity or tool liveness changed", "EVIDENCE_CONFLICT")
+      if (d.status === "launched") {
+        const lease = await controller.acquire(input.session_id)
+        const observed = await controller.snapshot()
+        if (observed.state.revision !== snap.state.revision) return stop("Controller changed after fence", "SNAPSHOT_CHANGED")
+        await controller.commit({
+          operation_id: `${execution}:orphan-abandon:${input.dispatch_id}:${childID}`,
+          operation_type: "DISPATCH_ABANDON", body: { dispatch_id: input.dispatch_id, child_session_id: childID,
+            fence_generation: d.fence.generation, proof: {
+              kind: "POST_FENCE_QUIESCENCE", child_session_id: childID,
+              runtime_quiescent: true, pending_tools: 0, fence_enforced: true,
+              observation_hash: stableHash(after) } },
+        }, { holder_session_id: input.session_id, expected_revision: observed.state.revision, lease_fencing_token: lease.fencing_token })
+        snap = await controller.snapshot()
+        d = snap.state.dispatches[input.dispatch_id]
+      }
+      if (d.status !== "abandoned") return stop("Abandonment state changed", "SNAPSHOT_CHANGED")
+      const lease = await controller.acquire(input.session_id)
+      const observed = await controller.snapshot()
+      if (observed.state.dispatches[input.dispatch_id].status !== "abandoned")
+        return stop("Dispatch no longer awaiting settlement", "SNAPSHOT_CHANGED")
+      const settled = await controller.commit({
+        operation_id: `${execution}:orphan-settle:${input.dispatch_id}:${childID}`,
+        operation_type: "DISPATCH_RECONCILE_ABANDONED",
+        body: { dispatch_id: input.dispatch_id, fence_generation: d.fence.generation },
+      }, { holder_session_id: input.session_id, expected_revision: observed.state.revision, lease_fencing_token: lease.fencing_token })
+      return { status: "ABANDONED_RECONCILED", classification: "ABANDONED_NOT_SUCCESS",
+        child_session_id: childID, charged_seconds: settled.state.dispatches[input.dispatch_id].actual_consumption,
+        safe_to_relaunch: true, blocker: settled.state.blocker,
+        next_action: "Clear ONLY the independently resolved tooling blocker; reuse the existing WU and protect partial files." }
+    })
+  }
+
   return {
     recover,
+    recoverOrphan,
     reset() { cached.clear() },
     track(binding) { launches.set(key(binding.session_id, binding.call_id), { ...binding, monotonic_started: performance.now() }) },
     async onProgress(event) {
