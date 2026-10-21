@@ -5,6 +5,7 @@ import { join } from "node:path"
 import { compileWuContract } from "./wu-contract.js"
 import { stableHash } from "./serialize.js"
 import { epicExecutionRemaining, usesPlanningEstimates } from "./time-policy.js"
+import { inspectAcceptanceCoverage } from "./acceptance-coverage.js"
 
 export const isTechnicalWuContractBlocker = blocker =>
   blocker?.class === "BLOCKED_AUTHORITY" &&
@@ -78,6 +79,7 @@ export async function inspectMandateDerivedWu(root, state, wuId, definition) {
       source_record_key: contract.source_record_key,
       planning_estimate_seconds: contract.active_seconds,
       verification_check_ids: contract.derivation.verification_check_ids,
+      acceptance_coverage: inspectAcceptanceCoverage(contract.verification_contract),
       contract_hash: contract.contract_hash,
       note: "Mandate-derived technical estimate, not a new owner approval or hard WU limit",
     }
