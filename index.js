@@ -361,6 +361,18 @@ export default Plugin.define({
         })),
       })
       editor.add({
+        name: "harness_recover_orphan_dispatch",
+        description: "Governed, potentially mutating recovery of one already-launched orphan Harness dispatch. Requires the exact indexed APPROVED decision with a hash-verified typed dispatch_abandonment binding. Root harness-orchestrator and OpenCode session evidence must prove identity, quiescence, no pending tools, interrupt acknowledgement, durable fencing and fresh post-fence quiescence before conservative reservation settlement. Idempotent on an already settled exact child. A refusal never authorizes a replacement builder, fabricated terminal result or blocker clear.",
+        input: objectInput({
+          execution_id: { type: "string", minLength: 1 },
+          dispatch_id: { type: "string", minLength: 1 },
+          decision_artifact_id: { type: "string", minLength: 1, description: "Exact locally indexed APPROVED decision ID or record_key whose dispatch_abandonment contract matches the active WU, dispatch and child session." },
+        }, ["execution_id", "dispatch_id", "decision_artifact_id"]),
+        execute: async (input, context) => json(await sessionRecovery.recoverOrphan({
+          ...input, session_id: context?.sessionID,
+        })),
+      })
+      editor.add({
         name: "harness_initialize_project",
         description: "Create missing Harness governance, OpenCode agents, and skills in the current canonical project. Call only after the owner has reviewed and explicitly approved the project summary. Never overwrite existing files.",
         input: objectInput({
