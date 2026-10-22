@@ -10,7 +10,7 @@ const mutations = [
   ['review-attribution', 'src/execution/process-recovery.js', "d.expected_agent !== 'harness-reviewer'", 'false', 'tests/execution/process-recovery.test.js'],
   ['cumulative-context', 'src/execution/process-recovery.js', 'state.authority_resolutions?.[state.wu?.wu_id] ?? []', '(state.authority_resolutions?.[state.wu?.wu_id] ?? []).slice(-1)', 'tests/execution/process-recovery.test.js'],
   ['pending-ci', 'src/execution/external-observation.js', "return required.every(name => {", 'return true || required.every(name => {', 'tests/execution/external-wait.test.js'],
-  ['delegated-gates', 'src/execution/contract-correction.js', 'before.commands.some(check => !after.commands.some(nextCheck => stableHash(check) === stableHash(nextCheck)))', 'false', 'tests/execution/contract-correction.test.js'],
+  ['delegated-gates', 'src/execution/contract-correction.js', 'before.commands.some(check => !after.commands.some(nextCheck => preservedOrLongerTimeout(check, nextCheck, 30000)))', 'false', 'tests/execution/delegated-timeout-correction.test.js'],
   ['evidence-set', 'src/execution/process-recovery.js', 'd.process_evidence_hash !== stableHash(r.evidence)', 'false', 'tests/execution/process-recovery.test.js'],
 ]
 const baseline = spawnSync(process.execPath, ['--test', ...new Set(mutations.map(m => m[4]))], { cwd: root, encoding: 'utf8', timeout: 60000 })

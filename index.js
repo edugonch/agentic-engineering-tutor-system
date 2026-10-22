@@ -52,6 +52,7 @@ import {
 } from "./src/decision/index.js"
 import { runContinuationProbe, createContinuationDriver, createCandidateRegistry, captureBaseSnapshot, freezeCandidate, freezeCandidateFromCommit, candidateGitTree, runCandidateVerification, checkExecutionReadiness, pathDigest, validateVerificationContract, runExecutionController, claimDispatchLaunch, createLaunchBindingRegistry, findPendingLaunchBinding, createVerificationReceipt, writeVerificationReceipt, createGitHubAdapter, runMergeCandidate, runVerifyExternalMerge, observeMergeProgress, BLOCKER_CLASSES, CI_CONCLUSIONS } from "./src/execution/index.js"
 import { verificationContractHash } from "./src/execution/verification-contract.js"
+import { inspectRepeatedVerificationTimeout } from "./src/execution/verification-results.js"
 
 const json = (value) => ({ content: JSON.stringify(value, null, 2) })
 const objectInput = (properties, required = []) => ({
@@ -859,6 +860,18 @@ export default Plugin.define({
             return json({ status: "BLOCKED_UNDECLARED_CHECK", check_id: input.verification_check_id })
           const execution = await findWuExecution(requireProjectRoot(), candidate.verification_contract?.source_wu_id)
           if (!execution) return json({ status: "BLOCKED_BUDGET", reason: "Verification requires its active WU execution" })
+          const history = await inspectRepeatedVerificationTimeout(
+            join(requireProjectRoot(), ".harness", "execution", "verification-results"),
+            { candidate_id: input.candidate_id,
+              verification_contract_hash: candidate.manifest?.verification_contract?.contract_hash ?? null,
+              check_id: input.verification_check_id },
+          )
+          if (history.blocked) return json({
+            status: "BLOCKED_REPEATED_TIMEOUT", candidate_id: input.candidate_id,
+            check_id: input.verification_check_id, timeout_count: history.timeouts,
+            evidence_ids: history.evidence_ids,
+            reason: "Two frozen candidate/check timeout receipts already exist. Do not repeat the unchanged check. Inspect exact receipts and the existing governed verification-correction authority; preserve full coverage and do not claim PASS.",
+          })
           // Runtime identities come from OpenCode, never from model input.
           const sessionResponse = await ctx.session.get({ sessionID: context.sessionID })
           const runtimeSession = sessionResponse?.data ?? sessionResponse

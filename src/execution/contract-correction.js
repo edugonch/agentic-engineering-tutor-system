@@ -3,6 +3,18 @@ import { stableHash } from "./serialize.js"
 import { verificationContractHash } from "./verification-contract.js"
 import { validateVerificationContract } from "./verification.js"
 
+// A longer timeout changes only how long an identical declared command may
+// execute. Technical delegation may increase this limit, never reduce it or
+// change the command, its setup behavior, environment or required coverage.
+function preservedOrLongerTimeout(before, after, implicitMs) {
+  if (!after) return false
+  const { timeout_ms: oldTimeout, ...oldIdentity } = before
+  const { timeout_ms: newTimeout, ...newIdentity } = after
+  if (stableHash(oldIdentity) !== stableHash(newIdentity)) return false
+  if (oldTimeout === newTimeout) return true
+  return Number.isSafeInteger(newTimeout) && newTimeout > (oldTimeout ?? implicitMs)
+}
+
 // Corrections are explicit new events, never replacement of frozen evidence.
 export function validateContractCorrection(state, body) {
   const old = state.wu?.contract, next = body.contract
@@ -44,9 +56,12 @@ export function validateContractCorrection(state, body) {
     // Automatically delegated edits can add checks, never replace/drop a gate,
     // setup prerequisite or capability. Semantic substitutions need their own
     // already-approved source, rather than a model's assertion of equivalence.
-    if (stableHash(before.setup ?? []) !== stableHash(after.setup ?? []) || stableHash(before.capabilities ?? []) !== stableHash(after.capabilities ?? []) ||
-        before.commands.some(check => !after.commands.some(nextCheck => stableHash(check) === stableHash(nextCheck))))
-      throw new Error("Delegated correction must preserve every existing check, setup and capability; add coverage or use an applicable approved substitution")
+    const oldSetup = before.setup ?? [], newSetup = after.setup ?? []
+    if (oldSetup.length !== newSetup.length ||
+        oldSetup.some(step => !newSetup.some(nextStep => preservedOrLongerTimeout(step, nextStep, 300000))) ||
+        stableHash(before.capabilities ?? []) !== stableHash(after.capabilities ?? []) ||
+        before.commands.some(check => !after.commands.some(nextCheck => preservedOrLongerTimeout(check, nextCheck, 30000))))
+      throw new Error("Delegated correction must preserve every existing check, setup and capability; only a monotonic timeout extension is allowed without substitution authority")
   }
   if (stableHash(before.environment ?? {}) !== stableHash(after.environment ?? {})) throw new Error("Correction cannot change environment policy")
   const mapping = body.check_mapping ?? {}, ids = new Set(after.commands.map(c => c.id))

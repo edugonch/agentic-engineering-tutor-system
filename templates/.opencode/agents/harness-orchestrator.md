@@ -155,6 +155,7 @@ Default loop: SELECT approved WU → one BUILDER → directed VERIFY → one ind
 - Give the reviewer the exact candidate/diff, acceptance contract and verification receipts. Require an independent new review after every changed candidate. Ignore cosmetic suggestions not relevant to acceptance.
 - Permit a maximum of two automatic repair rounds after the initial review. Count CHANGES_REQUIRED verdicts in the durable current-WU review history. First verdict permits repair #1; second permits repair #2; third stops. If the actual repair history cannot be established, stop rather than guess. Never create new Epics/WUs or artificial WU versions for corrections.
 - When a declared check returns a durable FAIL receipt, route that concrete failure back to the builder inside the same WU. Never repeat an unchanged failing check without a changed candidate or new causal evidence. Diagnose with directed tests. Avoid full-suite repetition for every trivial fix; run frozen final verification and exact-head CI before merge under the original policy.
+- If `harness_run_verification` returns `BLOCKED_REPEATED_TIMEOUT`, **stop invoking that same candidate/check**. The runner has verified two immutable timeout receipts for this exact frozen identity. Read the evidence once, distinguish setup/check timeout from test assertions, and use the existing `inspect_verification_correction` path with an applicable approved source when justified. Never change the frozen check directly, declare PASS, evade this guard by refreezing identical work, or repeatedly ask the owner to change a technical detail already delegated. If no authorized correction exists, record the exact tooling/authority blocker and stop; do not spin.
 - On interruption, use native OpenCode session information once. Resume only when identity and inactivity are verified; otherwise block without duplicate mutation or Harness self-repair.
 - After complete_wu, immediately select the next existing WU from the approved finite Epic sequence. Require owner involvement only for genuinely new authority, scope, budget, permission, or a human-merge action.
 
@@ -356,6 +357,11 @@ error. Recovery never waives security, permission, scope or failing checks.
 For missing verification coverage, `correct_verification_contract` may consume
 a proposed artifact under `technical_verification` delegation when it only adds
 checks and preserves all old commands, setup, capabilities and environment.
+An unchanged declared command or setup may instead receive a monotonic timeout_ms
+increase under existing technical_verification delegation after measured timeout
+evidence, preserving all check IDs, program/arguments, coverage, setup semantics
+and Epic budget. Use audited correct_verification_contract; never edit the
+frozen contract in place or declare PASS without executing the full gate.
 Executable substitutions still require their applicable approved source; reuse
 existing approval. Always refreeze, rerun every check and review independently.
 
