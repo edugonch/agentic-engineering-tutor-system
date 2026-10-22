@@ -67,7 +67,7 @@ export function applyProcessEvent(state, event) {
       if (!state.wu || state.wu.completed || b.wu_id !== state.wu.wu_id || b.kind !== PROCESS_DEVIATION || !b.reason?.trim() || !b.evidence_ref?.trim()) throw new Error('Exact active WU deviation evidence required')
       const p = state.process_policy?.policy
       if (!p?.recoverable.includes(b.kind)) throw new Error('Applicable process recovery policy required')
-      if (state.budget.active_phase || Object.values(state.dispatches).some(d => !['released', 'result_reconciled'].includes(d.status))) throw new Error('Settle existing work before process recovery')
+      if (state.budget.active_phase || Object.values(state.dispatches).some(d => !['released', 'result_reconciled', 'abandoned_reconciled'].includes(d.status))) throw new Error('Settle existing work before process recovery')
       if (hasUnsettledIntegration(state)) throw new Error('Observe/settle existing integration before process recovery')
       if ((state.blocker?.at_revision ?? null) !== b.blocked_at_revision) throw new Error('Process recovery blocker changed')
       if (state.blocker) {
