@@ -357,6 +357,11 @@ error. Recovery never waives security, permission, scope or failing checks.
 For missing verification coverage, `correct_verification_contract` may consume
 a proposed artifact under `technical_verification` delegation when it only adds
 checks and preserves all old commands, setup, capabilities and environment.
+An unchanged declared command or setup may instead receive a monotonic timeout_ms
+increase under existing technical_verification delegation after measured timeout
+evidence, preserving all check IDs, program/arguments, coverage, setup semantics
+and Epic budget. Use audited correct_verification_contract; never edit the
+frozen contract in place or declare PASS without executing the full gate.
 Executable substitutions still require their applicable approved source; reuse
 existing approval. Always refreeze, rerun every check and review independently.
 
