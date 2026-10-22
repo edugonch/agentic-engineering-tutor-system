@@ -163,7 +163,7 @@ export async function auditRecovery(controller) {
         budget: { total_seconds: state.budget.total_seconds, used_seconds: state.budget.used_seconds,
           reserved_seconds: state.budget.reserved_seconds },
         unfinished_dispatches: Object.entries(state.dispatches)
-          .filter(([, d]) => !["released", "result_reconciled"].includes(d.status))
+          .filter(([, d]) => !["released", "result_reconciled", "abandoned_reconciled"].includes(d.status))
           .map(([dispatch_id, d]) => ({ dispatch_id, status: d.status })),
       },
     }
