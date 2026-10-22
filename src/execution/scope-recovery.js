@@ -63,7 +63,7 @@ export async function inspectStaleWorktreeScope(root, state, registry) {
     throw new Error("SCOPE_RECOVERY_ORDER: active WU differs from frozen sequence")
   }
   if (state.budget.active_phase || state.external_wait || state.verification_phase ||
-      Object.values(state.dispatches).some(d => !["released", "result_reconciled"].includes(d.status))) {
+      Object.values(state.dispatches).some(d => !["released", "result_reconciled", "abandoned_reconciled"].includes(d.status))) {
     throw new Error("SCOPE_RECOVERY_ACTIVE: unsettled work or external integration prevents reconciliation")
   }
   if (Object.values(state.candidates).some(c => c.wu_id === state.wu.wu_id) ||
