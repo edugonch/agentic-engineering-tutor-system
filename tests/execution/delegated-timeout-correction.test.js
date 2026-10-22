@@ -35,7 +35,7 @@ function fixture() {
       expected_contract_hash: old.contract_hash, reason: "Measured JIT timeout, same frozen commands",
       check_mapping: { "jit-test": ["jit-test"], "jit-lint": ["jit-lint"] } })
   }
-  return { verification, correct }
+  return { verification, correct, state }
 }
 
 test("virtual E05-07-E recovery: technical delegation can extend a timed-out frozen check", () => {
@@ -65,8 +65,9 @@ test("delegation cannot weaken timeout, remove checks or change a command", () =
 })
 
 test("technical timeout correction still requires existing delegated process authority", () => {
-  const { verification, correct } = fixture()
+  const { verification, correct, state } = fixture()
   const changed = structuredClone(verification)
   changed.commands[0].timeout_ms = 420000
-  assert.doesNotThrow(() => correct(changed))
+  state.process_policy.policy.technical_verification = false
+  assert.throws(() => correct(changed), /approved source provenance/)
 })
