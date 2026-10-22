@@ -33,7 +33,7 @@ export function validateContractCorrection(state, body) {
       throw new Error("Verification-only correction must retain the exact original contract and approved proposal")
   }
   if (state.budget.active_phase || state.verification_phase || hasUnsettledIntegration(state) ||
-      Object.values(state.dispatches).some(d => !["released", "result_reconciled"].includes(d.status)))
+      Object.values(state.dispatches).some(d => !["released", "result_reconciled", "abandoned_reconciled"].includes(d.status)))
     throw new Error("Contract correction requires settled dispatches, phases and merge")
   if (state.blocker && state.blocker.class !== "BLOCKED_TOOLING") throw new Error("Resolve non-tooling authority before correcting verification")
   // Keep the approved outcome, acceptance and original budget text verbatim.
