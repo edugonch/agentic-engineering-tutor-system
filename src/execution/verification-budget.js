@@ -21,7 +21,7 @@ export async function withVerificationBudget({ controller, candidate, check_id, 
     state.verification_retry?.wu_id === state.wu.wu_id &&
     check_id === setupRecovery.check_id &&
     !runtimeSession?.parentID && (!runtimeSession || runtimeSession.id === session) &&
-    Object.values(state.dispatches).every(d => ["released", "result_reconciled"].includes(d.status))
+    Object.values(state.dispatches).every(d => ["released", "result_reconciled", "abandoned_reconciled"].includes(d.status))
   // This flag may only be set by the runtime after independent receipt checks.
   // The check itself, its setup, immutable candidate and budget stay unchanged.
   if (state.completed || state.wu?.completed || (state.blocker && !eligibleSetupRecovery)) {
