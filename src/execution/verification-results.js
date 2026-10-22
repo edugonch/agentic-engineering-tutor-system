@@ -10,7 +10,7 @@
 // filename/content correspondence and fails readVerificationReceipt.
 
 import { createHash } from "node:crypto"
-import { mkdir, readFile, writeFile } from "node:fs/promises"
+import { mkdir, readFile, readdir, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { stableSerialize } from "./serialize.js"
 
@@ -79,4 +79,33 @@ export async function readVerificationReceipt(dir, evidenceId) {
     throw new Error(`RECEIPT_TAMPERED: ${evidenceId} no longer hashes to its filename/content.`)
   }
   return receipt
+}
+
+// Read only immutable receipts for the exact frozen candidate/check/contract.
+// A transient timeout permits one retry. After two identical timeout outcomes,
+// return a diagnostic stop instead of executing the unchanged failing command
+// indefinitely. No ledger event, authority change, or synthetic PASS is created.
+export async function inspectRepeatedVerificationTimeout(dir, { candidate_id, verification_contract_hash, check_id }) {
+  let files
+  try { files = await readdir(dir) }
+  catch (error) { if (error.code === "ENOENT") return { blocked: false, timeouts: 0 }; throw error }
+  let timeouts = 0
+  let hasPass = false
+  const evidenceIds = []
+  for (const file of files) {
+    if (!/^verify-[a-f0-9]{64}\.json$/.test(file)) continue
+    const id = file.slice(0, -5)
+    const receipt = await readVerificationReceipt(dir, id)
+    if (receipt.candidate_id !== candidate_id ||
+        receipt.verification_contract_hash !== verification_contract_hash ||
+        receipt.check_id !== check_id) continue
+    if (receipt.status === "PASS") hasPass = true
+    const output = receipt.output
+    if (receipt.status === "FAIL" && (output?.timed_out === true ||
+        output?.setup_results?.some(step => step.timedOut === true))) {
+      timeouts++
+      evidenceIds.push(id)
+    }
+  }
+  return { blocked: !hasPass && timeouts >= 2, timeouts, evidence_ids: evidenceIds.sort() }
 }
