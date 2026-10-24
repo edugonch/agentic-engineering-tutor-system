@@ -366,11 +366,15 @@ export async function createExecutionController({ root, dir, now = () => Date.no
 
   // Serialize the authorization check and one bounded remote effect against
   // every local writer. Never call commit/snapshot from inside effect.
-  const guardedEffect = async ({ holder_session_id, expected_revision, validate, effect }) =>
+  const guardedEffect = async ({ holder_session_id, expected_revision, lease_fencing_token, validate, effect }) =>
     withMutex(mutexPath, async () => {
       const { state, lease } = await load()
       if (!lease || isLeaseExpired(lease, now) || lease.holder_session_id !== holder_session_id)
         throw new Error("Remote effect requires a current execution lease.")
+      if (lease_fencing_token === undefined || lease_fencing_token === null)
+        throw new Error("Remote effect requires lease_fencing_token.")
+      if (lease_fencing_token !== lease.fencing_token)
+        throw new Error(`Stale fencing token before remote effect: current ${lease.fencing_token}, got ${lease_fencing_token}.`)
       if (state.revision !== expected_revision) throw new Error("State changed before remote effect; revalidate.")
       if (state.completed) throw new Error("Execution completed.")
       if (Object.values(state.dispatches).some(d => d.fence?.child_session_id === holder_session_id)) throw new Error("ORPHAN_CHILD_FENCED: remote effect denied")
