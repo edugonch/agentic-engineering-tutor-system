@@ -1013,7 +1013,15 @@ export async function readWorkUnitDefinition(projectRoot, wuId, epicId, sourceId
   if (requireProposed && (record.source_system !== "harness-artifact" || record.import_status !== "RECORDED_ARTIFACT")) throw new Error("Delegated correction requires a PROPOSED WU source; rejected or superseded sources cannot be reused")
   if (requireApproved && (record.declared_authority !== "APPROVED" || record.import_status !== "OWNER_APPROVED_ARTIFACT")) throw new Error("Contract correction requires an APPROVED WU source")
   if (record.source_id !== wuId && !record.source_id.startsWith(`${wuId}-`)) throw new Error("WU source identity mismatch")
-  if (!(record.relationships ?? []).includes(epicId)) throw new Error("WU contract must be linked to the approved Epic")
+  // Imports resolve relationships to canonical record_keys while the approved
+  // mandate may still reference its Epic by source_id. Accept either identity
+  // without trusting an unrelated WU or changing authority requirements.
+  const epicMatches = index.records.filter(r => r.classification === "EPIC" &&
+    (r.source_id === epicId || r.record_key === epicId))
+  const links = new Set(record.relationships ?? [])
+  if (!links.has(epicId) && !(epicMatches.length === 1 && links.has(epicMatches[0].record_key))) {
+    throw new Error("WU contract must be linked to the approved Epic")
+  }
   const path = resolve(root, record.archive_path)
   if (!inside(root, path)) throw new Error("WU contract path escapes project")
   await ensureSafeParents(root, path)
