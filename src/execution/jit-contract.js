@@ -8,6 +8,13 @@ import { epicExecutionRemaining, usesPlanningEstimates } from "./time-policy.js"
 import { inspectAcceptanceCoverage } from "./acceptance-coverage.js"
 
 export const isTechnicalWuContractBlocker = blocker => {
+  // Recover this narrowly identified WU source checksum blocker without
+  // treating unrelated tooling or safety failures as a planning issue.
+  if (blocker?.class === "BLOCKED_TOOLING") {
+    const reason = String(blocker.reason ?? "")
+    return /\bNext WU [A-Za-z0-9._:-]+ blocked\b/.test(reason) &&
+      reason.includes("WU contract integrity mismatch")
+  }
   if (blocker?.class !== "BLOCKED_AUTHORITY" ||
       (blocker.authority_question && blocker.authority_question.domain !== "governance")) return false
   // Legacy prose is at most an advisory recovery hint. A negated occurrence
@@ -39,11 +46,26 @@ export async function deriveVerificationContract(projectRoot) {
   }
 }
 
+// Outer artifact approval is distinct from the embedded planning state.
+// Frozen Epic authority permits technical normalization; the latter is not
+// new owner approval of business scope or permissions.
+export function isPlanningWuSource(content) {
+  const blocks = [...String(content).matchAll(/^---[ \t]*\r?\n([\s\S]*?)^---[ \t]*\r?$/gm)]
+  if (!blocks.length) return /^status: "(?:DRAFT|PROPOSED)"\s*$/m.test(content)
+  const status = block => block.match(/^status:[ \t]*(.*?)[ \t]*$/m)?.[1]
+    ?.trim().replace(/^["']|["']$/g, "")
+  const outer = status(blocks[0][1])
+  if (outer === "DRAFT" || outer === "PROPOSED") return true
+  if (outer !== "APPROVED") return false
+  return blocks.slice(1).some(block =>
+    /^(?:DRAFT|PROPOSED)\s*\(planning;\s*non-executable\)$/i.test(status(block[1]) ?? ""))
+}
+
 // The estimate is derived from the *remaining Epic allocation* and remaining
 // frozen WU count. Under WU_PLANNING_ESTIMATES this is not an individual hard cap.
 export async function compileMandateDerivedWu(root, state, wuId, definition) {
   if (!usesPlanningEstimates(state)) throw new Error("JIT_TIME_POLICY_REQUIRED: approved WU_PLANNING_ESTIMATES policy is required")
-  if (!/^status: "(?:DRAFT|PROPOSED)"\s*$/m.test(definition.content)) throw new Error("JIT_SOURCE_REQUIRED: only a planning DRAFT or PROPOSED WU can be normalized")
+  if (!isPlanningWuSource(definition.content)) throw new Error("JIT_SOURCE_REQUIRED: only a planning DRAFT or PROPOSED WU can be normalized")
   if (/^execution_contract: /m.test(definition.content)) throw new Error("JIT_SOURCE_ALREADY_EXECUTABLE: select the existing executable source instead")
   // A planning identity alone is not permission to invent acceptance or scope.
   // Require visible existing acceptance and scope language in the frozen source.
@@ -84,6 +106,8 @@ export async function inspectMandateDerivedWu(root, state, wuId, definition) {
     return {
       status: "READY_FOR_JIT",
       source_record_key: contract.source_record_key,
+      ...(contract.source_integrity ? { source_integrity: contract.source_integrity,
+        indexed_source_hash: contract.indexed_source_hash, current_source_hash: contract.source_hash } : {}),
       planning_estimate_seconds: contract.active_seconds,
       verification_check_ids: contract.derivation.verification_check_ids,
       acceptance_coverage: inspectAcceptanceCoverage(contract.verification_contract),

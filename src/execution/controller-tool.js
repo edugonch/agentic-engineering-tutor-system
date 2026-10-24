@@ -399,7 +399,7 @@ export async function runExecutionController(projectRoot, input, candidateRegist
     const sourceId = String(input.wu_artifact_id ?? next)
     try {
       const definition = await readWorkUnitDefinition(projectRoot, next,
-        state.mandate.source_artifact_id, sourceId)
+        state.mandate.source_artifact_id, sourceId, { allowPlanningDrift: true })
       if (!/^execution_contract: /m.test(definition.content)) {
         const diagnosis = await inspectMandateDerivedWu(projectRoot, state, next, definition)
         return { action, ...diagnosis, next_wu_id: next, revision: state.revision,
@@ -440,7 +440,8 @@ export async function runExecutionController(projectRoot, input, candidateRegist
     if (snap.state.staged_wu_contract) throw new Error("JIT contract already staged")
     if (snap.state.mandate.wu_sequence?.[snap.state.activated_wu_ids.length] !== wuId ||
         (snap.state.wu && !snap.state.wu.completed)) throw new Error("JIT_WU_ORDER: next frozen WU with completed predecessor required")
-    const source = await readWorkUnitDefinition(projectRoot, wuId, snap.state.mandate.source_artifact_id, sourceId)
+    const source = await readWorkUnitDefinition(projectRoot, wuId, snap.state.mandate.source_artifact_id, sourceId,
+      { allowPlanningDrift: true })
     const contract = await compileMandateDerivedWu(projectRoot, snap.state, wuId, source)
     const body = { wu_id: wuId, source_artifact_id: sourceId, expected_revision: snap.state.revision,
       derived_technical: true, blocker_at_revision: snap.state.blocker?.at_revision ?? null, contract }

@@ -487,7 +487,8 @@ export function applyEvent(previous, event, { historicalReplay = false } = {}) {
       if (state.completed || state.mandate?.authority_kind !== MANDATE_AUTHORITY.OWNER_APPROVED_EPIC) {
         throw new Error("WU_CONTRACT_STAGE requires an incomplete owner-approved Epic")
       }
-      if (state.blocker && state.blocker.class !== "BLOCKED_AUTHORITY") {
+      if (state.blocker && state.blocker.class !== "BLOCKED_AUTHORITY" &&
+          !(body.derived_technical === true && isTechnicalWuContractBlocker(state.blocker))) {
         throw new Error("WU_CONTRACT_STAGE cannot bypass an unrelated blocker")
       }
       if (state.wu && !state.wu.completed) throw new Error("WU_CONTRACT_STAGE requires the preceding WU to be completed")
