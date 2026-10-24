@@ -23,7 +23,7 @@ const narrative = [
   "Expected write scope: scheduling/ persistencia.",
 ].join("\n")
 
-async function withRoot(fn) {
+async function withRoot(fn, { wuStatus = "APPROVED" } = {}) {
   const root = await mkdtemp(join(tmpdir(), "harness-planning-drift-"))
   try {
     await writeFile(join(root, "README.md"), "Project description.\n")
@@ -35,7 +35,7 @@ async function withRoot(fn) {
     })
     await recordKnowledgeArtifact(root, {
       artifact_type: "work-unit", artifact_id: WU, title: "Work Unit",
-      status: "APPROVED", content: narrative, parent_refs: [EPIC],
+      status: wuStatus, content: narrative, parent_refs: [EPIC],
       owner_confirmed: true,
     })
     const path = join(root, ".harness", "work-units", WU + ".md")
@@ -81,24 +81,18 @@ test("JIT permits audited drift in an unactivated WU without rewriting indexed a
 
 test("UNKNOWN indexed planning record accepts approved wrapper with embedded draft without elevating authority", async () => {
   await withRoot(async ({ root, path }) => {
-    // Recreate the ALFRAN discrepancy: the knowledge index was registered
-    // while the WU was DRAFT, but its live artifact now says APPROVED on the
-    // outside and DRAFT (planning; non-executable) in the narrative.
+    // Reproduce the ALFRAN discrepancy using the normal registration API:
+    // indexed WU=DRAFT/UNKNOWN, later modified live wrapper=APPROVED,
+    // embedded narrative remains DRAFT (planning; non-executable).
     const indexPath = join(root, ".harness/knowledge/index.json")
     const index = JSON.parse(await readFile(indexPath, "utf8"))
     const original = index.records.find(record => record.source_id === WU)
-    assert.equal(original.declared_authority, "APPROVED")
-    const draftOuter = (await readFile(path, "utf8")).replace(
-      'status: "APPROVED"', 'status: "DRAFT"')
-    // Only test setup simulates a historical DRAFT registration; production
-    // does not rewrite the knowledge index or historical hashes.
-    const oldHash = hash(Buffer.from(draftOuter))
-    original.declared_authority = "UNKNOWN"
-    original.import_status = "RECORDED_ARTIFACT"
-    original.sha256 = oldHash
-    original.source_revision = oldHash
-    original.byte_size = Buffer.byteLength(draftOuter)
-    await writeFile(indexPath, JSON.stringify(index) + "\n")
+    assert.equal(original.declared_authority, "UNKNOWN")
+    assert.equal(original.import_status, "RECORDED_ARTIFACT")
+    const oldHash = original.sha256
+    const originalBytes = await readFile(path, "utf8")
+    assert.equal(hash(Buffer.from(originalBytes)), oldHash)
+    await writeFile(path, originalBytes.replace('status: "DRAFT"', 'status: "APPROVED"'))
     const current = await readFile(path)
     assert.notEqual(hash(current), oldHash)
     assert.match(current.toString("utf8"), /status: "APPROVED"/)
@@ -140,7 +134,7 @@ test("UNKNOWN indexed planning record accepts approved wrapper with embedded dra
         /integrity mismatch/,
       )
     }
-  })
+  }, { wuStatus: "DRAFT" })
 })
 
 test("planning drift cannot change artifact identity, status or parent authority", async () => {
