@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto"
 import { assertTrustedApproval } from "./trusted-approvals.js"
+import { isPlanningWuSource } from "./planning-wu-status.js"
 import { lstat, mkdir, open, readFile, readdir, rename, unlink, writeFile } from "node:fs/promises"
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path"
 
