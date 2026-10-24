@@ -2,7 +2,7 @@
 // even when the frozen mandate refers to the Epic by its original source_id.
 import test from "node:test"
 import assert from "node:assert/strict"
-import { mkdtemp, readFile, rm } from "node:fs/promises"
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import {
@@ -83,9 +83,10 @@ test("JIT reader rejects missing or unrelated Epic links", async () => {
 
 test("legacy direct source_id links remain valid without conferring approval", async () => {
   await withRoot(async root => {
+    await writeFile(join(root, "README.md"), "Project story.\n")
     await recordKnowledgeArtifact(root, {
       artifact_type: "epic", artifact_id: EPIC, title: "Approved Epic",
-      content: "Epic contract.", status: "DRAFT", owner_confirmed: true,
+      content: "Epic contract.", status: "DRAFT", source_refs: ["README.md"], owner_confirmed: true,
     })
     await recordKnowledgeArtifact(root, {
       artifact_type: "work-unit", artifact_id: WU, title: "Work Unit",
