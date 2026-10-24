@@ -114,6 +114,9 @@ export async function runMergeCandidate(projectRoot, { candidate_id, adapter, se
     }
   }
   if (state.merge?.status === "VERIFIED") return { status: "already_verified", execution_id, ...(superseded_stale_merge ? { superseded_stale_merge } : {}) }
+  // A STARTED recovery cannot bypass an unresolved blocker (including when
+  // the remote PR has already merged). The owner must resolve it first.
+  if (state.blocker) throw new Error(`merge blocked: unresolved blocker ${state.blocker.class}.`)
 
   // A fresh start must pass the durable gate.
   if (!state.merge || (state.merge.status === "STARTED" && !state.blocker)) {
