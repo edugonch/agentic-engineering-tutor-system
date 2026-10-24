@@ -1001,9 +1001,38 @@ function parseExecutionMandate(content) {
   } catch { return null }
 }
 
+// Only JIT may read modified, not-yet-activated planning bytes. We never
+// rewrite or relabel the historical indexed APPROVED artifact. Strict callers
+// (including contract correction) still reject any checksum mismatch.
+function eligiblePlanningDrift(record, wuId, epicId, content) {
+  if (record.source_system !== "harness-artifact" ||
+      record.source_id !== wuId ||
+      record.archive_path !== ".harness/work-units/" + wuId + ".md") return false
+  const approved = record.declared_authority === "APPROVED" && record.import_status === "OWNER_APPROVED_ARTIFACT"
+  const planning = record.declared_authority === "UNKNOWN" && record.import_status === "RECORDED_ARTIFACT"
+  if (!approved && !planning) return false
+  const envelope = content.match(/^---\r?\n([\s\S]*?)^---[ \t]*\r?$/m)?.[1]
+  if (!envelope) return false
+  const field = name => envelope.match(new RegExp("^" + name + ":[ \\t]*(.+?)[ \\t]*$", "m"))?.[1]
+    ?.trim().replace(/^["']|["']$/g, "")
+  if (field("artifact_id") !== wuId || field("artifact_type") !== "work-unit") return false
+  if (approved ? field("status") !== "APPROVED" : !["DRAFT", "PROPOSED"].includes(field("status"))) return false
+  let refs
+  try {
+    const sourceRefs = JSON.parse(field("source_refs") ?? "")
+    const parentRefs = JSON.parse(field("parent_refs") ?? "")
+    if (!Array.isArray(sourceRefs) || !Array.isArray(parentRefs) ||
+        [...sourceRefs, ...parentRefs].some(ref => typeof ref !== "string")) return false
+    if (!parentRefs.includes(epicId)) return false
+    refs = [...new Set([...sourceRefs, ...parentRefs])]
+  } catch { return false }
+  const expected = record.source_relationships ?? record.relationships ?? []
+  return refs.length === expected.length && refs.every(ref => expected.includes(ref))
+}
+
 // Resolve and verify the actual WU source before execution. The approved Epic
 // supplies authority; a derived WU need not falsely claim owner approval.
-export async function readWorkUnitDefinition(projectRoot, wuId, epicId, sourceId = wuId, { requireApproved = false, requireProposed = false } = {}) {
+export async function readWorkUnitDefinition(projectRoot, wuId, epicId, sourceId = wuId, { requireApproved = false, requireProposed = false, allowPlanningDrift = false } = {}) {
   const root = assertRoot(projectRoot)
   const index = await readIndex(root)
   const matches = index.records.filter(r => r.classification === "WORK_UNIT" &&
@@ -1028,9 +1057,19 @@ export async function readWorkUnitDefinition(projectRoot, wuId, epicId, sourceId
   const info = await lstat(path)
   if (!info.isFile() || info.isSymbolicLink()) throw new Error("WU contract must be a regular file")
   const bytes = await readFile(path)
-  if (sha256(bytes) !== record.sha256) throw new Error("WU contract integrity mismatch")
-  if (requireProposed && !/^---\r?\nartifact_id: [^\n]+\r?\nartifact_type: "work-unit"\r?\nstatus: "PROPOSED"\r?\n/.test(bytes.toString("utf8"))) throw new Error("Delegated correction requires a PROPOSED WU source; rejected or superseded sources cannot be reused")
-  return { ...(requireApproved ? { source_authority: "APPROVED" } : {}), content: bytes.toString("utf8"), source_record_key: record.record_key, source_hash: record.sha256, source_revision: record.source_revision }
+  const content = bytes.toString("utf8")
+  const currentHash = sha256(bytes)
+  const drift = currentHash !== record.sha256
+  if (drift && (!allowPlanningDrift || requireApproved || requireProposed ||
+      !eligiblePlanningDrift(record, wuId, epicId, content))) {
+    throw new Error("WU contract integrity mismatch")
+  }
+  if (requireProposed && !/^---\r?\nartifact_id: [^\n]+\r?\nartifact_type: "work-unit"\r?\nstatus: "PROPOSED"\r?\n/.test(content)) throw new Error("Delegated correction requires a PROPOSED WU source; rejected or superseded sources cannot be reused")
+  return { ...(requireApproved ? { source_authority: "APPROVED" } : {}), content,
+    source_record_key: record.record_key, source_hash: currentHash,
+    source_revision: drift ? currentHash : record.source_revision,
+    ...(drift ? { source_integrity: "UNACTIVATED_PLANNING_DRIFT",
+      indexed_source_hash: record.sha256 } : {}) }
 }
 
 /**
