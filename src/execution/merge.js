@@ -114,6 +114,9 @@ export async function runMergeCandidate(projectRoot, { candidate_id, adapter, se
     }
   }
   if (state.merge?.status === "VERIFIED") return { status: "already_verified", execution_id, ...(superseded_stale_merge ? { superseded_stale_merge } : {}) }
+  // A STARTED recovery cannot bypass an unresolved blocker (including when
+  // the remote PR has already merged). The owner must resolve it first.
+  if (state.blocker) throw new Error(`merge blocked: unresolved blocker ${state.blocker.class}.`)
 
   // A fresh start must pass the durable gate.
   if (!state.merge || (state.merge.status === "STARTED" && !state.blocker)) {
@@ -209,10 +212,15 @@ export async function runMergeCandidate(projectRoot, { candidate_id, adapter, se
   if (!state.merge) {
     await commitMerge(controller, session_id, `${attemptKey}:start`, "MERGE_START", { tree_sha, attempt_id: attempt })
   }
+  // Recovery from STARTED skips MERGE_START/commitMerge; explicitly acquire
+  // authority before the remote effect. Pass this exact fencing generation
+  // into guardedEffect so an expired/replaced caller cannot merge.
+  const effectLease = await controller.acquire(session_id)
   const fresh = await controller.snapshot()
   const merged = await controller.guardedEffect({
     holder_session_id: session_id,
     expected_revision: fresh.state.revision,
+    lease_fencing_token: effectLease.fencing_token,
     validate(current) {
       const gate = canStartMerge(current)
       if (!gate.allowed) throw new Error(`merge blocked: ${gate.reason}.`)
