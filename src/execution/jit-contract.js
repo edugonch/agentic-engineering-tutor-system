@@ -1,6 +1,8 @@
 // The approved Epic authorizes the next *frozen* WU to execute, not an owner
 // APPROVED label on every technical normalization. Keep these authorities distinct.
 import { readFile } from "node:fs/promises"
+import { isPlanningWuSource } from "../planning-wu-status.js"
+export { isPlanningWuSource } from "../planning-wu-status.js"
 import { join } from "node:path"
 import { compileWuContract } from "./wu-contract.js"
 import { stableHash } from "./serialize.js"
@@ -49,18 +51,6 @@ export async function deriveVerificationContract(projectRoot) {
 // Outer artifact approval is distinct from the embedded planning state.
 // Frozen Epic authority permits technical normalization; the latter is not
 // new owner approval of business scope or permissions.
-export function isPlanningWuSource(content) {
-  const blocks = [...String(content).matchAll(/^---[ \t]*\r?\n([\s\S]*?)^---[ \t]*\r?$/gm)]
-  if (!blocks.length) return /^status: "(?:DRAFT|PROPOSED)"\s*$/m.test(content)
-  const status = block => block.match(/^status:[ \t]*(.*?)[ \t]*$/m)?.[1]
-    ?.trim().replace(/^["']|["']$/g, "")
-  const outer = status(blocks[0][1])
-  if (outer === "DRAFT" || outer === "PROPOSED") return true
-  if (outer !== "APPROVED") return false
-  return blocks.slice(1).some(block =>
-    /^(?:DRAFT|PROPOSED)\s*\(planning;\s*non-executable\)$/i.test(status(block[1]) ?? ""))
-}
-
 // The estimate is derived from the *remaining Epic allocation* and remaining
 // frozen WU count. Under WU_PLANNING_ESTIMATES this is not an individual hard cap.
 export async function compileMandateDerivedWu(root, state, wuId, definition) {

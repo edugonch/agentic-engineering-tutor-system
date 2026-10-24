@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto"
 import { assertTrustedApproval } from "./trusted-approvals.js"
+import { isPlanningWuSource } from "./planning-wu-status.js"
 import { lstat, mkdir, open, readFile, readdir, rename, unlink, writeFile } from "node:fs/promises"
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path"
 
@@ -1016,7 +1017,7 @@ function eligiblePlanningDrift(record, wuId, epicId, content) {
   const field = name => envelope.match(new RegExp("^" + name + ":[ \\t]*(.+?)[ \\t]*$", "m"))?.[1]
     ?.trim().replace(/^["']|["']$/g, "")
   if (field("artifact_id") !== wuId || field("artifact_type") !== "work-unit") return false
-  if (approved ? field("status") !== "APPROVED" : !["DRAFT", "PROPOSED"].includes(field("status"))) return false
+  if (approved ? field("status") !== "APPROVED" : !isPlanningWuSource(content)) return false
   let refs
   try {
     const sourceRefs = JSON.parse(field("source_refs") ?? "")
