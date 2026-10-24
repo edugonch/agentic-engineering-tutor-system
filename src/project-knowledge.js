@@ -1016,7 +1016,7 @@ function eligiblePlanningDrift(record, wuId, epicId, content) {
   const field = name => envelope.match(new RegExp("^" + name + ":[ \\t]*(.+?)[ \\t]*$", "m"))?.[1]
     ?.trim().replace(/^["']|["']$/g, "")
   if (field("artifact_id") !== wuId || field("artifact_type") !== "work-unit") return false
-  if (approved ? field("status") !== "APPROVED" : !["DRAFT", "PROPOSED"].includes(field("status"))) return false
+  if (approved ? field("status") !== "APPROVED" : !isPlanningWuSource(content)) return false
   let refs
   try {
     const sourceRefs = JSON.parse(field("source_refs") ?? "")
