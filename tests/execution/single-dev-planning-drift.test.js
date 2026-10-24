@@ -79,6 +79,70 @@ test("JIT permits audited drift in an unactivated WU without rewriting indexed a
   })
 })
 
+test("UNKNOWN indexed planning record accepts approved wrapper with embedded draft without elevating authority", async () => {
+  await withRoot(async ({ root, path }) => {
+    // Recreate the ALFRAN discrepancy: the knowledge index was registered
+    // while the WU was DRAFT, but its live artifact now says APPROVED on the
+    // outside and DRAFT (planning; non-executable) in the narrative.
+    const indexPath = join(root, ".harness/knowledge/index.json")
+    const index = JSON.parse(await readFile(indexPath, "utf8"))
+    const original = index.records.find(record => record.source_id === WU)
+    assert.equal(original.declared_authority, "APPROVED")
+    const draftOuter = (await readFile(path, "utf8")).replace(
+      'status: "APPROVED"', 'status: "DRAFT"')
+    // Only test setup simulates a historical DRAFT registration; production
+    // does not rewrite the knowledge index or historical hashes.
+    const oldHash = hash(Buffer.from(draftOuter))
+    original.declared_authority = "UNKNOWN"
+    original.import_status = "RECORDED_ARTIFACT"
+    original.sha256 = oldHash
+    original.source_revision = oldHash
+    original.byte_size = Buffer.byteLength(draftOuter)
+    await writeFile(indexPath, JSON.stringify(index) + "\n")
+    const current = await readFile(path)
+    assert.notEqual(hash(current), oldHash)
+    assert.match(current.toString("utf8"), /status: "APPROVED"/)
+    assert.match(current.toString("utf8"), /status: DRAFT \(planning; non-executable\)/)
+
+    await assert.rejects(
+      readWorkUnitDefinition(root, WU, EPIC),
+      /integrity mismatch/,
+    )
+    await assert.rejects(
+      readWorkUnitDefinition(root, WU, EPIC, WU,
+        { allowPlanningDrift: true, requireApproved: true }),
+      /Contract correction requires an APPROVED WU source/,
+    )
+    const source = await readWorkUnitDefinition(root, WU, EPIC, WU,
+      { allowPlanningDrift: true })
+    assert.equal(source.source_integrity, "UNACTIVATED_PLANNING_DRIFT")
+    assert.equal(source.indexed_source_hash, oldHash)
+    assert.equal(source.source_hash, hash(current))
+    assert.ok(isPlanningWuSource(source.content))
+    const after = JSON.parse(await readFile(indexPath, "utf8"))
+    const indexed = after.records.find(record => record.source_id === WU)
+    assert.equal(indexed.declared_authority, "UNKNOWN")
+    assert.equal(indexed.sha256, oldHash)
+
+    for (const changed of [
+      current.toString("utf8").replace(
+        "status: DRAFT (planning; non-executable)",
+        "status: APPROVED"),
+      current.toString("utf8").replace(
+        'status: "APPROVED"', 'status: "REJECTED"'),
+      current.toString("utf8").replace(EPIC, "OTHER-EPIC"),
+      current.toString("utf8").replace(
+        'artifact_id: "E05-20-E"', 'artifact_id: "E05-OTHER"'),
+    ]) {
+      await writeFile(path, changed)
+      await assert.rejects(
+        readWorkUnitDefinition(root, WU, EPIC, WU, { allowPlanningDrift: true }),
+        /integrity mismatch/,
+      )
+    }
+  })
+})
+
 test("planning drift cannot change artifact identity, status or parent authority", async () => {
   await withRoot(async ({ root, path, indexedBytes }) => {
     for (const changed of [
