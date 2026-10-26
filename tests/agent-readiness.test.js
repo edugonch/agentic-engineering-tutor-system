@@ -1,6 +1,6 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { assessWorkUnitAgentReadiness, checkWorkUnitAgentReadiness, guardHarnessSubagentPermission, isApprovedWorkUnitActivation } from "../src/agent-readiness.js"
+import { assessWorkUnitAgentReadiness, checkWorkUnitAgentReadiness, guardHarnessSubagentPermission, inspectAgentModelRouting, isApprovedWorkUnitActivation } from "../src/agent-readiness.js"
 import { recordArtifactWithActivationGate } from "../src/activation-gate.js"
 
 const roles = [
@@ -14,6 +14,34 @@ test("accepts required agents from OpenCode's data response when both are subage
   assert.equal(result.ready, true)
   assert.deepEqual(result.missing, [])
   assert.equal(result.available.length, 2)
+})
+
+test("model routing is not a credential health check", async () => {
+  const loaded = [
+    { name: "harness-builder", mode: "subagent", model: { providerID: "opencode", id: "worker-test" } },
+    { name: "harness-reviewer", mode: "subagent", model: "other/reviewer-test" },
+  ]
+  const read = await checkWorkUnitAgentReadiness({
+    list: async () => ({ data: loaded }),
+    get: async () => { throw new Error("no introspection") },
+  })
+  assert.equal(read.ready, true, "registry is structurally ready")
+  assert.equal(read.operational_ready, false, "a registry lookup is never an auth probe")
+  assert.equal(read.model_routing.provider_auth, "AUTH_UNCHECKED")
+  assert.equal(read.model_routing.status, "CONFIG_RESOLVED")
+  assert.deepEqual(read.model_routing.agents.map(a => a.model_id), ["opencode/worker-test", "other/reviewer-test"])
+  assert.ok(read.model_routing.agents.every(a => a.provider_auth === "AUTH_UNCHECKED"))
+})
+
+test("missing or malformed model routes never imply verified credentials", () => {
+  const routing = inspectAgentModelRouting({ data: [
+    { name: "harness-builder", mode: "subagent" },
+    { name: "harness-reviewer", mode: "subagent", model: { id: "no-provider" } },
+  ] })
+  assert.equal(routing.status, "MODEL_UNRESOLVED")
+  assert.deepEqual(routing.agents.map(x => x.model_id), [null, null])
+  assert.equal(routing.provider_auth, "AUTH_UNCHECKED")
+  assert.equal(inspectAgentModelRouting(null).status, "UNKNOWN")
 })
 
 test("blocks when a required Harness role is missing", () => {
