@@ -26,6 +26,10 @@ import { deriveVerificationCorrection, correctionCheckMapping } from "./contract
 // AMBIGUOUS hazard: recovery marks AMBIGUOUS and never auto-launches.
 
 import { join } from "node:path"
+
+// Long-running event projections must not exhaust the controller lease before
+// the guarded commit begins. Keep core fencing and expiry checks unchanged.
+export const CONTROLLER_TOOL_LEASE_TTL_MS = 300000
 import { compileWuContract } from "./wu-contract.js"
 import { validateContractCorrection } from "./contract-correction.js"
 import { assertTrustedReviewHandoff } from "./review-handoff.js"
@@ -90,7 +94,7 @@ async function commitAction(controller, holder, operation_id, operation_type, bo
 export async function claimDispatchLaunch(projectRoot, { execution_id, dispatch_id, call_id, session_id }) {
   const executionId = sanitizeId(execution_id, "execution_id")
   const dir = join(projectRoot, ".harness", "execution", "controller", executionId)
-  const controller = await createExecutionController({ dir, lease_ttl_ms: 30000 })
+  const controller = await createExecutionController({ dir, lease_ttl_ms: CONTROLLER_TOOL_LEASE_TTL_MS })
   const holder = String(session_id)
   const operation_id = `${executionId}:claim:${dispatch_id}:${call_id}`
   const lease = await controller.acquire(holder)
@@ -119,7 +123,7 @@ export async function runExecutionController(projectRoot, input, candidateRegist
       verification_evidence_ids: input.verification_evidence_ids ?? [],
     })) }
   }
-  const controller = await createExecutionController({ dir, lease_ttl_ms: 30000 })
+  const controller = await createExecutionController({ dir, lease_ttl_ms: CONTROLLER_TOOL_LEASE_TTL_MS })
   const registry = candidateRegistry ?? createCandidateRegistry({ dir: join(projectRoot, ".harness", "execution") })
   const holder = String(input.session_id ?? `controller:${executionId}`)
 
