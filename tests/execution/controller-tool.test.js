@@ -4,7 +4,7 @@ import assert from "node:assert/strict"
 import { mkdtemp, rm, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { runExecutionController } from "../../src/execution/controller-tool.js"
+import { runExecutionController, CONTROLLER_TOOL_LEASE_TTL_MS } from "../../src/execution/controller-tool.js"
 import { freezeCandidate } from "../../src/execution/candidate.js"
 import { createCandidateRegistry } from "../../src/execution/candidate-registry.js"
 import { createVerificationReceipt, writeVerificationReceipt } from "../../src/execution/verification-results.js"
@@ -71,6 +71,10 @@ async function governed(root, sid, executionId = "E1", contract = CONTRACT) {
   await seedWuContract(root, "WU-01", "epic-001", 100, contract)
   await runExecutionController(root, { action: "approve_mandate", execution_id: executionId, session_id: sid, epic_artifact_id: "epic-001" })
 }
+
+test("controller tool lease accommodates large-ledger replay without relaxing core fencing", () => {
+  assert.equal(CONTROLLER_TOOL_LEASE_TTL_MS, 300000)
+})
 
 test("init → status → verify roundtrip", async () => {
   await withRoot(async (root) => {
