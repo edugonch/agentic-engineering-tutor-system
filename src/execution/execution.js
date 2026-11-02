@@ -104,11 +104,11 @@ export async function createExecutionController({ root, dir, now = () => Date.no
 
   const commit = async (operation, { holder_session_id, expected_revision, lease_fencing_token }) =>
     withMutex(mutexPath, async () => {
-      const { events, state, lease } = await load()
-
-      if (Object.values(state.dispatches).some(d => d.fence?.child_session_id === holder_session_id)) {
-        throw new Error("ORPHAN_CHILD_FENCED: stale child cannot commit controller mutations")
-      }
+      // Authorize at mutex admission, BEFORE replaying the possibly large
+      // event journal. The mutex prevents any competing lease acquisition until
+      // this commit exits, so an expensive projection cannot expire its own
+      // already-admitted write. Holder/fencing/revision checks remain mandatory.
+      const lease = await readLease(leasePath)
       if (!lease || isLeaseExpired(lease, now)) {
         throw new Error("No valid execution lease; acquire one before committing.")
       }
@@ -120,6 +120,10 @@ export async function createExecutionController({ root, dir, now = () => Date.no
       }
       if (lease_fencing_token !== lease.fencing_token) {
         throw new Error(`Stale fencing token: current ${lease.fencing_token}, got ${lease_fencing_token}.`)
+      }
+      const { events, state } = await load()
+      if (Object.values(state.dispatches).some(d => d.fence?.child_session_id === holder_session_id)) {
+        throw new Error("ORPHAN_CHILD_FENCED: stale child cannot commit controller mutations")
       }
       if (expected_revision !== state.revision) {
         throw new Error(`Stale revision: expected ${expected_revision}, current ${state.revision}.`)
@@ -368,13 +372,17 @@ export async function createExecutionController({ root, dir, now = () => Date.no
   // every local writer. Never call commit/snapshot from inside effect.
   const guardedEffect = async ({ holder_session_id, expected_revision, lease_fencing_token, validate, effect }) =>
     withMutex(mutexPath, async () => {
-      const { state, lease } = await load()
+      // Hold the mutex while validating authority and executing the remote
+      // effect. Check lease freshness before costly projection; competing
+      // callers cannot acquire a new generation while we hold this mutex.
+      const lease = await readLease(leasePath)
       if (!lease || isLeaseExpired(lease, now) || lease.holder_session_id !== holder_session_id)
         throw new Error("Remote effect requires a current execution lease.")
       if (lease_fencing_token === undefined || lease_fencing_token === null)
         throw new Error("Remote effect requires lease_fencing_token.")
       if (lease_fencing_token !== lease.fencing_token)
         throw new Error(`Stale fencing token before remote effect: current ${lease.fencing_token}, got ${lease_fencing_token}.`)
+      const { state } = await load()
       if (state.revision !== expected_revision) throw new Error("State changed before remote effect; revalidate.")
       if (state.completed) throw new Error("Execution completed.")
       if (Object.values(state.dispatches).some(d => d.fence?.child_session_id === holder_session_id)) throw new Error("ORPHAN_CHILD_FENCED: remote effect denied")
