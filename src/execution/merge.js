@@ -16,9 +16,12 @@ function isSuccessConclusion(value) {
   return typeof value === "string" && value.toUpperCase() === "SUCCESS"
 }
 
-async function commitMerge(controller, session_id, operation_id, operation_type, body) {
-  const lease = await controller.acquire(session_id)
+export async function commitMerge(controller, session_id, operation_id, operation_type, body) {
+  // Project first. Only then acquire a fresh lease and immediately commit:
+  // at high journal sizes an extra projection inside a 30s lease window
+  // could expire the token before the commit's own validation.
   const snap = await controller.snapshot()
+  const lease = await controller.acquire(session_id)
   const res = await controller.commit(
     { operation_id, operation_type, body },
     { holder_session_id: session_id, expected_revision: snap.state.revision, lease_fencing_token: lease.fencing_token },
@@ -215,8 +218,8 @@ export async function runMergeCandidate(projectRoot, { candidate_id, adapter, se
   // Recovery from STARTED skips MERGE_START/commitMerge; explicitly acquire
   // authority before the remote effect. Pass this exact fencing generation
   // into guardedEffect so an expired/replaced caller cannot merge.
-  const effectLease = await controller.acquire(session_id)
   const fresh = await controller.snapshot()
+  const effectLease = await controller.acquire(session_id)
   const merged = await controller.guardedEffect({
     holder_session_id: session_id,
     expected_revision: fresh.state.revision,
