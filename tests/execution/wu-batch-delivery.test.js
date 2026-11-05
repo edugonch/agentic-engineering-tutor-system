@@ -8,6 +8,7 @@ import { sha256 } from "../../src/execution/serialize.js"
 import { batchHash } from "../../src/execution/wu-batch.js"
 import { recordKnowledgeArtifact } from "../../src/project-knowledge.js"
 import { runExecutionController } from "../../src/execution/controller-tool.js"
+import { createExecutionController } from "../../src/execution/execution.js"
 
 const ids = ["WU-27", "WU-28", "WU-29"]
 const source = id => [
@@ -197,7 +198,10 @@ test("public controller accepts explicit grouping of already indexed DRAFT WUs",
     assert.ok(configured.wu.batch.members.every(x => x.source_hash && x.source_record_key))
     const reread = await invoke({ action: "status" })
     assert.equal(reread.wu.batch.batch_hash, configured.batch_hash)
-    assert.equal(reread.activated_wu_ids.length, 1)
+    const controller = await createExecutionController({
+      dir: join(root, ".harness", "execution", "controller", "batch-test"),
+    })
+    assert.equal((await controller.snapshot()).state.activated_wu_ids.length, 1)
     const replay = await invoke({ action: "configure_wu_batch",
       expected_revision: state.revision, owner_confirmed: true, authorization_ref: "owner-instruction:batch",
       wu_ids: ids })
