@@ -40,6 +40,7 @@ import { compileMandateDerivedWu, inspectMandateDerivedWu, isTechnicalWuContract
 import { inspectAuthorityGap } from "./authority-triage.js"
 import { wuBudgetUsage } from "./wu-budget.js"
 import { stableHash } from "./serialize.js"
+import { batchHash, requireBatchCoverage, MAX_WU_BATCH_SIZE } from "./wu-batch.js"
 import { applyEvent } from "./state.js"
 import { createExecutionController } from "./execution.js"
 import { createCandidateRegistry } from "./candidate-registry.js"
@@ -539,6 +540,63 @@ export async function runExecutionController(projectRoot, input, candidateRegist
     return { action, commit_status: res.status, wu_id: wuId, ...(await summary(controller)) }
   }
 
+  if (action === "configure_wu_batch") {
+    // Explicit owner instruction, never an implicit change in the Epic plan.
+    // Future members are read from the existing knowledge index, not invented.
+    const snap = await controller.snapshot()
+    if (!Array.isArray(input.wu_ids) || input.wu_ids.length < 2 ||
+        input.wu_ids.length > MAX_WU_BATCH_SIZE) {
+      throw new Error("configure_wu_batch requires 2 to 10 explicit ordered wu_ids")
+    }
+    if (snap.state.wu?.batch) {
+      if (JSON.stringify(snap.state.wu.batch.wu_ids) === JSON.stringify(input.wu_ids)) {
+        return { action, commit_status: "already_configured", batch_hash: snap.state.wu.batch.batch_hash,
+          wu_ids: snap.state.wu.batch.wu_ids, ...(await summary(controller)) }
+      }
+      throw new Error("configure_wu_batch: another batch is already frozen")
+    }
+    if (!Number.isSafeInteger(input.expected_revision) ||
+        input.expected_revision !== snap.state.revision) {
+      throw new Error("configure_wu_batch requires the current expected_revision")
+    }
+    const lead = snap.state.wu?.contract
+    if (!lead || !lead.source_record_key || !lead.source_hash || typeof lead.source_content !== "string") {
+      throw new Error("configure_wu_batch requires the active WU's exact compiled source")
+    }
+    const members = [{
+      wu_id: snap.state.wu.wu_id,
+      source_record_key: lead.source_record_key,
+      source_hash: lead.source_hash,
+      source_content: lead.source_content,
+    }]
+    for (const wu_id of input.wu_ids.slice(1)) {
+      const source = await readWorkUnitDefinition(projectRoot, wu_id,
+        snap.state.mandate.source_artifact_id, wu_id, { allowPlanningDrift: true })
+      members.push({
+        wu_id, source_record_key: source.source_record_key,
+        source_hash: source.source_hash, source_content: source.content,
+        ...(source.indexed_source_hash ? { indexed_source_hash: source.indexed_source_hash } : {}),
+      })
+    }
+    const proposal = {
+      wu_ids: [...input.wu_ids],
+      members,
+      lead_contract_hash: lead.contract_hash,
+      owner_confirmed: input.owner_confirmed,
+      authorization_ref: input.authorization_ref,
+    }
+    proposal.batch_hash = batchHash(proposal)
+    // The pure state transition verifies continuity, untouched WU,
+    // required acceptance/scope and immutable source hashes before writing.
+    applyEvent(snap.state, { operation_type: "WU_BATCH_CONFIGURE", body: proposal,
+      next_revision: snap.state.revision + 1 })
+    const res = await commitAction(controller, holder,
+      `${executionId}:wu-batch:${snap.state.wu.wu_id}:${proposal.batch_hash}`,
+      "WU_BATCH_CONFIGURE", proposal)
+    return { action, commit_status: res.status, batch_hash: proposal.batch_hash,
+      wu_ids: proposal.wu_ids, ...(await summary(controller)) }
+  }
+
   if (action === "status") {
     return { action, ...(await summary(controller)) }
   }
@@ -647,7 +705,7 @@ export async function runExecutionController(projectRoot, input, candidateRegist
     const requiredCheckIds = (candidate.verification_contract?.commands ?? []).map((check) => check.id)
     const contractHash = candidate.manifest?.verification_contract?.contract_hash ?? null
     const res = await controller.commit(
-      { operation_id: `${executionId}:candidate:${candidateId}`, operation_type: "FREEZE_CANDIDATE", body: { candidate_id: candidateId, wu_id: wuId, manifest_hash: candidate.manifest_hash, tree_hash: candidate.tree_hash, manifest: candidate.manifest ?? null, verification_contract_hash: contractHash, required_check_ids: requiredCheckIds, wu_contract_hash: snap.state.wu.contract?.contract_hash ?? null } },
+      { operation_id: `${executionId}:candidate:${candidateId}`, operation_type: "FREEZE_CANDIDATE", body: { candidate_id: candidateId, wu_id: wuId, manifest_hash: candidate.manifest_hash, tree_hash: candidate.tree_hash, manifest: candidate.manifest ?? null, verification_contract_hash: contractHash, required_check_ids: requiredCheckIds, wu_contract_hash: snap.state.wu.contract?.contract_hash ?? null, ...(snap.state.wu.batch ? { batch_hash: snap.state.wu.batch.batch_hash } : {}) } },
       { holder_session_id: holder, expected_revision: snap.state.revision, lease_fencing_token: lease.fencing_token },
     )
     return { action, commit_status: res.status, candidate_id: candidateId, ...(await summary(controller)) }
@@ -677,10 +735,16 @@ export async function runExecutionController(projectRoot, input, candidateRegist
       if (verdict === "PASS" && receipt.status !== "PASS") throw new Error(`record_review: PASS verdict requires all-PASS evidence; ${evidenceId} is ${receipt.status}.`)
       verifiedCheckIds.push(receipt.check_id)
     }
+    if (snap.state.wu?.batch && verdict === "PASS") {
+      requireBatchCoverage(snap.state.wu.batch, input.batch_coverage_wu_ids, "record_review")
+    }
     const provenance = process.env.HARNESS_REVIEW_HANDOFF_STRICT === "1" && verdict === "PASS"
       ? assertTrustedReviewHandoff(snap.state, input) : null
     const res = await controller.commit(
-      { operation_id: `${executionId}:review:${candidateId}:${stableHash({ verdict, evidenceIds, reviewer: input.reviewer ?? null, provenance })}`, operation_type: "RECORD_REVIEW", body: { candidate_id: candidateId, verdict, candidate_hashes: { manifest_hash: frozenCandidate.manifest_hash, tree_hash: frozenCandidate.tree_hash }, reviewer: input.reviewer ?? null, verification_evidence_ids: evidenceIds, verification_contract_hash: contractHash, verified_check_ids: verifiedCheckIds, ...(provenance ?? {}) } },
+      { operation_id: `${executionId}:review:${candidateId}:${stableHash({ verdict, evidenceIds, reviewer: input.reviewer ?? null, provenance, batch_hash: snap.state.wu?.batch?.batch_hash ?? null, batch_coverage_wu_ids: input.batch_coverage_wu_ids ?? null })}`, operation_type: "RECORD_REVIEW", body: { candidate_id: candidateId, verdict, candidate_hashes: { manifest_hash: frozenCandidate.manifest_hash, tree_hash: frozenCandidate.tree_hash }, reviewer: input.reviewer ?? null, verification_evidence_ids: evidenceIds, verification_contract_hash: contractHash, verified_check_ids: verifiedCheckIds, ...(snap.state.wu?.batch ? {
+        batch_hash: snap.state.wu.batch.batch_hash,
+        batch_coverage_wu_ids: input.batch_coverage_wu_ids ?? [],
+      } : {}), ...(provenance ?? {}) } },
       { holder_session_id: holder, expected_revision: snap.state.revision, lease_fencing_token: lease.fencing_token },
     )
     return { action, commit_status: res.status, candidate_id: candidateId, ...(await summary(controller)) }
@@ -689,7 +753,9 @@ export async function runExecutionController(projectRoot, input, candidateRegist
   if (action === "complete_wu") {
     const candidateId = String(input.candidate_id ?? "")
     if (!candidateId) throw new Error("complete_wu requires candidate_id.")
-    const res = await commitAction(controller, holder, `${executionId}:wu-complete:${candidateId}`, "WU_COMPLETE", { candidate_id: candidateId })
+    const active = (await controller.snapshot()).state.wu
+    const res = await commitAction(controller, holder, `${executionId}:wu-complete:${candidateId}`, "WU_COMPLETE",
+      { candidate_id: candidateId, ...(active?.batch ? { batch_hash: active.batch.batch_hash } : {}) })
     return { action, commit_status: res.status, candidate_id: candidateId, ...(await summary(controller)) }
   }
 
