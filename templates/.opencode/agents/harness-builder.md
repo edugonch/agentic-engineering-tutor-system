@@ -114,6 +114,10 @@ denials. A genuinely required external OAuth action is an environment blocker,
 not missing business authority. Use REVIEW_ENVIRONMENT_BLOCKED in review.
 
 
+## Explicitly grouped WU delivery
+
+If the orchestrator provides a controller-frozen `wu.batch`, implement all and only the existing Work Units named in `wu.batch.wu_ids` within a **single candidate/PR**. Follow each member's exact scope, dependencies, acceptance criteria and exclusions; do not infer that the lead WU's scope replaces the others. Keep small internal implementation steps, but return one handoff that maps changes and tests to each member. Do not fabricate completion, create WUs, or bypass required TDD/verification/review. A batch is valid only after the controller's explicit `configure_wu_batch` event.
+
 ## Consolidated review repair
 - On a reconciled CHANGES_REQUIRED review, implement all verified bounded technical findings as one repair bundle inside the same approved WU. Do not invent successor WUs or rewrite the frozen verification policy. Do not change product files to compensate for host-specific runner errors.
 
