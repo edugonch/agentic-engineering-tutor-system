@@ -122,6 +122,29 @@ test("grouping requires explicit owner instruction, contiguous frozen membership
   assert.throws(() => next(next(base, "WU_BATCH_CONFIGURE", proposal()), "WU_BATCH_CONFIGURE", proposal()), /already frozen/)
 })
 
+test("exactly ten frozen WUs are supported; an eleventh is refused", () => {
+  const state = setup()
+  const allIds = Array.from({ length: 11 }, (_, i) => "WU-" + (27 + i))
+  state.mandate.wu_sequence = allIds
+  state.mandate.max_wus = allIds.length
+  const proposalFor = ids => {
+    const p = {
+      wu_ids: ids, members: ids.map(member),
+      lead_contract_hash: contract.contract_hash,
+      owner_confirmed: true,
+      authorization_ref: "owner-instruction:recurring-batches-of-ten",
+    }
+    return { ...p, batch_hash: batchHash(p) }
+  }
+  const ten = next(state, "WU_BATCH_CONFIGURE", proposalFor(allIds.slice(0, 10)))
+  assert.equal(ten.wu.batch.wu_ids.length, 10)
+  assert.equal(ten.activated_wu_ids.length, 1)
+  assert.throws(
+    () => next(state, "WU_BATCH_CONFIGURE", proposalFor(allIds)),
+    /2 to 10 unique ordered Work Units/,
+  )
+})
+
 test("frozen candidate must match batch provenance and explicit review coverage", () => {
   const grouped = next(setup(), "WU_BATCH_CONFIGURE", proposal())
   const freeze = {
