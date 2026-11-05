@@ -7,6 +7,7 @@ import { validateContractCorrection } from "./contract-correction.js"
 import { executionProgress, supervisorProgress } from "./progress.js"
 import { isStaleWorktreeScopeBlocker } from "./scope-recovery.js"
 import { wuBudgetUsage } from "./wu-budget.js"
+import { assertBatchConfiguration, requireBatchCoverage } from "./wu-batch.js"
 // State projection. state is derived, never canonical: events.ndjson is the
 // source of truth and every read replays it. This makes divergence between a
 // cached state file and the log impossible by construction.
@@ -57,6 +58,12 @@ export function canStartMerge(state, { historicalReplay = false } = {}) {
   const candidate = state.candidates[binding.candidate_id]
   if (!candidate) return { allowed: false, reason: "bound candidate not recorded" }
   if (candidate.wu_id !== state.wu.wu_id) return { allowed: false, reason: "bound candidate not in active WU" }
+  if (state.wu.batch &&
+      (candidate.batch_hash !== state.wu.batch.batch_hash ||
+       !state.reviews[binding.candidate_id] ||
+       state.reviews[binding.candidate_id].batch_hash !== state.wu.batch.batch_hash)) {
+    return { allowed: false, reason: "batch candidate or review does not match the exact frozen WU batch" }
+  }
   if (candidate.superseded_by_contract) return { allowed: false, reason: "candidate contract superseded; refreeze and review" }
   const review = state.reviews[binding.candidate_id]
   if (!review || review.verdict !== "PASS") return { allowed: false, reason: "no PASS review" }
@@ -94,6 +101,12 @@ export function canVerifyExternalMerge(state) {
   const candidate = state.candidates[binding.candidate_id]
   if (!candidate) return { allowed: false, reason: "bound candidate not recorded" }
   if (candidate.wu_id !== state.wu.wu_id) return { allowed: false, reason: "bound candidate not in active WU" }
+  if (state.wu.batch &&
+      (candidate.batch_hash !== state.wu.batch.batch_hash ||
+       !state.reviews[binding.candidate_id] ||
+       state.reviews[binding.candidate_id].batch_hash !== state.wu.batch.batch_hash)) {
+    return { allowed: false, reason: "batch candidate or review does not match the exact frozen WU batch" }
+  }
   if (candidate.superseded_by_contract) return { allowed: false, reason: "candidate contract superseded; refreeze and review" }
   const review = state.reviews[binding.candidate_id]
   if (!review || review.verdict !== "PASS") return { allowed: false, reason: "no PASS review" }
@@ -604,6 +617,20 @@ export function applyEvent(previous, event, { historicalReplay = false } = {}) {
       break
     }
 
+    case "WU_BATCH_CONFIGURE": {
+      assertBatchConfiguration(state, body)
+      state.wu.batch = {
+        wu_ids: [...body.wu_ids],
+        members: structuredClone(body.members),
+        lead_contract_hash: body.lead_contract_hash,
+        batch_hash: body.batch_hash,
+        owner_confirmed: true,
+        authorization_ref: body.authorization_ref,
+        configured_at_revision: state.revision,
+      }
+      break
+    }
+
     case "PHASE_START": {
       if (state.budget.active_phase) throw new Error("Cannot start a phase while another is active.")
       if (!body.phase) throw new Error("PHASE_START requires a phase.")
@@ -895,6 +922,12 @@ export function applyEvent(previous, event, { historicalReplay = false } = {}) {
       if (body.wu_id && state.wu && body.wu_id !== state.wu.wu_id) {
         throw new Error(`FREEZE_CANDIDATE wu mismatch: candidate belongs to ${body.wu_id}, active WU is ${state.wu.wu_id}.`)
       }
+      if (state.wu?.batch && body.batch_hash !== state.wu.batch.batch_hash) {
+        throw new Error("FREEZE_CANDIDATE must bind the exact frozen WU batch")
+      }
+      if (!state.wu?.batch && body.batch_hash) {
+        throw new Error("FREEZE_CANDIDATE unexpected batch hash")
+      }
       state.candidates[body.candidate_id] = {
         wu_id: body.wu_id ?? null,
         manifest_hash: body.manifest_hash,
@@ -903,6 +936,7 @@ export function applyEvent(previous, event, { historicalReplay = false } = {}) {
         verification_contract_hash: body.verification_contract_hash ?? null,
         required_check_ids: body.required_check_ids ?? [],
         wu_contract_hash: body.wu_contract_hash ?? null,
+        ...(body.batch_hash ? { batch_hash: body.batch_hash } : {}),
         ...(requiresTdd(state) ? { process_recorded_revision: state.revision } : {}),
       }
       break
@@ -912,6 +946,17 @@ export function applyEvent(previous, event, { historicalReplay = false } = {}) {
       const candidate = state.candidates[body.candidate_id]
       if (candidate?.superseded_by_contract) throw new Error("Candidate contract superseded; refreeze and obtain fresh review")
       if (!candidate) throw new Error(`Cannot review unknown candidate ${body.candidate_id}.`)
+      if (state.wu?.batch) {
+        if (candidate.batch_hash !== state.wu.batch.batch_hash ||
+            body.batch_hash !== state.wu.batch.batch_hash) {
+          throw new Error("RECORD_REVIEW must attest the exact frozen WU batch")
+        }
+        if (body.verdict === "PASS") {
+          requireBatchCoverage(state.wu.batch, body.batch_coverage_wu_ids, "RECORD_REVIEW")
+        }
+      } else if (body.batch_hash || body.batch_coverage_wu_ids) {
+        throw new Error("RECORD_REVIEW unexpected batch provenance for a single WU")
+      }
       const hashes = body.candidate_hashes ?? {}
       if (hashes.manifest_hash !== candidate.manifest_hash || hashes.tree_hash !== candidate.tree_hash) {
         throw new Error(`Review hash mismatch for candidate ${body.candidate_id}: a review cannot accredit a different candidate.`)
@@ -942,6 +987,8 @@ export function applyEvent(previous, event, { historicalReplay = false } = {}) {
         verification_evidence_ids: evidenceIds,
         verification_contract_hash: body.verification_contract_hash ?? null,
         verified_check_ids: verifiedCheckIds,
+        ...(state.wu?.batch ? { batch_hash: body.batch_hash,
+          batch_coverage_wu_ids: body.batch_coverage_wu_ids ?? [] } : {}),
       }
       break
     }
@@ -1289,6 +1336,16 @@ export function applyEvent(previous, event, { historicalReplay = false } = {}) {
       }
       const review = state.reviews[candidateId]
       if (!review) throw new Error(`WU_COMPLETE: no review recorded for candidate ${candidateId}.`)
+      if (state.wu.batch) {
+        if (body.batch_hash !== state.wu.batch.batch_hash ||
+            candidate.batch_hash !== state.wu.batch.batch_hash ||
+            review.batch_hash !== state.wu.batch.batch_hash) {
+          throw new Error("WU_COMPLETE batch identity does not match the reviewed candidate")
+        }
+        requireBatchCoverage(state.wu.batch, review.batch_coverage_wu_ids, "WU_COMPLETE")
+      } else if (body.batch_hash) {
+        throw new Error("WU_COMPLETE unexpected batch hash")
+      }
       if (review.verdict !== "PASS") {
         throw new Error(`WU_COMPLETE: review verdict is ${review.verdict}, not PASS.`)
       }
@@ -1322,9 +1379,33 @@ export function applyEvent(previous, event, { historicalReplay = false } = {}) {
         }
       }
       state.wu.completed = true
-      state.wu.completion = { candidate_id: candidateId, at_revision: state.revision }
+      state.wu.completion = { candidate_id: candidateId, at_revision: state.revision,
+        ...(state.wu.batch ? { batch_hash: state.wu.batch.batch_hash } : {}) }
       state.completed_wus ??= {}
-      state.completed_wus[state.wu.wu_id] = structuredClone(state.wu.completion)
+      if (state.wu.batch) {
+        // One accepted candidate, review, PR and VERIFIED merge cover all
+        // individually identifiable, pre-frozen consecutive WUs. Record each
+        // completion and advance the sequence atomically; never fabricate
+        // individual builder/merge/review events for these members.
+        const ids = state.wu.batch.wu_ids
+        const sequenceIndex = state.activated_wu_ids.length - 1
+        if (state.mandate.wu_sequence.slice(sequenceIndex, sequenceIndex + ids.length)
+          .some((id, index) => id !== ids[index])) {
+          throw new Error("WU_COMPLETE frozen batch sequence changed")
+        }
+        for (const member of state.wu.batch.members) {
+          if (state.completed_wus[member.wu_id]) throw new Error("WU_COMPLETE member already completed")
+          state.completed_wus[member.wu_id] = {
+            ...state.wu.completion, wu_id: member.wu_id,
+            source_record_key: member.source_record_key,
+            source_hash: member.source_hash,
+            merge_commit_sha: state.merge?.merge_commit_sha ?? null,
+          }
+        }
+        state.activated_wu_ids.push(...ids.slice(1))
+      } else {
+        state.completed_wus[state.wu.wu_id] = structuredClone(state.wu.completion)
+      }
       break
     }
 
@@ -1343,7 +1424,7 @@ export function applyEvent(previous, event, { historicalReplay = false } = {}) {
           throw new Error(`COMPLETE blocked: frozen Epic WU sequence is incomplete; remaining WUs: ${remaining.join(", ")}.`)
         }
         const terminalWu = state.mandate.wu_sequence.at(-1)
-        if (!state.wu || state.wu.wu_id !== terminalWu || !state.wu.completed) {
+        if (!state.wu || (state.wu.batch?.wu_ids.at(-1) ?? state.wu.wu_id) !== terminalWu || !state.wu.completed) {
           throw new Error(`COMPLETE blocked: terminal frozen WU ${terminalWu} is not durably complete.`)
         }
       }

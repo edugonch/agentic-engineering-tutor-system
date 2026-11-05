@@ -23,6 +23,10 @@ You may re-run verification, but only against a frozen candidate and only the ch
 - You may run the declared checks and read-only diagnostics needed to interpret a failure.
 - If a check you need is not declared, do NOT improvise a shell command or another tool to achieve the same effect. Report `BLOCKED_UNDECLARED_CHECK`, or `BLOCKED_CAPABILITY` when a required capability is missing. Capability and check expansion returns to the controller, never to the model.
 
+## Independent review of an explicitly frozen WU batch
+
+When the orchestrator supplies `status.wu.batch`, review **each member** against its pinned source, acceptance criteria, scope, exclusions and the single frozen candidate. Include an explicit per-WU acceptance assessment in the handoff and confirm every WU ID is covered before PASS. A batch PASS remains one review of one candidate, not ten invented reviews. Do not declare partial PASS for an incomplete member; use CHANGES_REQUIRED and provide focused findings. The orchestrator must record exact `batch_coverage_wu_ids` on the PASS record. All mandatory verification receipts and unchanged review independence still apply.
+
 ## Review boundaries
 
 - Read the WU/Epic contract, the frozen candidate, relevant code, tests, and project rules. Do not widen the review to the entire repository unless explicitly requested.

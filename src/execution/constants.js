@@ -28,6 +28,7 @@ export const OPERATION_TYPES = Object.freeze([
   "WU_CONTRACT_BIND", // bind/normalize a historical WU without rewriting prior events
   "WU_CONTRACT_STAGE", // pin an approved executable contract for the next frozen WU before activation
   "WU_ACTIVATE", // derive + activate a WU authorized by the mandate (JIT)
+  "WU_BATCH_CONFIGURE", // explicit owner-confirmed grouping of 2–10 consecutive frozen WUs
   "PHASE_START", // enter a budget phase (ACTIVE / WAITING_* / PAUSED)
   "PHASE_END", // leave a budget phase and settle its billable time
   "DISPATCH_RESERVE", // reserve budget for an external execution attempt
