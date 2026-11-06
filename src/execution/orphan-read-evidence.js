@@ -44,23 +44,36 @@ export function unsettledToolParts(messages) {
 
 export function classifyOrphanReadTools(messages) {
   const parts = unsettledToolParts(messages)
-  if (!parts) return { eligible: false, reason: "Unsupported child context" }
+  if (!parts) return { eligible: false, reason: "Unsupported child context", reason_code: "CHILD_CONTEXT_UNAVAILABLE" }
   if (parts.length === 0) return { eligible: true, ids: [], pending_tools: 0 }
+  if (parts.length > 16) return { eligible: false, reason: "More than 16 unfinished tools", reason_code: "TOO_MANY_UNFINISHED_TOOLS" }
+
   const shell_commands = []
-  if (parts.length > 16 || parts.some(part => {
-    if (!STALE_READ_STATES.has(part.state?.status) ||
-        typeof part.id !== "string" || !part.id.trim()) return true
-    if (part.name === "read") return false
+  const ids = new Set()
+  for (const part of parts) {
+    const detail = { call_id: typeof part.id === "string" ? part.id : null,
+      tool_name: typeof part.name === "string" ? part.name : null,
+      tool_status: part.state?.status ?? null }
+    const reject = (reason_code, reason) => ({ eligible: false, reason_code, reason, rejected_tool: detail })
+    if (!STALE_READ_STATES.has(part.state?.status)) return reject("UNKNOWN_TOOL_STATE", "Unfinished tool has an unsupported runtime state")
+    if (typeof part.id !== "string" || !part.id.trim()) return reject("MISSING_TOOL_ID", "Unfinished tool has no stable call ID")
+    if (ids.has(part.id)) return reject("DUPLICATE_TOOL_ID", "Duplicate unfinished tool call ID")
+    ids.add(part.id)
+    if (part.name === "read") continue
+    if (!SHELL_NAMES.has(part.name)) return reject("UNTRUSTED_TOOL_NAME", "Unfinished tool name is not a supported read-only shell adapter")
+    const input = part.state?.input
+    if (!input || typeof input !== "object" || Array.isArray(input)) {
+      return reject("SHELL_INPUT_UNAVAILABLE", "Shell command input is absent or invalid")
+    }
+    detail.input_keys = Object.keys(input).sort().slice(0, 12)
+    const command = typeof input.command === "string" ? input.command : input.cmd
+    if (typeof command !== "string") return reject("SHELL_COMMAND_UNAVAILABLE", "No literal command/cmd input is present")
+    if (!isLiteralReadOnlyGrep(command)) return reject("SHELL_COMMAND_NOT_LITERAL_GREP", "Shell input does not match the restricted literal grep -n grammar")
     const commandHash = safeShellInput(part)
-    if (!commandHash) return true
+    if (!commandHash) return reject("SHELL_COMMAND_CONFLICT", "Shell input fields conflict or cannot be hashed")
     shell_commands.push({ id: part.id, command_hash: commandHash })
-    return false
-  })) {
-    return { eligible: false, reason: "Unfinished mutating, unknown or nonliteral shell tool" }
   }
-  const ids = parts.map(part => part.id)
-  if (new Set(ids).size !== ids.length) return { eligible: false, reason: "Duplicate unfinished tool identity" }
-  const result = { eligible: true, ids: ids.sort(), pending_tools: ids.length }
+  const result = { eligible: true, ids: [...ids].sort(), pending_tools: ids.size }
   if (shell_commands.length) result.shell_commands = shell_commands.sort((a, b) => a.id.localeCompare(b.id))
   return result
 }
