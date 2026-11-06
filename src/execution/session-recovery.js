@@ -265,7 +265,10 @@ export function createSessionRecovery(ctx, projectRoot) {
       if (!(await idle())) return stop("Child is active or cannot be proven quiescent", "CHILD_ACTIVITY_UNKNOWN")
       let second
       try { second = await loadChild() } catch { return stop("Second independent session read failed", "CAPABILITY_UNAVAILABLE") }
-      if (!valid(second) || stableHash(first) !== stableHash(second))
+      const secondFailure = diagnose(second)
+      if (secondFailure) return { ...stop("Second orphan observation rejected", "EVIDENCE_CONFLICT"),
+        diagnostic: { stage: "SECOND_OBSERVATION", ...secondFailure } }
+      if (stableHash(first) !== stableHash(second))
         return stop("Session or parent call changed across fresh idle observations", "SNAPSHOT_CHANGED")
       if (!d.fence) {
         // An acknowledged interrupt prevents queued continuation during the
@@ -277,8 +280,14 @@ export function createSessionRecovery(ctx, projectRoot) {
         try { interrupted = await loadChild() }
         catch { return stop("Cannot corroborate child after interruption", "CAPABILITY_UNAVAILABLE") }
         const interruptedPending = classifyOrphanReadTools(interrupted.childContext)
-        if (!valid(interrupted) || !pendingReadsNotExpanded(initialPending, interruptedPending)) {
-          return stop("Child identity changed or new unfinished tools appeared after interruption", "EVIDENCE_CONFLICT")
+        const interruptionFailure = diagnose(interrupted)
+        if (interruptionFailure) return {
+          ...stop("Orphan evidence rejected after acknowledged interruption", "EVIDENCE_CONFLICT"),
+          diagnostic: { stage: "AFTER_INTERRUPT_BEFORE_FENCE", ...interruptionFailure },
+        }
+        if (!pendingReadsNotExpanded(initialPending, interruptedPending)) {
+          return { ...stop("Unfinished tool IDs or shell commands changed after interruption", "EVIDENCE_CONFLICT"),
+            diagnostic: { stage: "AFTER_INTERRUPT_BEFORE_FENCE", code: "UNFINISHED_TOOL_CHANGED" } }
         }
         const before = await controller.snapshot()
         const current = before.state.dispatches[input.dispatch_id]
@@ -316,8 +325,15 @@ export function createSessionRecovery(ctx, projectRoot) {
       let after
       try { after = await loadChild() } catch { return stop("Cannot read post-fence session", "CAPABILITY_UNAVAILABLE") }
       const postPending = classifyOrphanReadTools(after.childContext)
-      if (!valid(after) || !pendingReadsNotExpanded(initialPending, postPending))
-        return stop("Post-fence child identity changed or new unfinished tools appeared", "EVIDENCE_CONFLICT")
+      const postFenceFailure = diagnose(after)
+      if (postFenceFailure) return {
+        ...stop("Orphan evidence rejected after durable fencing", "EVIDENCE_CONFLICT"),
+        diagnostic: { stage: "POST_FENCE", ...postFenceFailure },
+      }
+      if (!pendingReadsNotExpanded(initialPending, postPending)) {
+        return { ...stop("Post-fence unfinished tool IDs or shell commands changed", "EVIDENCE_CONFLICT"),
+          diagnostic: { stage: "POST_FENCE", code: "UNFINISHED_TOOL_CHANGED" } }
+      }
       if (d.status === "launched") {
         const lease = await controller.acquire(input.session_id)
         const observed = await controller.snapshot()
