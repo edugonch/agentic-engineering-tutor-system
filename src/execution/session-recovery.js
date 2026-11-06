@@ -223,31 +223,43 @@ export function createSessionRecovery(ctx, projectRoot) {
         ])
         return { child: unwrap(child), childContext: unwrap(childContext), parentContext: unwrap(parentContext) }
       }
-      const valid = evidence => {
+      // Return a precise, non-sensitive diagnosis. The older boolean guard
+      // collapsed source identity, compacted parent, and shell eligibility into
+      // the same `EVIDENCE_CONFLICT`, prompting blind reattempts indefinitely.
+      const diagnose = evidence => {
         const { child, childContext, parentContext } = evidence
-        if (child?.id !== childID || child.parentID !== parentID || child.agent !== d.expected_agent ||
-            !child.projectID || !caller.projectID || child.projectID !== caller.projectID ||
-            !Array.isArray(childContext) || !Array.isArray(parentContext)) return false
+        if (child?.id !== childID || child.parentID !== parentID ||
+            child.agent !== d.expected_agent) return { code: "CHILD_IDENTITY_MISMATCH" }
+        if (!child.projectID || !caller.projectID || child.projectID !== caller.projectID)
+          return { code: "CHILD_PROJECT_IDENTITY_MISMATCH" }
+        if (!Array.isArray(childContext) || !Array.isArray(parentContext))
+          return { code: "SESSION_CONTEXT_UNAVAILABLE" }
         const matches = callEvidence(parentContext, d.launch_call_id)
-        if (matches.length !== 1) return false
+        if (matches.length !== 1) return { code: "PARENT_LAUNCH_CALL_MISSING_OR_DUPLICATED", matches: matches.length }
         const call = matches[0].part
-        // Compaction may remove the structured child ID from this exact
-        // launch call. An absent ID can be corroborated through the durable
-        // dispatch binding and the independently fetched child/parent/project.
-        // A contradictory structured ID always fails closed.
-        const recordedChild = call.state?.metadata?.sessionID
-        if (recordedChild != null && recordedChild !== childID) return false
-        return call.name === "subagent" && call.state?.input?.agent === d.expected_agent &&
-          call.state?.status !== "completed" && call.state?.metadata?.status !== "completed" &&
-          child.outcome !== "succeeded" && classifyOrphanReadTools(childContext).eligible
+        if (call.name !== "subagent" || call.state?.input?.agent !== d.expected_agent)
+          return { code: "PARENT_LAUNCH_AGENT_CONFLICT" }
+        if (call.state?.metadata?.sessionID != null && call.state.metadata.sessionID !== childID)
+          return { code: "STRUCTURED_CHILD_SESSION_CONFLICT" }
+        if (call.state?.status === "completed" || call.state?.metadata?.status === "completed" ||
+            child.outcome === "succeeded") return { code: "CHILD_TERMINAL_SUCCESS_OR_COMPLETED_PARENT" }
+        const tools = classifyOrphanReadTools(childContext)
+        if (!tools.eligible) return { code: "UNSETTLED_TOOL_REJECTED",
+          tool_reason_code: tools.reason_code ?? "UNKNOWN", rejected_tool: tools.rejected_tool ?? null }
+        return null
       }
+      const valid = evidence => diagnose(evidence) === null
       async function idle() {
         try { await readRuntime(() => ctx.session.wait({ sessionID: childID })); return true }
         catch { return false }
       }
       let first
       try { first = await loadChild() } catch { return stop("Cannot inspect child and exact parent call", "CAPABILITY_UNAVAILABLE") }
-      if (!valid(first)) return stop("Child/parent/project identity conflicts, non-read tool unsettled, or terminal success exists", "EVIDENCE_CONFLICT")
+      const firstFailure = diagnose(first)
+      if (firstFailure) return {
+        ...stop(`Orphan evidence rejected: ${firstFailure.code}`, "EVIDENCE_CONFLICT"),
+        diagnostic: firstFailure,
+      }
       const initialPending = classifyOrphanReadTools(first.childContext)
       // A wait timeout is UNKNOWN, never permission to interrupt a live tool.
       if (!(await idle())) return stop("Child is active or cannot be proven quiescent", "CHILD_ACTIVITY_UNKNOWN")
