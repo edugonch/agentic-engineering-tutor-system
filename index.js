@@ -363,7 +363,7 @@ export default Plugin.define({
       })
       editor.add({
         name: "harness_recover_orphan_dispatch",
-        description: "Governed, potentially mutating recovery of one already-launched orphan Harness dispatch. Requires the exact indexed APPROVED decision with a hash-verified typed dispatch_abandonment binding. Root harness-orchestrator and OpenCode session evidence must prove identity, quiescence, no pending tools, interrupt acknowledgement, durable fencing and fresh post-fence quiescence before conservative reservation settlement. Idempotent on an already settled exact child. A refusal never authorizes a replacement builder, fabricated terminal result or blocker clear.",
+        description: "Governed, potentially mutating recovery of one already-launched orphan Harness dispatch. Requires the exact indexed APPROVED decision with a hash-verified typed dispatch_abandonment binding. Root harness-orchestrator and OpenCode session evidence must prove identity, quiescence, no unsafe pending tools (only narrowly verified interrupted read-only entries are eligible), interrupt acknowledgement, durable fencing and fresh post-fence quiescence before conservative settlement. On EVIDENCE_CONFLICT the result includes typed diagnostic details identifying the failing identity/tool stage; do not repeat an identical recovery without new evidence. Idempotent on an already settled exact child. A refusal never authorizes a replacement builder, fabricated terminal result or blocker clear.",
         input: objectInput({
           execution_id: { type: "string", minLength: 1 },
           dispatch_id: { type: "string", minLength: 1 },
