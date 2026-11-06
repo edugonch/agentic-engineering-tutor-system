@@ -7,7 +7,7 @@ import { recordKnowledgeArtifact } from "../../src/project-knowledge.js"
 import { runExecutionController, claimDispatchLaunch } from "../../src/execution/controller-tool.js"
 import { createExecutionController } from "../../src/execution/execution.js"
 import { createSessionRecovery } from "../../src/execution/session-recovery.js"
-import { classifyOrphanReadTools, pendingReadsNotExpanded, validOrphanPendingProof } from "../../src/execution/orphan-read-evidence.js"
+import { isLiteralReadOnlyGrep, classifyOrphanReadTools, pendingReadsNotExpanded, validOrphanPendingProof } from "../../src/execution/orphan-read-evidence.js"
 import { seedWuContract } from "./wu-fixture.js"
 
 const epic = "ORPHAN-EPIC", execution = "orphan-exec", wu = "WU-01", dispatch = "orphan-builder"
@@ -15,6 +15,10 @@ const childID = "ses_orphan_child", parentID = "ses_root", approvalID = "DECISIO
 const readPart = (id, name = "read") => ({
   type: "tool", id, name,
   state: { status: "running", input: { filePath: id === "r1" ? "PROJECT_STATE.md" : "WU-01.md" }, output: "" },
+})
+
+const shellPart = (id, command, name = "bash") => ({
+  type: "tool", id, name, state: { status: "running", input: { command }, output: "" },
 })
 
 async function fixture(t, { compacted = true, pending = [readPart("r1"), readPart("r2")] } = {}) {
@@ -92,6 +96,92 @@ test("read-only unfinished entries are distinguishable from side-effecting tools
   assert.equal(validOrphanPendingProof({ pending_tools: 2, interrupted_read_only: true, unsettled_read_only_tools: ["r1", "r2"] }), true)
   assert.equal(validOrphanPendingProof({ pending_tools: 2, interrupted_read_only: false, unsettled_read_only_tools: ["r1", "r2"] }), false)
   assert.equal(validOrphanPendingProof({ pending_tools: 2, interrupted_read_only: true, unsettled_read_only_tools: ["r1"] }), false)
+})
+
+test("only literal grep -n commands are classified as read-only shell work", () => {
+  for (const command of [
+    "grep -n 'Allocation' scheduling/src/domain/*.ts",
+    'grep -n "schedule" scheduling/src/domain/*.ts',
+    "grep -n pattern src/module.ts",
+  ]) assert.equal(isLiteralReadOnlyGrep(command), true, command)
+  for (const command of [
+    "grep -n foo x.ts; touch /tmp/file",
+    "grep -n foo x.ts && rm -rf /",
+    "grep -n foo x.ts | tee /tmp/file",
+    "grep -n foo x.ts > /tmp/file",
+    'grep -n "$(touch /tmp/file)" x.ts',
+    "grep -n foo x.ts\\nrm -rf /",
+    "bash -lc 'grep -n foo x.ts'",
+    "cat x.ts",
+    "grep -Rn foo x.ts",
+    "grep -n foo x.ts \\$(touch /tmp/file)",
+  ]) assert.equal(isLiteralReadOnlyGrep(command), false, command)
+  const good = classifyOrphanReadTools([{
+    content: [shellPart("shell1", "grep -n 'schedule' scheduling/src/domain/*.ts", "shell")],
+  }])
+  assert.equal(good.eligible, true)
+  assert.equal(good.shell_commands.length, 1)
+  assert.equal(good.shell_commands[0].command_hash.length, 64)
+  const changed = classifyOrphanReadTools([{
+    content: [shellPart("shell1", "grep -n 'other' scheduling/src/domain/*.ts", "shell")],
+  }])
+  assert.equal(pendingReadsNotExpanded(good, changed), false)
+  assert.equal(pendingReadsNotExpanded(good, classifyOrphanReadTools([{ content: [] }])), true)
+  assert.equal(validOrphanPendingProof({
+    pending_tools: 1, interrupted_read_only: true,
+    unsettled_read_only_tools: ["shell1"], shell_commands: good.shell_commands,
+  }), true)
+})
+
+test("owner-approved compacted orphan with pending grep shell commands is fenced and conservatively charged", async t => {
+  const f = await fixture(t, {
+    pending: [
+      shellPart("grep1", "grep -n 'schedule' scheduling/src/domain/*.ts"),
+      shellPart("grep2", "grep -n 'allocation' scheduling/src/domain/*.ts", "shell"),
+    ],
+  })
+  const result = await f.recovery.recoverOrphan(f.call)
+  assert.equal(result.status, "ABANDONED_RECONCILED")
+  assert.equal(result.charged_seconds, 1800)
+  assert.equal(f.interrupts(), 2)
+  const { state, events } = await f.controller.snapshot()
+  const d = state.dispatches[dispatch]
+  assert.equal(d.fence.proof.pending_tools, 2)
+  assert.equal(d.fence.proof.shell_commands.length, 2)
+  assert.equal(d.abandonment.evidence.shell_commands.length, 2)
+  assert.equal(d.status, "abandoned_reconciled")
+  assert.equal(state.budget.used_seconds, 1800)
+  assert.equal(state.budget.reserved_seconds, 0)
+  assert.equal(events.filter(e => e.operation_type === "DISPATCH_FENCE").length, 1)
+  assert.equal((await f.recovery.recoverOrphan(f.call)).status, "ALREADY_RECONCILED")
+})
+
+test("unsafe shell commands cannot be abandoned even with owner approval", async t => {
+  const f = await fixture(t, { pending: [
+    shellPart("sh1", "grep -n foo src/*.ts; touch /tmp/unexpected"),
+  ] })
+  const result = await f.recovery.recoverOrphan(f.call)
+  assert.equal(result.status, "EVIDENCE_CONFLICT")
+  assert.equal(result.safe_to_relaunch, false)
+  assert.equal(f.interrupts(), 0)
+  const { state } = await f.controller.snapshot()
+  assert.equal(state.dispatches[dispatch].status, "launched")
+  assert.equal(state.budget.reserved_seconds, 1800)
+})
+
+test("changing a running grep command after interrupt rejects the recovery", async t => {
+  const f = await fixture(t, {
+    pending: [shellPart("sh1", "grep -n old scheduling/*.ts")],
+  })
+  const original = f.ctx.session.interrupt
+  f.ctx.session.interrupt = async args => {
+    const result = await original(args)
+    f.childContext[0].content[0].state.input.command = "grep -n updated scheduling/*.ts"
+    return result
+  }
+  const result = await f.recovery.recoverOrphan(f.call)
+  assert.equal(result.status, "EVIDENCE_CONFLICT")
+  assert.equal((await f.controller.snapshot()).state.dispatches[dispatch].status, "launched")
 })
 
 test("approved orphan with compacted parent metadata and interrupted reads fences, charges and reconciles once", async t => {
