@@ -1,13 +1,39 @@
 // Conservative classification for interrupted OpenCode subagent reads.
 //
-// Context may preserve "running" read entries after a session was interrupted.
-// These entries cannot be treated as successful or terminal work. They are
-// eligible for orphan fencing ONLY when the live runtime independently proves
-// quiescence and acknowledges interrupt, with exact dispatch/parent/child
-// identity and an owner-approved abandonment. Any unfinished non-read tool
-// remains an absolute stop.
+// An interrupted child may retain stale "running" tool entries. Only the
+// native read tool or a narrowly recognized, literal stdout-only grep shell
+// command is eligible. No textual tool output or description grants safety.
+// All candidates still require owner approval, independent quiescence,
+// acknowledged interruption, durable fencing and post-fence observation.
+import { stableHash } from "./serialize.js"
+
 const TERMINAL = new Set(["completed", "error", "failed", "cancelled", "canceled"])
 const STALE_READ_STATES = new Set(["running", "pending"])
+const SHELL_NAMES = new Set(["bash", "shell", "shell_command"])
+
+// This is deliberately NOT a general-purpose shell-command parser. Only a
+// simple literal 'grep -n ...' is allowed. Reject all shell control operators,
+// substitutions, expansions, escapes, redirection, pipes and newlines. If a
+// legitimate grep uses any other shell syntax, the recovery fails closed.
+export function isLiteralReadOnlyGrep(value) {
+  if (typeof value !== "string" || value.length > 4096) return false
+  const command = value.trim()
+  if (!/^grep[ \t]+-n[ \t]+\S/.test(command)) return false
+  if (/[;&|<>\x60$\\(){}\n\r\0!#]/.test(command)) return false
+  if (!/^[A-Za-z0-9_./*?\[\]:='",+\- \t]+$/.test(command)) return false
+  // Do not treat quoted or inexact shell prefixes as the grep executable.
+  return true
+}
+
+function safeShellInput(part) {
+  if (!SHELL_NAMES.has(part.name)) return null
+  const input = part.state?.input
+  if (!input || typeof input !== "object" || Array.isArray(input)) return null
+  const command = typeof input.command === "string" ? input.command : input.cmd
+  if (typeof input.command === "string" && typeof input.cmd === "string" && input.command !== input.cmd) return null
+  if (!isLiteralReadOnlyGrep(command)) return null
+  return stableHash({ command, cwd: input.workdir ?? input.cwd ?? null })
+}
 
 export function unsettledToolParts(messages) {
   if (!Array.isArray(messages)) return null
@@ -20,31 +46,48 @@ export function classifyOrphanReadTools(messages) {
   const parts = unsettledToolParts(messages)
   if (!parts) return { eligible: false, reason: "Unsupported child context" }
   if (parts.length === 0) return { eligible: true, ids: [], pending_tools: 0 }
-  if (parts.length > 16 || parts.some(part =>
-    part.name !== "read" || !STALE_READ_STATES.has(part.state?.status) ||
-    typeof part.id !== "string" || !part.id.trim())) {
-    return { eligible: false, reason: "An unfinished non-read or unidentifiable tool is present" }
+  const shell_commands = []
+  if (parts.length > 16 || parts.some(part => {
+    if (!STALE_READ_STATES.has(part.state?.status) ||
+        typeof part.id !== "string" || !part.id.trim()) return true
+    if (part.name === "read") return false
+    const commandHash = safeShellInput(part)
+    if (!commandHash) return true
+    shell_commands.push({ id: part.id, command_hash: commandHash })
+    return false
+  })) {
+    return { eligible: false, reason: "Unfinished mutating, unknown or nonliteral shell tool" }
   }
   const ids = parts.map(part => part.id)
   if (new Set(ids).size !== ids.length) return { eligible: false, reason: "Duplicate unfinished tool identity" }
-  return { eligible: true, ids: ids.sort(), pending_tools: ids.length }
+  const result = { eligible: true, ids: ids.sort(), pending_tools: ids.length }
+  if (shell_commands.length) result.shell_commands = shell_commands.sort((a, b) => a.id.localeCompare(b.id))
+  return result
 }
 
-// After the acknowledged interruption, unfinished reads must not proliferate.
-// A prior read may settle, but a newly started read indicates active child work.
+// A tool with the same ID cannot silently change its command after interrupt.
+// All new unfinished tools are refused, even if they are read-only.
 export function pendingReadsNotExpanded(before, after) {
-  return before?.eligible && after?.eligible &&
-    after.ids.every(id => before.ids.includes(id))
+  if (!before?.eligible || !after?.eligible || !after.ids.every(id => before.ids.includes(id))) return false
+  const original = new Map((before.shell_commands ?? []).map(item => [item.id, item.command_hash]))
+  const later = new Map((after.shell_commands ?? []).map(item => [item.id, item.command_hash]))
+  return [...later].every(([id, hash]) => original.get(id) === hash) &&
+    [...original.keys()].every(id => !after.ids.includes(id) || later.has(id))
 }
 
-// Used by the append-only state projection to validate the new audited
-// evidence shape; legacy zero-pending proofs retain their previous meaning.
+// Replay validation for an auditable interrupted read-only proof. Old proofs
+// containing only native 'read' tools retain their previous accepted shape.
 export function validOrphanPendingProof(proof) {
   if (!Number.isSafeInteger(proof?.pending_tools) || proof.pending_tools < 0) return false
   if (proof.pending_tools === 0) return true
   const ids = proof.unsettled_read_only_tools
-  return proof.interrupted_read_only === true &&
-    Array.isArray(ids) && ids.length === proof.pending_tools &&
-    ids.length <= 16 && ids.every(id => typeof id === "string" && id.trim()) &&
-    new Set(ids).size === ids.length
+  if (proof.interrupted_read_only !== true ||
+      !Array.isArray(ids) || ids.length !== proof.pending_tools ||
+      ids.length > 16 || ids.some(id => typeof id !== "string" || !id.trim()) ||
+      new Set(ids).size !== ids.length) return false
+  if (proof.shell_commands === undefined) return true
+  const entries = proof.shell_commands
+  return Array.isArray(entries) && entries.length > 0 && entries.length <= ids.length &&
+    new Set(entries.map(item => item?.id)).size === entries.length &&
+    entries.every(item => ids.includes(item?.id) && /^[a-f0-9]{64}$/.test(item?.command_hash ?? ""))
 }
