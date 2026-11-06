@@ -184,6 +184,66 @@ test("changing a running grep command after interrupt rejects the recovery", asy
   assert.equal((await f.controller.snapshot()).state.dispatches[dispatch].status, "launched")
 })
 
+test("recovery reports the exact rejected shell tool without losing the reservation", async t => {
+  const f = await fixture(t, { pending: [
+    shellPart("call_00_grep", "rg -n schedule scheduling/src/domain/*.ts", "shell"),
+  ] })
+  const before = (await f.controller.snapshot()).state.revision
+  const result = await f.recovery.recoverOrphan(f.call)
+  assert.equal(result.status, "EVIDENCE_CONFLICT")
+  assert.equal(result.reason, "Orphan evidence rejected: UNSETTLED_TOOL_REJECTED")
+  assert.deepEqual(result.diagnostic, {
+    code: "UNSETTLED_TOOL_REJECTED",
+    tool_reason_code: "SHELL_COMMAND_NOT_LITERAL_GREP",
+    rejected_tool: {
+      call_id: "call_00_grep", tool_name: "shell", tool_status: "running",
+      input_keys: ["command"],
+    },
+  })
+  assert.equal(f.interrupts(), 0)
+  const { state } = await f.controller.snapshot()
+  assert.equal(state.revision, before)
+  assert.equal(state.dispatches[dispatch].status, "launched")
+  assert.equal(state.budget.reserved_seconds, 1800)
+})
+
+test("recovery explains an unknown shell adapter instead of saying all pending tools must settle", async t => {
+  const f = await fixture(t, { pending: [
+    shellPart("call_01_grep", "grep -n schedule scheduling/src/domain/*.ts", "execute"),
+  ] })
+  const result = await f.recovery.recoverOrphan(f.call)
+  assert.equal(result.status, "EVIDENCE_CONFLICT")
+  assert.equal(result.diagnostic.code, "UNSETTLED_TOOL_REJECTED")
+  assert.equal(result.diagnostic.tool_reason_code, "UNTRUSTED_TOOL_NAME")
+  assert.equal(result.diagnostic.rejected_tool.tool_name, "execute")
+  assert.equal((await f.controller.snapshot()).state.dispatches[dispatch].status, "launched")
+})
+
+test("recovery reports parent-child identity conflicts separately from tool eligibility", async t => {
+  const f = await fixture(t)
+  f.parentCall.state.metadata.sessionID = "ses_different_child"
+  const result = await f.recovery.recoverOrphan(f.call)
+  assert.equal(result.status, "EVIDENCE_CONFLICT")
+  assert.equal(result.diagnostic.code, "STRUCTURED_CHILD_SESSION_CONFLICT")
+  assert.equal((await f.controller.snapshot()).state.dispatches[dispatch].status, "launched")
+})
+
+test("recovery reports exact stage for a new pending shell command after interrupt", async t => {
+  const f = await fixture(t)
+  const original = f.ctx.session.interrupt
+  f.ctx.session.interrupt = async args => {
+    const result = await original(args)
+    f.childContext[0].content.push(shellPart("changed", "cat /etc/passwd"))
+    return result
+  }
+  const result = await f.recovery.recoverOrphan(f.call)
+  assert.equal(result.status, "EVIDENCE_CONFLICT")
+  assert.equal(result.diagnostic.stage, "AFTER_INTERRUPT_BEFORE_FENCE")
+  assert.equal(result.diagnostic.code, "UNSETTLED_TOOL_REJECTED")
+  assert.equal(result.diagnostic.tool_reason_code, "SHELL_COMMAND_NOT_LITERAL_GREP")
+  assert.equal((await f.controller.snapshot()).state.dispatches[dispatch].status, "launched")
+})
+
 test("approved orphan with compacted parent metadata and interrupted reads fences, charges and reconciles once", async t => {
   const f = await fixture(t)
   const result = await f.recovery.recoverOrphan(f.call)
