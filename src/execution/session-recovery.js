@@ -277,6 +277,8 @@ export function createSessionRecovery(ctx, projectRoot) {
           runtime_quiescent: true, pending_tools: interruptedPending.pending_tools, interrupted: true,
           ...(interruptedPending.pending_tools ? {
             interrupted_read_only: true, unsettled_read_only_tools: interruptedPending.ids,
+            ...(interruptedPending.shell_commands?.length
+              ? { shell_commands: interruptedPending.shell_commands } : {}),
           } : {}),
           identity_basis: first.parentContext.flatMap(m => m?.content ?? [])
             .find(part => part?.type === "tool" && part.id === d.launch_call_id)
@@ -316,6 +318,8 @@ export function createSessionRecovery(ctx, projectRoot) {
               runtime_quiescent: true, pending_tools: postPending.pending_tools,
               ...(postPending.pending_tools ? {
                 interrupted_read_only: true, unsettled_read_only_tools: postPending.ids,
+                ...(postPending.shell_commands?.length
+                  ? { shell_commands: postPending.shell_commands } : {}),
               } : {}),
               fence_enforced: true, observation_hash: stableHash(after), approved_abandonment: approval } },
         }, { holder_session_id: input.session_id, expected_revision: observed.state.revision, lease_fencing_token: lease.fencing_token })
