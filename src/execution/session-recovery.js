@@ -6,6 +6,7 @@ import { readdir } from "node:fs/promises"
 import { createExecutionController } from "./execution.js"
 import { stableHash } from "./serialize.js"
 import { findApprovedDispatchAbandonment } from "../project-knowledge.js"
+import { classifyOrphanReadTools, pendingReadsNotExpanded } from "./orphan-read-evidence.js"
 
 const unwrap = value => value?.data ?? value
 const id = value => {
@@ -230,10 +231,15 @@ export function createSessionRecovery(ctx, projectRoot) {
         const matches = callEvidence(parentContext, d.launch_call_id)
         if (matches.length !== 1) return false
         const call = matches[0].part
+        // Compaction may remove the structured child ID from this exact
+        // launch call. An absent ID can be corroborated through the durable
+        // dispatch binding and the independently fetched child/parent/project.
+        // A contradictory structured ID always fails closed.
+        const recordedChild = call.state?.metadata?.sessionID
+        if (recordedChild != null && recordedChild !== childID) return false
         return call.name === "subagent" && call.state?.input?.agent === d.expected_agent &&
-          call.state?.metadata?.sessionID === childID &&
           call.state?.status !== "completed" && call.state?.metadata?.status !== "completed" &&
-          child.outcome !== "succeeded" && !unresolvedTools(childContext)
+          child.outcome !== "succeeded" && classifyOrphanReadTools(childContext).eligible
       }
       async function idle() {
         try { await readRuntime(() => ctx.session.wait({ sessionID: childID })); return true }
@@ -241,7 +247,8 @@ export function createSessionRecovery(ctx, projectRoot) {
       }
       let first
       try { first = await loadChild() } catch { return stop("Cannot inspect child and exact parent call", "CAPABILITY_UNAVAILABLE") }
-      if (!valid(first)) return stop("Child/parent/project identity conflicts, context incomplete, tool unsettled, or terminal success exists", "EVIDENCE_CONFLICT")
+      if (!valid(first)) return stop("Child/parent/project identity conflicts, non-read tool unsettled, or terminal success exists", "EVIDENCE_CONFLICT")
+      const initialPending = classifyOrphanReadTools(first.childContext)
       // A wait timeout is UNKNOWN, never permission to interrupt a live tool.
       if (!(await idle())) return stop("Child is active or cannot be proven quiescent", "CHILD_ACTIVITY_UNKNOWN")
       let second
@@ -254,14 +261,27 @@ export function createSessionRecovery(ctx, projectRoot) {
         try { await readRuntime(() => ctx.session.interrupt({ sessionID: childID, continue: false })) }
         catch { return stop("Cannot interrupt child before durable fencing", "CAPABILITY_UNAVAILABLE") }
         if (!(await idle())) return stop("Child not quiescent after interruption", "CHILD_ACTIVITY_UNKNOWN")
+        let interrupted
+        try { interrupted = await loadChild() }
+        catch { return stop("Cannot corroborate child after interruption", "CAPABILITY_UNAVAILABLE") }
+        const interruptedPending = classifyOrphanReadTools(interrupted.childContext)
+        if (!valid(interrupted) || !pendingReadsNotExpanded(initialPending, interruptedPending)) {
+          return stop("Child identity changed or new unfinished tools appeared after interruption", "EVIDENCE_CONFLICT")
+        }
         const before = await controller.snapshot()
         const current = before.state.dispatches[input.dispatch_id]
         if (before.state.revision !== snap.state.revision || current.status !== "launched" ||
             current.session_id !== childID) return stop("Controller changed during pre-fence observation", "SNAPSHOT_CHANGED")
         const proof = { kind: "VERIFIED_QUIESCENT_CHILD", child_session_id: childID,
           parent_session_id: parentID, launch_call_id: d.launch_call_id, agent: d.expected_agent,
-          runtime_quiescent: true, pending_tools: 0, interrupted: true,
-          fence_hook_installed: true, observation_hash: stableHash([first, second]),
+          runtime_quiescent: true, pending_tools: interruptedPending.pending_tools, interrupted: true,
+          ...(interruptedPending.pending_tools ? {
+            interrupted_read_only: true, unsettled_read_only_tools: interruptedPending.ids,
+          } : {}),
+          identity_basis: first.parentContext.flatMap(m => m?.content ?? [])
+            .find(part => part?.type === "tool" && part.id === d.launch_call_id)
+            ?.state?.metadata?.sessionID === childID ? "STRUCTURED_PARENT_CALL" : "DURABLE_WITH_COMPACTED_PARENT",
+          fence_hook_installed: true, observation_hash: stableHash([first, second, interrupted]),
           approved_abandonment: approval }
         const lease = await controller.acquire(input.session_id)
         try { await controller.commit({
@@ -281,7 +301,9 @@ export function createSessionRecovery(ctx, projectRoot) {
       if (!(await idle())) return stop("Post-fence session is still active", "CHILD_ACTIVITY_UNKNOWN")
       let after
       try { after = await loadChild() } catch { return stop("Cannot read post-fence session", "CAPABILITY_UNAVAILABLE") }
-      if (!valid(after)) return stop("Post-fence child identity or tool liveness changed", "EVIDENCE_CONFLICT")
+      const postPending = classifyOrphanReadTools(after.childContext)
+      if (!valid(after) || !pendingReadsNotExpanded(initialPending, postPending))
+        return stop("Post-fence child identity changed or new unfinished tools appeared", "EVIDENCE_CONFLICT")
       if (d.status === "launched") {
         const lease = await controller.acquire(input.session_id)
         const observed = await controller.snapshot()
@@ -291,8 +313,11 @@ export function createSessionRecovery(ctx, projectRoot) {
           operation_type: "DISPATCH_ABANDON", body: { dispatch_id: input.dispatch_id, child_session_id: childID,
             fence_generation: d.fence.generation, proof: {
               kind: "POST_FENCE_QUIESCENCE", child_session_id: childID,
-              runtime_quiescent: true, pending_tools: 0, fence_enforced: true,
-              observation_hash: stableHash(after), approved_abandonment: approval } },
+              runtime_quiescent: true, pending_tools: postPending.pending_tools,
+              ...(postPending.pending_tools ? {
+                interrupted_read_only: true, unsettled_read_only_tools: postPending.ids,
+              } : {}),
+              fence_enforced: true, observation_hash: stableHash(after), approved_abandonment: approval } },
         }, { holder_session_id: input.session_id, expected_revision: observed.state.revision, lease_fencing_token: lease.fencing_token })
         snap = await controller.snapshot()
         d = snap.state.dispatches[input.dispatch_id]

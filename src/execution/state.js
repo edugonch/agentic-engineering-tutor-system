@@ -8,6 +8,7 @@ import { executionProgress, supervisorProgress } from "./progress.js"
 import { isStaleWorktreeScopeBlocker } from "./scope-recovery.js"
 import { wuBudgetUsage } from "./wu-budget.js"
 import { assertBatchConfiguration, requireBatchCoverage } from "./wu-batch.js"
+import { validOrphanPendingProof } from "./orphan-read-evidence.js"
 // State projection. state is derived, never canonical: events.ndjson is the
 // source of truth and every read replays it. This makes divergence between a
 // cached state file and the log impossible by construction.
@@ -777,7 +778,7 @@ export function applyEvent(previous, event, { historicalReplay = false } = {}) {
           body.proof.parent_session_id !== d.prepared_by_session_id ||
           body.proof.launch_call_id !== d.launch_call_id ||
           body.proof.agent !== d.expected_agent ||
-          body.proof.runtime_quiescent !== true || body.proof.pending_tools !== 0 ||
+          body.proof.runtime_quiescent !== true || !validOrphanPendingProof(body.proof) ||
           body.proof.interrupted !== true || body.proof.fence_hook_installed !== true ||
           typeof body.proof.observation_hash !== "string" || !/^[a-f0-9]{64}$/.test(body.proof.observation_hash)) {
         throw new Error("DISPATCH_FENCE requires a live root-sourced exact-identity quiescence proof and matching revision")
@@ -794,7 +795,7 @@ export function applyEvent(previous, event, { historicalReplay = false } = {}) {
           body.fence_generation !== d.fence.generation ||
           body.proof?.kind !== "POST_FENCE_QUIESCENCE" ||
           body.proof.child_session_id !== d.session_id ||
-          body.proof.pending_tools !== 0 || body.proof.runtime_quiescent !== true ||
+          !validOrphanPendingProof(body.proof) || body.proof.runtime_quiescent !== true ||
           body.proof.fence_enforced !== true ||
           typeof body.proof.observation_hash !== "string" || !/^[a-f0-9]{64}$/.test(body.proof.observation_hash)) {
         throw new Error("DISPATCH_ABANDON requires enforced durable fencing and fresh post-fence quiescence")
