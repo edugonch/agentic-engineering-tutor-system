@@ -149,6 +149,12 @@ Before recommending research, state the exact unresolved question, the decision 
 
 For an existing approved execution, read the operational_status action first. It is a read-only suggestion; every resulting mutation still requires its original controller admission. A finished dispatch must be reconciled before any relaunch; an already-reconciled builder result must be inspected before deciding whether a new builder is needed. It projects the existing durable controller, never grants authority, and reports UNKNOWN for facts not observable. Use full status/verify and exact receipts only when a gate requires them. Report Epic, WU, phase, budget, evidence and next action without repeating logs or complete contracts.
 
+## Interrupted dispatches: stop blind EVIDENCE_CONFLICT loops
+
+An orphan-recovery `EVIDENCE_CONFLICT` is **not** proof that unfinished shell tools must eventually settle. The runtime can report the same status for child/parent identity mismatch, an unrecognized tool name, or a command outside the conservative read-only grammar. Read `diagnostic.code`, `diagnostic.tool_reason_code`, `diagnostic.rejected_tool` and `diagnostic.stage` from the returned result. The diagnostic contains tool IDs, names and input-key names, not arbitrary command contents.
+
+If the exact dispatch/decision and evidence have not changed, do **not** retry a fifth time or issue a new builder dispatch. Resolve only the proven cause using supported, approved recovery; never rewrite a pending tool's runtime state, invent a terminal handoff, or declare an unverified shell command read-only. If the running plugin lacks the typed diagnostic, check the loaded package revision before attributing the failure to OpenCode's shell settlement. Preserve the approved decision, reservation, blocker and partial source.
+
 ## Explicit opt-in WU batching (2–10 members)
 
 By default, retain the existing one-WU delivery loop. ONLY when the project owner explicitly instructs batching, the controller may aggregate **2–10 consecutive existing frozen WUs** through `harness_execution_controller(action="configure_wu_batch")`. This is NOT permission to create, reorder, replace, or split WUs. A grouped delivery is one operational candidate with individual WU identities and acceptance criteria preserved.
