@@ -10,8 +10,7 @@ import { isValidatedHistoricalTerminal } from "./historical-terminal.js"
 import { supervisorProgress } from "./progress.js"
 import { wuBudgetUsage } from "./wu-budget.js"
 import { stableHash } from "./serialize.js"
-import { isTechnicalWuContractBlocker } from "./jit-contract.js"
-import { isStaleWorktreeScopeBlocker } from "./scope-recovery.js"
+import { classifyContinuation, hasPendingSupervisorDispatch } from "./workflow-router.js"
 
 export function createExecutionSupervisor(ctx, projectRoot, {
   enabled = true, now = () => Date.now(), schedule = setTimeout, cancel = clearTimeout,
@@ -60,9 +59,7 @@ export function createExecutionSupervisor(ctx, projectRoot, {
       const c = await controller(execution)
       let { state } = await c.snapshot()
       const session = state.supervisor?.session_id
-      const toolingTriage = state.blocker?.class === "BLOCKED_TOOLING" && !expiredWait(state)
-      const contractTriage = isTechnicalWuContractBlocker(state.blocker) && (!state.wu || state.wu.completed)
-      const scopeTriage = isStaleWorktreeScopeBlocker(state.blocker)
+      const { toolingTriage, contractTriage, scopeTriage } = classifyContinuation(state)
       if (!session || state.completed || (state.blocker && !expiredWait(state) && !toolingTriage && !contractTriage && !scopeTriage) || state.mandate?.authority_kind !== "OWNER_APPROVED_EPIC") { disarm(execution); return false }
       const info = await identity(session)
       if (info.outcome !== "succeeded") { disarm(execution); return false } // never override cancellation or failure
@@ -118,7 +115,7 @@ export function createExecutionSupervisor(ctx, projectRoot, {
           state = (await c.snapshot()).state
         }
       }
-      const unsettled = Object.values(state.dispatches).some(d => ["reserved", "pending_launch", "launched", "abandoned", "ambiguous"].includes(d.status))
+      const unsettled = hasPendingSupervisorDispatch(state)
       // The root may inspect/recover existing work but cannot start duplicates;
       // public controller admission enforces those limits.
       // One diagnostic wake per exact tooling blocker; checkpoints cannot retrigger it.
