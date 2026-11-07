@@ -25,13 +25,75 @@ export function isLiteralReadOnlyGrep(value) {
   return true
 }
 
-function safeShellInput(part) {
+
+// Strictly support the observed project-bootstrap idiom:
+//   cd /absolute/project/root && grep -n "literal BRE\|alternation" relative/file.ts
+// This is not an arbitrary shell parser or a general read-command allowlist.
+// The exact project directory must match the active Harness project root.
+// Quoted backslash-pipe is legitimate grep BRE syntax, never a shell pipeline.
+function safeGrepArgs(tail) {
+  const args = []
+  let word = "", quote = null, started = false
+  for (let i = 0; i < tail.length; i++) {
+    const ch = tail[i]
+    if (quote === '"') {
+      if (ch === '"') { quote = null; continue }
+      if (ch === "\\") {
+        if (tail[i + 1] !== "|") return null
+        word += "\\|"
+        i++
+        continue
+      }
+      if (!/[A-Za-z0-9_./*?\[\]:,=+\- ^|]/.test(ch)) return null
+      word += ch
+      continue
+    }
+    if (quote === "'") {
+      if (ch === "'") { quote = null; continue }
+      if (!/[A-Za-z0-9_./*?\[\]:,=+\- ^|\\]/.test(ch)) return null
+      word += ch
+      continue
+    }
+    if (ch === '"' || ch === "'") { quote = ch; started = true; continue }
+    if (ch === " " || ch === "\t") {
+      if (started) { args.push(word); word = ""; started = false }
+      continue
+    }
+    // No shell operators, substitutions, redirects, command grouping, or
+    // escaping outside quotes. Unknown syntax is deliberately rejected.
+    if (!/[A-Za-z0-9_./*?\[\]:,=+\-^]/.test(ch)) return null
+    word += ch
+    started = true
+  }
+  if (quote !== null) return null
+  if (started) args.push(word)
+  if (args.length < 2 || args.length > 20) return null
+  const [pattern, ...files] = args
+  if (!pattern || pattern.startsWith("-") || pattern.length > 1024) return null
+  if (files.some(file => !file || file.startsWith("-") || file.startsWith("/") ||
+    file.split("/").some(segment => segment === ".." || segment === ".") ||
+    !/^[A-Za-z0-9_./*?\[\]-]+$/.test(file))) return null
+  return args
+}
+
+export function isApprovedReadOnlyShellGrep(value, projectRoot) {
+  if (isLiteralReadOnlyGrep(value)) return true
+  if (typeof value !== "string" || value.length > 4096 ||
+      typeof projectRoot !== "string" || !projectRoot.startsWith("/")) return false
+  const command = value.trim()
+  const match = /^cd[ \t]+(\/[A-Za-z0-9._/-]+)[ \t]+&&[ \t]+grep[ \t]+-n[ \t]+(.+)$/.exec(command)
+  if (!match || match[1] !== projectRoot ||
+      match[1].split("/").some(segment => segment === ".." || segment === ".")) return false
+  return safeGrepArgs(match[2]) !== null
+}
+
+function safeShellInput(part, projectRoot) {
   if (!SHELL_NAMES.has(part.name)) return null
   const input = part.state?.input
   if (!input || typeof input !== "object" || Array.isArray(input)) return null
   const command = typeof input.command === "string" ? input.command : input.cmd
   if (typeof input.command === "string" && typeof input.cmd === "string" && input.command !== input.cmd) return null
-  if (!isLiteralReadOnlyGrep(command)) return null
+  if (!isApprovedReadOnlyShellGrep(command, projectRoot)) return null
   return stableHash({ command, cwd: input.workdir ?? input.cwd ?? null })
 }
 
@@ -42,7 +104,7 @@ export function unsettledToolParts(messages) {
     : [])
 }
 
-export function classifyOrphanReadTools(messages) {
+export function classifyOrphanReadTools(messages, { projectRoot = null } = {}) {
   const parts = unsettledToolParts(messages)
   if (!parts) return { eligible: false, reason: "Unsupported child context", reason_code: "CHILD_CONTEXT_UNAVAILABLE" }
   if (parts.length === 0) return { eligible: true, ids: [], pending_tools: 0 }
@@ -68,8 +130,8 @@ export function classifyOrphanReadTools(messages) {
     detail.input_keys = Object.keys(input).sort().slice(0, 12)
     const command = typeof input.command === "string" ? input.command : input.cmd
     if (typeof command !== "string") return reject("SHELL_COMMAND_UNAVAILABLE", "No literal command/cmd input is present")
-    if (!isLiteralReadOnlyGrep(command)) return reject("SHELL_COMMAND_NOT_LITERAL_GREP", "Shell input does not match the restricted literal grep -n grammar")
-    const commandHash = safeShellInput(part)
+    if (!isApprovedReadOnlyShellGrep(command, projectRoot)) return reject("SHELL_COMMAND_NOT_LITERAL_GREP", "Shell input is neither a restricted literal grep -n nor a project-root cd && grep -n command")
+    const commandHash = safeShellInput(part, projectRoot)
     if (!commandHash) return reject("SHELL_COMMAND_CONFLICT", "Shell input fields conflict or cannot be hashed")
     shell_commands.push({ id: part.id, command_hash: commandHash })
   }
