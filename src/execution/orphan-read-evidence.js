@@ -1,8 +1,8 @@
 // Conservative classification for interrupted OpenCode subagent reads.
 //
 // An interrupted child may retain stale "running" tool entries. Only the
-// native read tool or a narrowly recognized, literal stdout-only grep shell
-// command is eligible. No textual tool output or description grants safety.
+// native read tool or an explicitly allowlisted read-only shell
+// inspection is eligible. No textual tool output or description grants safety.
 // All candidates still require owner approval, independent quiescence,
 // acknowledged interruption, durable fencing and post-fence observation.
 import { stableHash } from "./serialize.js"
@@ -87,13 +87,28 @@ export function isApprovedReadOnlyShellGrep(value, projectRoot) {
   return safeGrepArgs(match[2]) !== null
 }
 
+// A deliberately finite, audited catalog for common no-side-effect bootstrap
+// inspections. A bare pwd has no arguments and does not run a subcommand;
+// cd is eligible only when its exact target equals the canonical project root.
+// Adding any other inspection command requires its own negative tests.
+export function isApprovedReadOnlyShellInspection(value, projectRoot) {
+  if (value === "pwd") return true
+  if (typeof value === "string" && typeof projectRoot === "string" &&
+      /^\/[A-Za-z0-9._/-]+$/.test(projectRoot) &&
+      !projectRoot.split("/").some(part => part === "." || part === "..")) {
+    const match = /^cd[ \t]+(\/[A-Za-z0-9._/-]+)[ \t]+&&[ \t]+pwd$/.exec(value)
+    if (match && match[1] === projectRoot) return true
+  }
+  return isApprovedReadOnlyShellGrep(value, projectRoot)
+}
+
 function safeShellInput(part, projectRoot) {
   if (!SHELL_NAMES.has(part.name)) return null
   const input = part.state?.input
   if (!input || typeof input !== "object" || Array.isArray(input)) return null
   const command = typeof input.command === "string" ? input.command : input.cmd
   if (typeof input.command === "string" && typeof input.cmd === "string" && input.command !== input.cmd) return null
-  if (!isApprovedReadOnlyShellGrep(command, projectRoot)) return null
+  if (!isApprovedReadOnlyShellInspection(command, projectRoot)) return null
   return stableHash({ command, cwd: input.workdir ?? input.cwd ?? null })
 }
 
@@ -130,7 +145,7 @@ export function classifyOrphanReadTools(messages, { projectRoot = null } = {}) {
     detail.input_keys = Object.keys(input).sort().slice(0, 12)
     const command = typeof input.command === "string" ? input.command : input.cmd
     if (typeof command !== "string") return reject("SHELL_COMMAND_UNAVAILABLE", "No literal command/cmd input is present")
-    if (!isApprovedReadOnlyShellGrep(command, projectRoot)) return reject("SHELL_COMMAND_NOT_LITERAL_GREP", "Shell input is neither a restricted literal grep -n nor a project-root cd && grep -n command")
+    if (!isApprovedReadOnlyShellInspection(command, projectRoot)) return reject("SHELL_COMMAND_NOT_LITERAL_GREP", "Shell command is not a recognized no-side-effect inspection (pwd or restricted grep -n)")
     const commandHash = safeShellInput(part, projectRoot)
     if (!commandHash) return reject("SHELL_COMMAND_CONFLICT", "Shell input fields conflict or cannot be hashed")
     shell_commands.push({ id: part.id, command_hash: commandHash })
