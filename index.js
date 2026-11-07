@@ -77,6 +77,7 @@ function detectBrowser() {
 export default Plugin.define({
   id: "opencode.agentic-harness",
   async setup(ctx) {
+    const runtimeLoadedAtMs = Date.now()
     const packageRevision = await packageFingerprint(fileURLToPath(new URL(".", import.meta.url)))
     const settings = readGuardSettings(process.env)
     const guard = createTurnGuard(settings)
@@ -138,6 +139,15 @@ export default Plugin.define({
     const agentRuntimeRefresh = { status: agentProvisioning.changed ? "SCHEDULED" : "NOT_REQUIRED", error: null }
     const currentWorkUnitAgentReadiness = async () => ({
       plugin_revision: packageRevision,
+      runtime_continuity: {
+        process_pid: process.pid,
+        process_uptime_seconds: Math.floor(process.uptime()),
+        process_started_at: new Date(Date.now() - process.uptime() * 1000).toISOString(),
+        plugin_loaded_at: new Date(runtimeLoadedAtMs).toISOString(),
+        // These observations distinguish a process restart from a plugin
+        // reload across two readings. A single reading proves neither cause.
+        restart_cause: "UNVERIFIED",
+      },
       agent_runtime_refresh: { ...agentRuntimeRefresh },
       ...(await checkWorkUnitAgentReadiness(ctx.agent)),
       profile_provisioning: agentProvisioning,
@@ -688,7 +698,10 @@ export default Plugin.define({
           try {
             result = await guard.runHarness(context?.sessionID ?? input.session_id, "harness_execution_controller", input,
               () => runExecutionController(requireProjectRoot(), input, candidateRegistry,
-                scopeRoots ? { checkoutRoot: scopeRoots.checkoutRoot } : {}))
+                {
+                  ...(scopeRoots ? { checkoutRoot: scopeRoots.checkoutRoot } : {}),
+                  runtime_loaded_at_ms: runtimeLoadedAtMs,
+                }))
           } catch (error) {
             await causalPolicy.failure(input, causalEvidence, error)
             throw error

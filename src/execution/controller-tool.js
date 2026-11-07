@@ -39,6 +39,7 @@ import { verifyScopeCheckoutRoots } from "./scope-checkout.js"
 import { compileMandateDerivedWu, inspectMandateDerivedWu, isTechnicalWuContractBlocker } from "./jit-contract.js"
 import { inspectAuthorityGap } from "./authority-triage.js"
 import { wuBudgetUsage } from "./wu-budget.js"
+import { inspectOrphanBuilderRisk } from "./orphan-circuit-breaker.js"
 import { stableHash } from "./serialize.js"
 import { batchHash, requireBatchCoverage, MAX_WU_BATCH_SIZE } from "./wu-batch.js"
 import { applyEvent } from "./state.js"
@@ -603,7 +604,13 @@ export async function runExecutionController(projectRoot, input, candidateRegist
 
   if (action === "operational_status") {
     const { state, events } = await controller.snapshot()
-    return { action, ...projectOperationalView(state, { events }) }
+    return { action, ...projectOperationalView(state, { events }),
+      runtime_stability: inspectOrphanBuilderRisk(state, {
+        nowMs: options.now_ms ?? Date.now(),
+        runtimeLoadedAtMs: options.runtime_loaded_at_ms ?? null,
+      }),
+      time_policy: state.time_policy?.mode ?? "LEGACY_HARD_LIMIT",
+    }
   }
 
   if (action === "reserve") {
@@ -629,6 +636,15 @@ export async function runExecutionController(projectRoot, input, candidateRegist
       body.expected_agent = String(input.launch_agent)
       body.claim_required = true
       const { state } = await controller.snapshot()
+      if (body.expected_agent === "harness-builder") {
+        const risk = inspectOrphanBuilderRisk(state, {
+          nowMs: options.now_ms ?? Date.now(),
+          runtimeLoadedAtMs: options.runtime_loaded_at_ms ?? null,
+        })
+        if (risk.launch_temporarily_blocked) {
+          throw new Error(`RUNTIME_STABILITY_GUARD: ${risk.abandoned_builder_dispatch_count} previously abandoned builders in WU ${risk.wu_id}; runtime has not remained stable for the ${risk.retry_after_seconds}s evidence window. Do not consume another reservation or launch a competing child. Inspect the effective time_policy and host logs; this is a temporary guard, not proof that OpenCode restarted.`)
+        }
+      }
       if (body.expected_agent === 'harness-reviewer' && activeRecovery(state)) {
         const candidate = state.candidates[input.candidate_id]
         if (!candidate || candidate.wu_id !== state.wu.wu_id || candidate.superseded_by_contract) throw new Error('prepare_launch for process review requires the exact recorded candidate_id')

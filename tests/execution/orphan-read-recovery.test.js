@@ -7,7 +7,7 @@ import { recordKnowledgeArtifact } from "../../src/project-knowledge.js"
 import { runExecutionController, claimDispatchLaunch } from "../../src/execution/controller-tool.js"
 import { createExecutionController } from "../../src/execution/execution.js"
 import { createSessionRecovery } from "../../src/execution/session-recovery.js"
-import { isLiteralReadOnlyGrep, isApprovedReadOnlyShellGrep, classifyOrphanReadTools, pendingReadsNotExpanded, validOrphanPendingProof } from "../../src/execution/orphan-read-evidence.js"
+import { isLiteralReadOnlyGrep, isApprovedReadOnlyShellGrep, isApprovedReadOnlyShellInspection, classifyOrphanReadTools, pendingReadsNotExpanded, validOrphanPendingProof } from "../../src/execution/orphan-read-evidence.js"
 import { seedWuContract } from "./wu-fixture.js"
 
 const epic = "ORPHAN-EPIC", execution = "orphan-exec", wu = "WU-01", dispatch = "orphan-builder"
@@ -96,6 +96,63 @@ test("read-only unfinished entries are distinguishable from side-effecting tools
   assert.equal(validOrphanPendingProof({ pending_tools: 2, interrupted_read_only: true, unsettled_read_only_tools: ["r1", "r2"] }), true)
   assert.equal(validOrphanPendingProof({ pending_tools: 2, interrupted_read_only: false, unsettled_read_only_tools: ["r1", "r2"] }), false)
   assert.equal(validOrphanPendingProof({ pending_tools: 2, interrupted_read_only: true, unsettled_read_only_tools: ["r1"] }), false)
+})
+
+test("interrupted no-argument pwd is a trusted inspection, but shell mutation forms are not", () => {
+  const root = "/Users/poseidon/Documents/alfran/alfran-web-platform"
+  for (const command of ["pwd", "cd " + root + " && pwd"]) {
+    assert.equal(isApprovedReadOnlyShellInspection(command, root), true, command)
+    const result = classifyOrphanReadTools([{ content: [shellPart("call_pwd", command, "shell")] }],
+      { projectRoot: root })
+    assert.equal(result.eligible, true)
+    assert.equal(result.pending_tools, 1)
+    assert.equal(result.shell_commands?.length, 1)
+  }
+  for (const command of [
+    "pwd -P", "pwd; touch /tmp/unsafe", "pwd && touch /tmp/unsafe",
+    "pwd | tee /tmp/unsafe", "pwd > /tmp/unsafe", "pwd\nrm -rf .",
+    "pwd $(touch /tmp/unsafe)", "env pwd",
+    "cd " + root + " && pwd && rm -rf .",
+    "cd " + root + " && pwd | tee /tmp/unsafe",
+    "cd " + root + "-different && pwd",
+    "cd /tmp && pwd",
+    "cd " + root + "/../elsewhere && pwd",
+    "cd " + root + " && pwd -P",
+  ]) assert.equal(isApprovedReadOnlyShellInspection(command, root), false, command)
+  assert.equal(isApprovedReadOnlyShellInspection("cd " + root + " && pwd"), false)
+  const before = classifyOrphanReadTools([{ content: [shellPart("call_pwd", "pwd", "shell")] }],
+    { projectRoot: root })
+  const changed = classifyOrphanReadTools([{ content: [shellPart("call_pwd", "pwd && touch /tmp/unsafe", "shell")] }],
+    { projectRoot: root })
+  assert.equal(changed.eligible, false)
+  assert.equal(pendingReadsNotExpanded(before, changed), false)
+})
+
+test("owner-approved orphan with pending pwd and native read is fenced and conservatively reconciled", async t => {
+  const f = await fixture(t, { pending: [
+    shellPart("call_00_5fqo1sqctdoe0e4qz48sbhli", "pwd", "shell"),
+    readPart("call_01_xirlv2c9ckydlg5kv6tys03x"),
+  ] })
+  const result = await f.recovery.recoverOrphan(f.call)
+  assert.equal(result.status, "ABANDONED_RECONCILED")
+  assert.equal(result.classification, "ABANDONED_NOT_SUCCESS")
+  assert.equal(result.charged_seconds, 1800)
+  assert.equal(f.interrupts(), 2)
+  const {state, events} = await f.controller.snapshot()
+  const d = state.dispatches[dispatch]
+  assert.equal(d.status, "abandoned_reconciled")
+  assert.equal(d.fence.proof.pending_tools, 2)
+  assert.deepEqual(d.fence.proof.unsettled_read_only_tools, [
+    "call_00_5fqo1sqctdoe0e4qz48sbhli", "call_01_xirlv2c9ckydlg5kv6tys03x",
+  ])
+  assert.equal(d.fence.proof.shell_commands.length, 1)
+  assert.equal(d.abandonment.evidence.shell_commands.length, 1)
+  assert.equal(state.budget.reserved_seconds, 0)
+  assert.equal(state.budget.used_seconds, 1800)
+  assert.equal(events.filter(e => e.operation_type === "DISPATCH_FENCE").length, 1)
+  assert.equal(events.filter(e => e.operation_type === "DISPATCH_ABANDON").length, 1)
+  assert.equal(events.filter(e => e.operation_type === "DISPATCH_RECONCILE_ABANDONED").length, 1)
+  assert.equal((await f.recovery.recoverOrphan(f.call)).status, "ALREADY_RECONCILED")
 })
 
 test("only literal grep -n commands are classified as read-only shell work", () => {

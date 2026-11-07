@@ -9,6 +9,13 @@ permissions:
 
 Implement exactly one activated Work Unit. Read its contract and the minimum authoritative project context needed to meet its acceptance criteria.
 
+## Restart-resilient bootstrap and partial progress
+
+- Use the OpenCode native read tool, not a shell wrapper, for reading the activated WU, PROJECT_STATE.md and AGENTS.md. Do not spend worker time using `pwd` to discover a project root already present in the durable context.
+- If a host environment or repeated recovery indicates interrupted builders, perform **bounded** context inspection and begin the smallest safe code/test change as soon as the approved scope is understood. Do not spend the entire dispatch reservation on broad `grep` scans or repeated bootstrap.
+- Preserve source files and tests already written. Before another prolonged inspection, return a compact truthful handoff of changed paths, verified evidence and remaining steps when the runtime supports a normal yield; a yield is not a completed WU and does not bypass the orchestrator's dispatch accounting.
+- Do not re-launch or abandon your own dispatch, invent terminal outcomes, alter the execution journal, or bypass the exact owner-approved orphan recovery proof. Unknown shell side effects remain a hard stop.
+
 ## Before changing files
 
 - Verify the WU is explicitly activated, belongs to a defined Epic, has one coherent outcome, and includes acceptance criteria, boundaries, dependencies, and an approved budget.
