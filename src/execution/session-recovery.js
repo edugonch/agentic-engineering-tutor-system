@@ -243,7 +243,7 @@ export function createSessionRecovery(ctx, projectRoot) {
           return { code: "STRUCTURED_CHILD_SESSION_CONFLICT" }
         if (call.state?.status === "completed" || call.state?.metadata?.status === "completed" ||
             child.outcome === "succeeded") return { code: "CHILD_TERMINAL_SUCCESS_OR_COMPLETED_PARENT" }
-        const tools = classifyOrphanReadTools(childContext)
+        const tools = classifyOrphanReadTools(childContext, { projectRoot })
         if (!tools.eligible) return { code: "UNSETTLED_TOOL_REJECTED",
           tool_reason_code: tools.reason_code ?? "UNKNOWN", rejected_tool: tools.rejected_tool ?? null }
         return null
@@ -260,7 +260,7 @@ export function createSessionRecovery(ctx, projectRoot) {
         ...stop(`Orphan evidence rejected: ${firstFailure.code}`, "EVIDENCE_CONFLICT"),
         diagnostic: firstFailure,
       }
-      const initialPending = classifyOrphanReadTools(first.childContext)
+      const initialPending = classifyOrphanReadTools(first.childContext, { projectRoot })
       // A wait timeout is UNKNOWN, never permission to interrupt a live tool.
       if (!(await idle())) return stop("Child is active or cannot be proven quiescent", "CHILD_ACTIVITY_UNKNOWN")
       let second
@@ -279,7 +279,7 @@ export function createSessionRecovery(ctx, projectRoot) {
         let interrupted
         try { interrupted = await loadChild() }
         catch { return stop("Cannot corroborate child after interruption", "CAPABILITY_UNAVAILABLE") }
-        const interruptedPending = classifyOrphanReadTools(interrupted.childContext)
+        const interruptedPending = classifyOrphanReadTools(interrupted.childContext, { projectRoot })
         const interruptionFailure = diagnose(interrupted)
         if (interruptionFailure) return {
           ...stop("Orphan evidence rejected after acknowledged interruption", "EVIDENCE_CONFLICT"),
@@ -324,7 +324,7 @@ export function createSessionRecovery(ctx, projectRoot) {
       if (!(await idle())) return stop("Post-fence session is still active", "CHILD_ACTIVITY_UNKNOWN")
       let after
       try { after = await loadChild() } catch { return stop("Cannot read post-fence session", "CAPABILITY_UNAVAILABLE") }
-      const postPending = classifyOrphanReadTools(after.childContext)
+      const postPending = classifyOrphanReadTools(after.childContext, { projectRoot })
       const postFenceFailure = diagnose(after)
       if (postFenceFailure) return {
         ...stop("Orphan evidence rejected after durable fencing", "EVIDENCE_CONFLICT"),
