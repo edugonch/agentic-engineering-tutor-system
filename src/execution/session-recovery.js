@@ -186,7 +186,14 @@ export function createSessionRecovery(ctx, projectRoot) {
       // dispatch binding. Any corrupted, ambiguous, or malformed exact
       // approval remains a hard failure, not a policy escape.
       if (!String(error.message).startsWith("ORPHAN_AUTHORITY_UNMAPPED: decision needs one typed dispatch_abandonment contract")) throw error
-      authority = await findApprovedOrphanRecoveryPolicy(projectRoot, input.decision_artifact_id)
+      try {
+        authority = await findApprovedOrphanRecoveryPolicy(projectRoot, input.decision_artifact_id)
+      } catch (policyError) {
+        // Preserve the historical exact-binding error for a prose-only
+        // decision. Only a real typed policy may take the new authority path.
+        if (String(policyError.message).startsWith("ORPHAN_POLICY_UNMAPPED: exactly one standing policy and no exact dispatch binding required")) throw error
+        throw policyError
+      }
     }
     const standingPolicy = authority.authority_kind === "BOUNDED_STANDING_POLICY"
     if (authority.execution_id !== execution ||
