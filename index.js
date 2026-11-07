@@ -78,6 +78,8 @@ export default Plugin.define({
   id: "opencode.agentic-harness",
   async setup(ctx) {
     const runtimeLoadedAtMs = Date.now()
+    // Process lifetime survives plugin hot reload; true process restart resets it.
+    const processStartedAtMs = Date.now() - Math.floor(process.uptime() * 1000)
     const packageRevision = await packageFingerprint(fileURLToPath(new URL(".", import.meta.url)))
     const settings = readGuardSettings(process.env)
     const guard = createTurnGuard(settings)
@@ -110,6 +112,7 @@ export default Plugin.define({
       // abandonment. The owner must record an APPROVED bounded policy and
       // explicitly opt in to its exact ID in the runtime environment.
       orphanPolicyId: process.env.HARNESS_AUTONOMOUS_ORPHAN_POLICY_ID || null,
+      runtimeStartedAtMs: processStartedAtMs,
     })
     const workerBudget = createWorkerBudgetGuard(ctx, requireProjectRoot(), sessionRecovery)
     const readDispatchHandoff = createDispatchHandoffReader(ctx, requireProjectRoot())
@@ -149,7 +152,7 @@ export default Plugin.define({
       runtime_continuity: {
         process_pid: process.pid,
         process_uptime_seconds: Math.floor(process.uptime()),
-        process_started_at: new Date(Date.now() - process.uptime() * 1000).toISOString(),
+        process_started_at: new Date(processStartedAtMs).toISOString(),
         plugin_loaded_at: new Date(runtimeLoadedAtMs).toISOString(),
         // These observations distinguish a process restart from a plugin
         // reload across two readings. A single reading proves neither cause.
@@ -707,7 +710,7 @@ export default Plugin.define({
               () => runExecutionController(requireProjectRoot(), input, candidateRegistry,
                 {
                   ...(scopeRoots ? { checkoutRoot: scopeRoots.checkoutRoot } : {}),
-                  runtime_loaded_at_ms: runtimeLoadedAtMs,
+                  runtime_loaded_at_ms: processStartedAtMs,
                 }))
           } catch (error) {
             await causalPolicy.failure(input, causalEvidence, error)
