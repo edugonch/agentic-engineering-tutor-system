@@ -7,6 +7,13 @@ import { isStaleWorktreeScopeBlocker } from "./scope-recovery.js"
 
 const LIVE = new Set(["reserved", "pending_launch", "launched", "finished", "ambiguous", "abandoned"])
 const SETTLED = new Set(["released", "result_reconciled", "abandoned_reconciled"])
+// Supervisor continuation historically treats launched/pending/reserved and
+// ambiguous/abandoned as in-flight. A finished dispatch is handled separately
+// by the reconciliation route; preserve that explicit distinction.
+const SUPERVISOR_PENDING = new Set(["reserved", "pending_launch", "launched", "abandoned", "ambiguous"])
+export function hasPendingSupervisorDispatch(state) {
+  return Object.values(state.dispatches ?? {}).some(d => SUPERVISOR_PENDING.has(d.status))
+}
 
 export function classifyContinuation(state) {
   const toolingTriage = state.blocker?.class === "BLOCKED_TOOLING" && !expiredWait(state)
