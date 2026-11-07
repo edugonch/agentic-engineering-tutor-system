@@ -7,7 +7,7 @@ import { recordKnowledgeArtifact } from "../../src/project-knowledge.js"
 import { runExecutionController, claimDispatchLaunch } from "../../src/execution/controller-tool.js"
 import { createExecutionController } from "../../src/execution/execution.js"
 import { createSessionRecovery } from "../../src/execution/session-recovery.js"
-import { isLiteralReadOnlyGrep, classifyOrphanReadTools, pendingReadsNotExpanded, validOrphanPendingProof } from "../../src/execution/orphan-read-evidence.js"
+import { isLiteralReadOnlyGrep, isApprovedReadOnlyShellGrep, classifyOrphanReadTools, pendingReadsNotExpanded, validOrphanPendingProof } from "../../src/execution/orphan-read-evidence.js"
 import { seedWuContract } from "./wu-fixture.js"
 
 const epic = "ORPHAN-EPIC", execution = "orphan-exec", wu = "WU-01", dispatch = "orphan-builder"
@@ -131,6 +131,105 @@ test("only literal grep -n commands are classified as read-only shell work", () 
     pending_tools: 1, interrupted_read_only: true,
     unsettled_read_only_tools: ["shell1"], shell_commands: good.shell_commands,
   }), true)
+})
+
+
+const e0527First = root => 'cd ' + root +
+  ' && grep -n "^export \\|^const CANONICAL\\|assertSchedule\\|interface ScheduleException" scheduling/src/domain/schedule.ts'
+const e0527Second = root => 'cd ' + root +
+  ' && grep -n "^export " scheduling/src/domain/appointment.ts scheduling/src/domain/resource-allocation.ts'
+
+test("literal project-root cd && grep accepts the two e0527-build-4 commands without allowing arbitrary shell", () => {
+  const root = "/Users/poseidon/Documents/alfran/alfran-web-platform"
+  assert.equal(isApprovedReadOnlyShellGrep(e0527First(root), root), true)
+  assert.equal(isApprovedReadOnlyShellGrep(e0527Second(root), root), true)
+  assert.equal(isApprovedReadOnlyShellGrep(e0527First(root), root + "-other"), false)
+  assert.equal(isApprovedReadOnlyShellGrep(e0527First(root), undefined), false)
+  assert.equal(isApprovedReadOnlyShellGrep("grep -n pattern scheduling/src/domain/schedule.ts", root), true)
+  for (const unsafe of [
+    'cd ' + root + ' && grep -n "^export " scheduling/src/domain/schedule.ts && touch /tmp/unsafe',
+    'cd ' + root + ' && grep -n "^export " scheduling/src/domain/schedule.ts; touch /tmp/unsafe',
+    'cd ' + root + ' && grep -n "^export " scheduling/src/domain/schedule.ts | tee /tmp/unsafe',
+    'cd ' + root + ' && grep -n "^export " scheduling/src/domain/schedule.ts > /tmp/unsafe',
+    'cd ' + root + ' && grep -n "$(touch /tmp/unsafe)" scheduling/src/domain/schedule.ts',
+    'cd ' + root + ' && grep -n "^export \`id\`" scheduling/src/domain/schedule.ts',
+    'cd ' + root + ' && grep -n "^export " /etc/passwd',
+    'cd ' + root + ' && grep -n "^export " ../outside.ts',
+    'cd ' + root + ' && grep -n "^export " -e /tmp/unsafe',
+    'cd ' + root + ' && sed -n "1,4p" scheduling/src/domain/schedule.ts',
+    'cd ' + root + ' && grep -n "^export " scheduling/src/domain/schedule.ts\\nrm -rf .',
+    'cd ' + root + ' && grep -n "^export " scheduling/src/domain/schedule.ts $(touch /tmp/unsafe)',
+    'cd ' + root + ' && grep -n "^export " scheduling/src/domain/schedule.ts # comment',
+    'cd ' + root + ' && grep -n "^export " scheduling/src/domain/schedule.ts || true',
+  ]) assert.equal(isApprovedReadOnlyShellGrep(unsafe, root), false, unsafe)
+  const actual = [{ content: [
+    shellPart("call_00_ci2loboq5oxb1d9imf0yhp2d", e0527First(root), "shell"),
+    shellPart("call_01_9duo6llr3ug72pgk6tllpovo", e0527Second(root), "shell"),
+  ] }]
+  const classified = classifyOrphanReadTools(actual, { projectRoot: root })
+  assert.equal(classified.eligible, true)
+  assert.equal(classified.pending_tools, 2)
+  assert.equal(classified.shell_commands.length, 2)
+  assert.equal(classifyOrphanReadTools(actual).eligible, false)
+})
+
+test("approved e0527-build-4 cd && grep orphan fences and settles without fabricating terminal results", async t => {
+  const f = await fixture(t, { pending: [] })
+  f.childContext[0].content = [
+    shellPart("call_00_ci2loboq5oxb1d9imf0yhp2d", e0527First(f.root), "shell"),
+    shellPart("call_01_9duo6llr3ug72pgk6tllpovo", e0527Second(f.root), "shell"),
+  ]
+  const result = await f.recovery.recoverOrphan(f.call)
+  assert.equal(result.status, "ABANDONED_RECONCILED")
+  assert.equal(result.classification, "ABANDONED_NOT_SUCCESS")
+  assert.equal(result.charged_seconds, 1800)
+  assert.equal(f.interrupts(), 2)
+  const { state, events } = await f.controller.snapshot()
+  const d = state.dispatches[dispatch]
+  assert.equal(d.status, "abandoned_reconciled")
+  assert.equal(d.fence.proof.pending_tools, 2)
+  assert.equal(d.fence.proof.shell_commands.length, 2)
+  assert.equal(d.abandonment.evidence.shell_commands.length, 2)
+  assert.equal(state.budget.reserved_seconds, 0)
+  assert.equal(state.budget.used_seconds, 1800)
+  for (const type of ["DISPATCH_FENCE", "DISPATCH_ABANDON", "DISPATCH_RECONCILE_ABANDONED"])
+    assert.equal(events.filter(event => event.operation_type === type).length, 1)
+})
+
+test("unsafe command with project-root prefix fails closed with unchanged durable reservation", async t => {
+  const f = await fixture(t, { pending: [] })
+  f.childContext[0].content = [
+    shellPart("call_00_ci2loboq5oxb1d9imf0yhp2d", e0527First(f.root) + " && touch /tmp/unsafe", "shell"),
+  ]
+  const before = (await f.controller.snapshot()).state.revision
+  const result = await f.recovery.recoverOrphan(f.call)
+  assert.equal(result.status, "EVIDENCE_CONFLICT")
+  assert.equal(result.diagnostic.tool_reason_code, "SHELL_COMMAND_NOT_LITERAL_GREP")
+  assert.equal(result.safe_to_relaunch, false)
+  assert.equal(f.interrupts(), 0)
+  const { state } = await f.controller.snapshot()
+  assert.equal(state.revision, before)
+  assert.equal(state.dispatches[dispatch].status, "launched")
+  assert.equal(state.budget.reserved_seconds, 1800)
+})
+
+test("new or changed cd && grep tools after interrupt cannot be fenced", async t => {
+  const f = await fixture(t, { pending: [] })
+  f.childContext[0].content = [
+    shellPart("call_00_ci2loboq5oxb1d9imf0yhp2d", e0527First(f.root), "shell"),
+  ]
+  const original = f.ctx.session.interrupt
+  f.ctx.session.interrupt = async args => {
+    const result = await original(args)
+    f.childContext[0].content[0].state.input.command = e0527Second(f.root)
+    return result
+  }
+  const result = await f.recovery.recoverOrphan(f.call)
+  assert.equal(result.status, "EVIDENCE_CONFLICT")
+  assert.equal(result.diagnostic.code, "UNFINISHED_TOOL_CHANGED")
+  const { state } = await f.controller.snapshot()
+  assert.equal(state.dispatches[dispatch].status, "launched")
+  assert.equal(state.budget.reserved_seconds, 1800)
 })
 
 test("owner-approved compacted orphan with pending grep shell commands is fenced and conservatively charged", async t => {
