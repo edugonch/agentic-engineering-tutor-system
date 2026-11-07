@@ -102,8 +102,15 @@ export default Plugin.define({
     const causalPolicy = createCausalAttemptPolicy(requireProjectRoot(), { enabled: process.env.HARNESS_SEMANTIC_RETRY_GUARD === "1" })
     const efficiencyTelemetry = createEfficiencyTelemetry(requireProjectRoot(), { enabled: process.env.HARNESS_EFFICIENCY_TELEMETRY === "1" })
 
-    const supervisor = createExecutionSupervisor(ctx, requireProjectRoot(), { enabled: process.env.HARNESS_SUPERVISOR_ENABLED !== "0" })
     const sessionRecovery = createSessionRecovery(ctx, requireProjectRoot())
+    const supervisor = createExecutionSupervisor(ctx, requireProjectRoot(), {
+      enabled: process.env.HARNESS_SUPERVISOR_ENABLED !== "0",
+      orphanRecovery: sessionRecovery,
+      // A policy is NEVER inferred from the Epic mandate or prior exact
+      // abandonment. The owner must record an APPROVED bounded policy and
+      // explicitly opt in to its exact ID in the runtime environment.
+      orphanPolicyId: process.env.HARNESS_AUTONOMOUS_ORPHAN_POLICY_ID || null,
+    })
     const workerBudget = createWorkerBudgetGuard(ctx, requireProjectRoot(), sessionRecovery)
     const readDispatchHandoff = createDispatchHandoffReader(ctx, requireProjectRoot())
 
@@ -373,11 +380,11 @@ export default Plugin.define({
       })
       editor.add({
         name: "harness_recover_orphan_dispatch",
-        description: "Governed, potentially mutating recovery of one already-launched orphan Harness dispatch. Requires the exact indexed APPROVED decision with a hash-verified typed dispatch_abandonment binding. Root harness-orchestrator and OpenCode session evidence must prove identity, quiescence, no unsafe pending tools (native read, literal grep -n, or an exact project-root cd && grep -n are eligible only after interruption and quiescence proofs), interrupt acknowledgement, durable fencing and fresh post-fence quiescence before conservative settlement. On EVIDENCE_CONFLICT the result includes typed diagnostic details identifying the failing identity/tool stage; do not repeat an identical recovery without new evidence. Idempotent on an already settled exact child. A refusal never authorizes a replacement builder, fabricated terminal result or blocker clear.",
+        description: "Governed, potentially mutating recovery of one already-launched orphan Harness dispatch. Requires an indexed hash-verified APPROVED decision with an exact typed dispatch_abandonment binding OR a narrowly bounded owner-approved orphan_recovery_policy with limits and expiry. The supervisor may use only a separately opt-in policy ID; prior exact dispatch decisions never grant standing authority. Root harness-orchestrator and OpenCode session evidence must prove identity, quiescence, no unsafe pending tools (native read, literal grep -n, or an exact project-root cd && grep -n are eligible only after interruption and quiescence proofs), interrupt acknowledgement, durable fencing and fresh post-fence quiescence before conservative settlement. On EVIDENCE_CONFLICT the result includes typed diagnostic details identifying the failing identity/tool stage; do not repeat an identical recovery without new evidence. Idempotent on an already settled exact child. A refusal never authorizes a replacement builder, fabricated terminal result or blocker clear.",
         input: objectInput({
           execution_id: { type: "string", minLength: 1 },
           dispatch_id: { type: "string", minLength: 1 },
-          decision_artifact_id: { type: "string", minLength: 1, description: "Exact locally indexed APPROVED decision ID or record_key whose dispatch_abandonment contract matches the active WU, dispatch and child session." },
+          decision_artifact_id: { type: "string", minLength: 1, description: "Exact indexed APPROVED decision ID/record_key containing dispatch_abandonment for the exact child, or an explicitly bounded orphan_recovery_policy scoped to the active execution/WU." },
         }, ["execution_id", "dispatch_id", "decision_artifact_id"]),
         execute: async (input, context) => json(await sessionRecovery.recoverOrphan({
           ...input, session_id: context?.sessionID,
