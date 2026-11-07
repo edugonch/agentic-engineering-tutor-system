@@ -13,7 +13,10 @@ import { stableHash } from "./serialize.js"
 import { isTechnicalWuContractBlocker } from "./jit-contract.js"
 import { isStaleWorktreeScopeBlocker } from "./scope-recovery.js"
 
-export function createExecutionSupervisor(ctx, projectRoot, { enabled = true, now = () => Date.now(), schedule = setTimeout, cancel = clearTimeout } = {}) {
+export function createExecutionSupervisor(ctx, projectRoot, {
+  enabled = true, now = () => Date.now(), schedule = setTimeout, cancel = clearTimeout,
+  orphanRecovery = null, orphanPolicyId = null,
+} = {}) {
   const running = new Set()
   const internal = new Set()
   const errors = []
@@ -63,6 +66,46 @@ export function createExecutionSupervisor(ctx, projectRoot, { enabled = true, no
       if (!session || state.completed || (state.blocker && !expiredWait(state) && !toolingTriage && !contractTriage && !scopeTriage) || state.mandate?.authority_kind !== "OWNER_APPROVED_EPIC") { disarm(execution); return false }
       const info = await identity(session)
       if (info.outcome !== "succeeded") { disarm(execution); return false } // never override cancellation or failure
+      // Explicit opt-in only: the named policy must be an indexed, hash-verified
+      // owner APPROVED bounded recovery decision. This never operates on an
+      // apparently live builder or in the absence of a tooling blocker.
+      if (orphanRecovery && orphanPolicyId && state.blocker?.class === "BLOCKED_TOOLING" &&
+          state.wu && !state.wu.completed) {
+        const launched = Object.entries(state.dispatches).filter(([, d]) =>
+          d.status === "launched" && d.wu_id === state.wu.wu_id &&
+          d.expected_agent === "harness-builder" && d.session_id)
+        if (launched.length === 1) {
+          const [dispatchId] = launched[0]
+          const progressHash = supervisorProgress(state)
+          const triageKey = [dispatchId, orphanPolicyId, progressHash].join(":")
+          if (!state.orphan_auto_triage?.[triageKey]) {
+            let verdict
+            try {
+              verdict = await orphanRecovery.recoverOrphan({
+                execution_id: execution, dispatch_id: dispatchId,
+                decision_artifact_id: orphanPolicyId, session_id: session,
+              })
+            } catch {
+              verdict = { status: "ORPHAN_POLICY_UNAVAILABLE" }
+            }
+            if (verdict?.status === "ABANDONED_RECONCILED" ||
+                verdict?.status === "ALREADY_RECONCILED") {
+              state = (await c.snapshot()).state
+            } else {
+              // Durable one-shot refusal. Neither this receipt nor a new
+              // supervisor prompt grants relaunch or clearance authority.
+              const reasonCode = String(verdict?.status ?? "EVIDENCE_INSUFFICIENT")
+                .toUpperCase().replace(/[^A-Z_]/g, "_").slice(0, 80)
+              await commit(c, session, "ORPHAN_AUTO_TRIAGE", {
+                dispatch_id: dispatchId, wu_id: state.wu.wu_id,
+                policy_id: orphanPolicyId, progress_hash: progressHash,
+                reason_code: reasonCode, outcome: "REFUSED",
+              }, `${execution}:auto-orphan-refusal:${stableHash(triageKey)}`)
+              state = (await c.snapshot()).state
+            }
+          }
+        }
+      }
       const budget = state.budget
       const wu = state.wu && !state.wu.completed ? wuBudgetUsage(state, state.wu.wu_id) : null
       if (budget.total_seconds - budget.used_seconds <= 0 || (!usesPlanningEstimates(state) && wu?.ceiling_seconds != null && wu.used_seconds >= wu.ceiling_seconds)) return false
@@ -176,6 +219,7 @@ export function createExecutionSupervisor(ctx, projectRoot, { enabled = true, no
       if (token && internal.has(token)) { internal.delete(token); return true }
       return false
     },
-    status: () => ({ enabled, errors: [...errors], validation: "REAL_PROVIDER_CANARY_REQUIRED" }),
+    status: () => ({ enabled, errors: [...errors], validation: "REAL_PROVIDER_CANARY_REQUIRED",
+      autonomous_orphan_recovery: orphanPolicyId ? "OPT_IN_BOUNDED_POLICY" : "DISABLED" }),
   }
 }
