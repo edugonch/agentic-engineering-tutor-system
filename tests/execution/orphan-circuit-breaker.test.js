@@ -1,6 +1,13 @@
 import test from "node:test"
 import assert from "node:assert/strict"
 import { inspectOrphanBuilderRisk, STABLE_RUNTIME_WINDOW_MS } from "../../src/execution/orphan-circuit-breaker.js"
+import { mkdtemp, rm } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { recordKnowledgeArtifact } from "../../src/project-knowledge.js"
+import { runExecutionController, claimDispatchLaunch } from "../../src/execution/controller-tool.js"
+import { createExecutionController } from "../../src/execution/execution.js"
+import { seedWuContract } from "./wu-fixture.js"
 
 const at = Date.parse("2026-11-07T15:00:00.000Z")
 function fixture() {
@@ -66,4 +73,86 @@ test("a rebooted plugin does not infer that elapsed wall clock before boot is st
   assert.equal(result.retry_after_seconds, Math.ceil((STABLE_RUNTIME_WINDOW_MS - 1000) / 1000))
   const invalid = inspectOrphanBuilderRisk(s, { nowMs: at, runtimeLoadedAtMs: at + 100 })
   assert.equal(invalid.launch_temporarily_blocked, undefined)
+})
+
+test("controller prevents a third rapid orphan builder, without consuming the unlaunched reservation", async t => {
+  const root = await mkdtemp(join(tmpdir(), "harness-orphan-breaker-"))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const execution_id = "risk-E1", session_id = "ses_root", epic_id = "EPIC-RISK", wu_id = "W1"
+  await recordKnowledgeArtifact(root, {
+    artifact_type: "epic", artifact_id: epic_id, title: "Orphan breaker integration",
+    status: "APPROVED", owner_confirmed: true, source_refs: ["https://example.org/risk"],
+    content: "execution_mandate: " + JSON.stringify({
+      max_wus: 1, total_seconds: 10000, merge_policy: "none", wu_sequence: [wu_id],
+    }),
+  })
+  await seedWuContract(root, wu_id, epic_id, 1800)
+  const run = (action, more = {}, options = {}) => runExecutionController(root, {
+    action, execution_id, session_id, ...more,
+  }, undefined, options)
+  await run("approve_mandate", { epic_artifact_id: epic_id })
+  await run("activate_wu", { wu_id, mandate_id: execution_id + "-MANDATE-001" })
+  const controller = await createExecutionController({
+    dir: join(root, ".harness", "execution", "controller", execution_id),
+  })
+  async function commit(operation_type, body, operation_id) {
+    const lease = await controller.acquire(session_id)
+    const { state } = await controller.snapshot()
+    return controller.commit({ operation_id, operation_type, body }, {
+      holder_session_id: session_id, expected_revision: state.revision,
+      lease_fencing_token: lease.fencing_token,
+    })
+  }
+  for (let i = 1; i <= 2; i++) {
+    const dispatch_id = "build-" + i, child_id = "ses_child_" + i
+    await run("reserve", { dispatch_id, reserved_seconds: 1800 })
+    await run("prepare_launch", { dispatch_id, launch_agent: "harness-builder" })
+    await claimDispatchLaunch(root, { execution_id, dispatch_id, call_id: "call_" + i, session_id })
+    await run("record_launch", { dispatch_id, launch_session_id: child_id })
+    const { state } = await controller.snapshot()
+    const proof = {
+      kind: "VERIFIED_QUIESCENT_CHILD", child_session_id: child_id,
+      parent_session_id: session_id, launch_call_id: "call_" + i,
+      agent: "harness-builder", runtime_quiescent: true, pending_tools: 0,
+      interrupted: true, fence_hook_installed: true, observation_hash: "a".repeat(64),
+    }
+    await commit("DISPATCH_FENCE", { dispatch_id,
+      expected_revision: state.revision, child_session_id: child_id,
+      parent_session_id: session_id, launch_call_id: "call_" + i,
+      agent: "harness-builder", wu_id, proof,
+    }, "fence-" + i)
+    const fenced = (await controller.snapshot()).state.dispatches[dispatch_id]
+    await commit("DISPATCH_ABANDON", { dispatch_id, child_session_id: child_id,
+      fence_generation: fenced.fence.generation,
+      proof: {
+        kind: "POST_FENCE_QUIESCENCE", child_session_id: child_id,
+        runtime_quiescent: true, pending_tools: 0, fence_enforced: true,
+        observation_hash: "b".repeat(64),
+      },
+    }, "abandon-" + i)
+    await commit("DISPATCH_RECONCILE_ABANDONED", { dispatch_id,
+      fence_generation: fenced.fence.generation,
+    }, "settle-" + i)
+  }
+  const risk = await run("operational_status", {}, {
+    now_ms: Date.now(), runtime_loaded_at_ms: Date.now() - 1000,
+  })
+  assert.equal(risk.runtime_stability.abandoned_builder_dispatch_count, 2)
+  assert.equal(risk.runtime_stability.launch_temporarily_blocked, true)
+  assert.equal(risk.runtime_stability.interruption_cause, "UNVERIFIED")
+  assert.equal(risk.time_policy, "WU_PLANNING_ESTIMATES")
+  await run("reserve", { dispatch_id: "build-3", reserved_seconds: 1800 })
+  const before = (await controller.snapshot()).state
+  await assert.rejects(run("prepare_launch", {
+    dispatch_id: "build-3", launch_agent: "harness-builder",
+  }, { now_ms: Date.now(), runtime_loaded_at_ms: Date.now() - 1000 }), /RUNTIME_STABILITY_GUARD/)
+  const after = (await controller.snapshot()).state
+  assert.equal(after.revision, before.revision)
+  assert.equal(after.dispatches["build-3"].status, "reserved")
+  assert.equal(after.budget.reserved_seconds, 1800)
+  await run("release", { dispatch_id: "build-3" })
+  const cleared = (await controller.snapshot()).state
+  assert.equal(cleared.dispatches["build-3"].status, "released")
+  assert.equal(cleared.budget.reserved_seconds, 0)
+  assert.equal(cleared.budget.used_seconds, 3600)
 })
