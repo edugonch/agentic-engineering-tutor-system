@@ -3,7 +3,8 @@ import assert from "node:assert/strict"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { recordKnowledgeArtifact } from "../../src/project-knowledge.js"
+import { recordKnowledgeArtifact, findApprovedOrphanRecoveryPolicy } from "../../src/project-knowledge.js"
+import { createExecutionSupervisor } from "../../src/execution/supervisor.js"
 import { runExecutionController, claimDispatchLaunch } from "../../src/execution/controller-tool.js"
 import { createExecutionController } from "../../src/execution/execution.js"
 import { createSessionRecovery } from "../../src/execution/session-recovery.js"
@@ -74,7 +75,7 @@ async function fixture(t, { compacted = true, pending = [readPart("r1"), readPar
     },
   }}
   return {
-    root, parentCall, childContext, parentContext, ctx,
+    root, invoke, parentCall, childContext, parentContext, ctx,
     controller: await createExecutionController({ dir: join(root, ".harness", "execution", "controller", execution) }),
     recovery: createSessionRecovery(ctx, root),
     call: { execution_id: execution, dispatch_id: dispatch, decision_artifact_id: approvalID, session_id: parentID },
@@ -475,4 +476,135 @@ test("post-interrupt new unfinished tools fail closed before durable fencing", a
   const result = await f.recovery.recoverOrphan(f.call)
   assert.equal(result.status, "EVIDENCE_CONFLICT")
   assert.equal((await f.controller.snapshot()).state.dispatches[dispatch].status, "launched")
+})
+
+async function seedStandingPolicy(f, {
+  policyId = "POLICY-BOUNDED-ORPHAN-1", maxDispatches = 1,
+  maxSeconds = 1800, hoursAhead = 24,
+} = {}) {
+  const content = "orphan_recovery_policy: " + JSON.stringify({
+    action: "RECOVER_READ_ONLY_ORPHANS", execution_id: execution,
+    wu_id: wu, max_dispatches: maxDispatches,
+    max_reserved_seconds: maxSeconds,
+    expires_at: new Date(Date.now() + hoursAhead * 3600 * 1000).toISOString(),
+  })
+  return recordKnowledgeArtifact(f.root, {
+    artifact_type: "decision", artifact_id: policyId,
+    status: "APPROVED", owner_confirmed: true,
+    source_refs: ["https://example.org/orphan-owner"],
+    title: "Owner-approved bounded orphan policy", content,
+  })
+}
+
+test("standing policy cannot be adopted from prose, missing approval, or invalid bounds", async t => {
+  const f = await fixture(t)
+  await assert.rejects(findApprovedOrphanRecoveryPolicy(f.root, "unknown"), /ORPHAN_POLICY_REQUIRED/)
+  await seedStandingPolicy(f, { policyId: "POLICY-EXPIRED", hoursAhead: -1 })
+  await assert.rejects(findApprovedOrphanRecoveryPolicy(f.root, "POLICY-EXPIRED"), /ORPHAN_POLICY_EXPIRED/)
+  await seedStandingPolicy(f, { policyId: "POLICY-TOO-WIDE", maxDispatches: 20 })
+  await assert.rejects(findApprovedOrphanRecoveryPolicy(f.root, "POLICY-TOO-WIDE"), /ORPHAN_POLICY_UNMAPPED/)
+  await seedStandingPolicy(f, { policyId: "POLICY-TOO-LONG", hoursAhead: 24 * 8 })
+  await assert.rejects(findApprovedOrphanRecoveryPolicy(f.root, "POLICY-TOO-LONG"), /ORPHAN_POLICY_UNMAPPED/)
+  await recordKnowledgeArtifact(f.root, {
+    artifact_type: "decision", artifact_id: "POLICY-DUPLICATE-KEY",
+    status: "APPROVED", owner_confirmed: true, title: "Invalid JSON duplicate authority",
+    source_refs: ["https://example.org/orphan-owner"],
+    content: 'orphan_recovery_policy: {"action":"RECOVER_READ_ONLY_ORPHANS","execution_id":"orphan-exec","wu_id":"WU-01","max_dispatches":1,"max_dispatches":2,"max_reserved_seconds":1800,"expires_at":"2026-11-08T00:00:00Z"}',
+  })
+  await assert.rejects(findApprovedOrphanRecoveryPolicy(f.root, "POLICY-DUPLICATE-KEY"), /ORPHAN_POLICY_UNMAPPED/)
+})
+
+test("owner standing policy recovers only one exact live child and conservatively counts its durable fence", async t => {
+  const f = await fixture(t)
+  await seedStandingPolicy(f)
+  const policy = await findApprovedOrphanRecoveryPolicy(f.root, "POLICY-BOUNDED-ORPHAN-1")
+  assert.equal(policy.max_dispatches, 1)
+  const result = await f.recovery.recoverOrphan({
+    ...f.call, decision_artifact_id: policy.source_artifact_id,
+  })
+  assert.equal(result.status, "ABANDONED_RECONCILED")
+  assert.equal(result.classification, "ABANDONED_NOT_SUCCESS")
+  assert.equal(result.charged_seconds, 1800)
+  const { state } = await f.controller.snapshot()
+  assert.equal(state.dispatches[dispatch].fence.proof.approved_abandonment.authority_kind, "BOUNDED_STANDING_POLICY")
+  assert.equal(state.dispatches[dispatch].fence.proof.approved_abandonment.source_hash, policy.source_hash)
+  assert.equal(state.budget.reserved_seconds, 0)
+  assert.equal(state.budget.used_seconds, 1800)
+  // The policy cannot authorize a second builder just because its child ID
+  // was observed. The refusal is non-mutating, and reservation is retained.
+  await f.invoke("reserve", { dispatch_id: "builder-2", reserved_seconds: 1800 })
+  await f.invoke("prepare_launch", { dispatch_id: "builder-2", launch_agent: "harness-builder" })
+  await claimDispatchLaunch(f.root, {
+    execution_id: execution, dispatch_id: "builder-2", call_id: "call_two", session_id: parentID,
+  })
+  await f.invoke("record_launch", { dispatch_id: "builder-2", launch_session_id: "ses_child_two" })
+  const before = (await f.controller.snapshot()).state.revision
+  const refusal = await f.recovery.recoverOrphan({
+    ...f.call, dispatch_id: "builder-2", decision_artifact_id: policy.source_record_key,
+  })
+  assert.equal(refusal.status, "ORPHAN_POLICY_REFUSED")
+  assert.equal(refusal.reason, "BOUNDED_POLICY_LIMIT_EXHAUSTED")
+  const after = (await f.controller.snapshot()).state
+  assert.equal(after.revision, before)
+  assert.equal(after.dispatches["builder-2"].status, "launched")
+  assert.equal(after.budget.reserved_seconds, 1800)
+})
+
+test("supervisor opt-in performs one bounded governed recovery; normal supervisor leaves it untouched", async t => {
+  const f = await fixture(t)
+  const approval = await seedStandingPolicy(f)
+  await f.invoke("block", { class: "BLOCKED_TOOLING", reason: "Exact launch call lost after compaction" })
+  const prior = f.ctx.session.get
+  f.ctx.session.get = async arg => {
+    const response = await prior(arg)
+    return arg.sessionID === parentID ? { ...response, outcome: "succeeded" } : response
+  }
+  let prompted = 0
+  f.ctx.session.prompt = async () => { prompted++ }
+  const disabled = createExecutionSupervisor(f.ctx, f.root, {
+    enabled: true, orphanRecovery: f.recovery, now: () => Date.now(),
+    schedule: () => ({ unref() {} }), cancel: () => {},
+  })
+  await disabled.bind(execution, parentID)
+  await disabled.onEvent({ type: "session.execution.succeeded", data: { sessionID: parentID } })
+  assert.equal((await f.controller.snapshot()).state.dispatches[dispatch].status, "launched")
+  disabled.dispose()
+
+  const enabled = createExecutionSupervisor(f.ctx, f.root, {
+    enabled: true, orphanRecovery: f.recovery, orphanPolicyId: approval.artifact_id,
+    schedule: () => ({ unref() {} }), cancel: () => {},
+  })
+  await enabled.onEvent({ type: "session.execution.succeeded", data: { sessionID: parentID } })
+  const { state, events } = await f.controller.snapshot()
+  assert.equal(state.dispatches[dispatch].status, "abandoned_reconciled")
+  assert.equal(state.blocker.class, "BLOCKED_TOOLING")
+  assert.equal(state.budget.used_seconds, 1800)
+  assert.equal(events.filter(e => e.operation_type === "DISPATCH_FENCE").length, 1)
+  assert.ok(prompted >= 1)
+  enabled.dispose()
+})
+
+test("invalid autonomous policy produces one durable refusal and never abandons on supervisor replay", async t => {
+  const f = await fixture(t)
+  await f.invoke("block", { class: "BLOCKED_TOOLING", reason: "Lost child identity" })
+  const previous = f.ctx.session.get
+  f.ctx.session.get = async arg => {
+    const result = await previous(arg)
+    return arg.sessionID === parentID ? { ...result, outcome: "succeeded" } : result
+  }
+  f.ctx.session.prompt = async () => {}
+  const supervisor = createExecutionSupervisor(f.ctx, f.root, {
+    orphanRecovery: f.recovery, orphanPolicyId: "POLICY-NOT-APPROVED",
+    schedule: () => ({ unref() {} }), cancel: () => {},
+  })
+  await supervisor.bind(execution, parentID)
+  await supervisor.onEvent({ type: "session.execution.succeeded", data: { sessionID: parentID } })
+  const first = await f.controller.snapshot()
+  assert.equal(first.state.dispatches[dispatch].status, "launched")
+  assert.equal(first.events.filter(e => e.operation_type === "ORPHAN_AUTO_TRIAGE").length, 1)
+  await supervisor.onEvent({ type: "session.execution.succeeded", data: { sessionID: parentID } })
+  const second = await f.controller.snapshot()
+  assert.equal(second.events.filter(e => e.operation_type === "ORPHAN_AUTO_TRIAGE").length, 1)
+  assert.equal(second.state.budget.reserved_seconds, 1800)
+  supervisor.dispose()
 })

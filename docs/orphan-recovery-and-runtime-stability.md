@@ -23,3 +23,21 @@
 3. On `ABANDONED_RECONCILED`, verify and clear only the corresponding tooling stop using the controller, preserve partial code and continue the same active WU.
 4. If `RUNTIME_STABILITY_GUARD` stops a *new* builder, release only its never-launched reservation and allow the measured stability window to pass. Diagnose host restarts and explicit worker limits instead of repeatedly attempting new builders.
 5. Once the runtime is stable, resume the same existing WU, finish verification, independent review and governed merge. Only then configure the next explicit owner-approved ten-WU batch.
+
+## Optional owner-approved automatic orphan recovery
+
+By default, no auto-abandon occurs. Automatic recovery requires a newly recorded indexed, hash-verified owner-approved `decision` artifact with a typed policy, AND explicit host opt-in. No Epic/WU budget increase is implied.
+
+Policy line in the exact decision content (replace the date with a real UTC ISO timestamp within 7 days):
+
+`orphan_recovery_policy: {"action":"RECOVER_READ_ONLY_ORPHANS","execution_id":"alfran-epic05-delivery","wu_id":"E05-27-E","max_dispatches":2,"max_reserved_seconds":3600,"expires_at":"2026-11-10T00:00:00Z"}`
+
+Limits: 1–3 recoveries, 1–5400 reserved seconds, expiry at most 7 days away. Unindexed/unapproved, malformed, duplicate-field, SHA-mismatched, expired, or wrong-WU decisions are rejected. Existing exact-dispatch abandonment decisions continue to work without change.
+
+**Explicit activation:** set `HARNESS_AUTONOMOUS_ORPHAN_POLICY_ID` in the OpenCode host environment to the exact approved decision artifact ID. Activate only at a quiescent restart boundary, never during a live builder. Omitting the variable disables automatic orphan recovery. The setting is read at plugin startup.
+
+When enabled, the supervisor attempts governed recovery only if one exact builder is launched for the active WU, a `BLOCKED_TOOLING` stop exists, and the root orchestrator is proven succeeded. It checks the policy scope, expiry, amount already fenced against this policy and remaining cap. Runtime child/parent identity, quiescence, acknowledged interrupt, durable fencing and conservative reservation charging remain mandatory. An abandoned dispatch never counts as successful work; a blocker is not automatically cleared.
+
+An auto-recovery refusal records a non-authoritative `ORPHAN_AUTO_TRIAGE` event scoped to the exact dispatch, policy and durable progress. It never grants more authority or relaunches a builder. An unchanged state cannot trigger a repeated identical recovery after a supervisor restart.
+
+The plugin cannot repair an unstable OpenCode host or missing runtime session capabilities. Continue investigating host restarts and `time_policy` separately. The policy does not authorize future WUs or unknown shell effects.

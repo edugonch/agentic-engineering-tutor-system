@@ -157,6 +157,13 @@ A `RUNTIME_STABILITY_GUARD` rejection is an intentionally **temporary** builder 
 
 Recovery of a launched orphan still requires an indexed exact owner-approved dispatch abandonment decision, live root/child identity, quiescence, interruption acknowledgement, durable fencing and conservative charge. Do not infer blanket authority over future dispatches from a previous decision. Do not restart OpenCode to install a new Harness version while any child is launched; first settle or safely hold it and coordinate at a quiescent boundary.
 
+## Optional bounded owner-approved orphan self-recovery
+
+Do not infer authorization to abandon future child sessions from an Epic mandate or earlier exact dispatch approval. The only standing exception requires one newly recorded, hash-verified APPROVED decision containing `orphan_recovery_policy` with `action=RECOVER_READ_ONLY_ORPHANS`, exact execution/WU, expiry within seven days, at most three dispatches and at most 5400 reserved seconds. The supervisor is opted in only when `HARNESS_AUTONOMOUS_ORPHAN_POLICY_ID` names that exact decision in the OpenCode host environment.
+
+Under opt-in, the supervisor may recover an exact launched builder with `BLOCKED_TOOLING` after root identity, policy budget/fence count, child/parent/project identity, zero unsafe pending tools, repeatable quiescence, acknowledged interrupt, durable fencing and post-fence quiescence succeed. A refused attempt writes `ORPHAN_AUTO_TRIAGE` as audit evidence once per unchanged durable progress and does not permit a replacement builder. A successful abandoned reconciliation is never a PASS; clear only the underlying blocker when independently proved resolved, reuse partial work, and continue the same WU.
+
+Never create/approve a standing policy yourself from an ambiguous instruction; the owner must approve its exact limits and conditions. If no opt-in policy is configured, the original per-dispatch authority requirement is unchanged.
 ## Interrupted dispatches: stop blind EVIDENCE_CONFLICT loops
 
 An orphan-recovery `EVIDENCE_CONFLICT` is **not** proof that unfinished shell tools must eventually settle. The runtime can report the same status for child/parent identity mismatch, an unrecognized tool name, or a command outside the conservative read-only grammar. Read `diagnostic.code`, `diagnostic.tool_reason_code`, `diagnostic.rejected_tool` and `diagnostic.stage` from the returned result. The diagnostic contains tool IDs, names and input-key names, not arbitrary command contents.

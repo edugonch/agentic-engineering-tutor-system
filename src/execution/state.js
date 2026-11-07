@@ -300,6 +300,28 @@ export function applyEvent(previous, event, { historicalReplay = false } = {}) {
       break
     }
 
+    case "ORPHAN_AUTO_TRIAGE": {
+      // Audit-only refusal. This never grants authority, fences, settles,
+      // charges, releases or clears a blocker. The exact intent identity
+      // prevents repeated checks across supervisor restarts.
+      const d = state.dispatches?.[body.dispatch_id]
+      if (!d || d.wu_id !== state.wu?.wu_id || !d.session_id ||
+          state.wu.completed || !state.supervisor ||
+          !body.policy_id || typeof body.policy_id !== "string" ||
+          typeof body.progress_hash !== "string" || !/^[a-f0-9]{64}$/.test(body.progress_hash) ||
+          typeof body.reason_code !== "string" || !/^[A-Z_]{3,80}$/.test(body.reason_code) ||
+          body.outcome !== "REFUSED") {
+        throw new Error("ORPHAN_AUTO_TRIAGE requires an exact active dispatch and non-authoritative refusal proof")
+      }
+      const key = [body.dispatch_id, body.policy_id, body.progress_hash].join(":")
+      state.orphan_auto_triage ??= {}
+      if (state.orphan_auto_triage[key]) throw new Error("Duplicate orphan auto-triage refusal for same progress")
+      state.orphan_auto_triage[key] = { outcome: "REFUSED", reason_code: body.reason_code,
+        dispatch_id: body.dispatch_id, wu_id: d.wu_id, policy_id: body.policy_id,
+        progress_hash: body.progress_hash, at_revision: state.revision }
+      break
+    }
+
     case "MANDATE_APPROVE": {
       if (!body.mandate_id) throw new Error("MANDATE_APPROVE requires mandate_id.")
       if (!Number.isSafeInteger(body.max_wus) || body.max_wus < 1) throw new Error("MANDATE_APPROVE requires a positive integer max_wus.")
