@@ -5,7 +5,7 @@ import { join } from "node:path"
 import { readdir } from "node:fs/promises"
 import { createExecutionController } from "./execution.js"
 import { stableHash } from "./serialize.js"
-import { findApprovedDispatchAbandonment } from "../project-knowledge.js"
+import { findApprovedDispatchAbandonment, findApprovedOrphanRecoveryPolicy } from "../project-knowledge.js"
 import { classifyOrphanReadTools, pendingReadsNotExpanded } from "./orphan-read-evidence.js"
 
 const unwrap = value => value?.data ?? value
@@ -177,8 +177,20 @@ export function createSessionRecovery(ctx, projectRoot) {
     const execution = id(input.execution_id)
     // Authority is verified before even opening a controller or reading runtime
     // liveness. No caller can supply a boolean "approved" or forge a target.
-    const authority = await findApprovedDispatchAbandonment(projectRoot, input.decision_artifact_id)
-    if (authority.execution_id !== execution || authority.dispatch_id !== input.dispatch_id) {
+    let authority
+    try {
+      authority = { ...(await findApprovedDispatchAbandonment(projectRoot, input.decision_artifact_id)),
+        authority_kind: "EXACT_DISPATCH" }
+    } catch (error) {
+      // Fallback only when the hash-verified APPROVED record is not an exact
+      // dispatch binding. Any corrupted, ambiguous, or malformed exact
+      // approval remains a hard failure, not a policy escape.
+      if (!String(error.message).startsWith("ORPHAN_AUTHORITY_UNMAPPED: decision needs one typed dispatch_abandonment contract")) throw error
+      authority = await findApprovedOrphanRecoveryPolicy(projectRoot, input.decision_artifact_id)
+    }
+    const standingPolicy = authority.authority_kind === "BOUNDED_STANDING_POLICY"
+    if (authority.execution_id !== execution ||
+        (!standingPolicy && authority.dispatch_id !== input.dispatch_id)) {
       throw new Error("ORPHAN_AUTHORITY_MISMATCH: decision does not authorize this execution/dispatch")
     }
     return exclusive(execution, async () => {
@@ -193,11 +205,33 @@ export function createSessionRecovery(ctx, projectRoot) {
       if (snap.state.mandate?.authority_kind !== "OWNER_APPROVED_EPIC" ||
           !snap.state.wu || snap.state.wu.completed ||
           snap.state.wu.wu_id !== authority.wu_id ||
-          d.wu_id !== authority.wu_id || d.session_id !== authority.child_session_id) {
-        return stop("Approved decision must bind the active WU and exact child session", "ORPHAN_AUTHORITY_MISMATCH")
+          d.wu_id !== authority.wu_id ||
+          (!standingPolicy && d.session_id !== authority.child_session_id)) {
+        return stop("Approved decision must bind the active WU and exact child session or approved bounded policy", "ORPHAN_AUTHORITY_MISMATCH")
       }
       const approval = { source_artifact_id: authority.source_artifact_id,
-        source_record_key: authority.source_record_key, source_hash: authority.source_hash }
+        source_record_key: authority.source_record_key, source_hash: authority.source_hash,
+        authority_kind: authority.authority_kind }
+      // Policy reservations are counted at the DURABLE FENCE boundary, not
+      // settlement. A crash after fencing therefore cannot open extra budget
+      // or authorize an additional orphan in another process.
+      const checkPolicy = (state, target) => {
+        if (!standingPolicy) return null
+        if (!target || target.wu_id !== authority.wu_id || !target.session_id)
+          return "BOUNDED_POLICY_TARGET_MISMATCH"
+        if (target.fence) return target.fence.proof?.approved_abandonment?.source_record_key === authority.source_record_key
+          ? null : "BOUNDED_POLICY_FENCE_AUTHORITY_CONFLICT"
+        if (Date.parse(authority.expires_at) <= Date.now()) return "BOUNDED_POLICY_EXPIRED"
+        const used = Object.values(state.dispatches).filter(other =>
+          other.fence?.proof?.approved_abandonment?.source_record_key === authority.source_record_key)
+        const consumed = used.reduce((n, other) => n + other.reserved_seconds, 0)
+        if (used.length >= authority.max_dispatches ||
+            consumed + target.reserved_seconds > authority.max_reserved_seconds)
+          return "BOUNDED_POLICY_LIMIT_EXHAUSTED"
+        return null
+      }
+      const initialPolicyStop = checkPolicy(snap.state, d)
+      if (initialPolicyStop) return stop(initialPolicyStop, "ORPHAN_POLICY_REFUSED")
       if (!input.session_id || !["launched", "abandoned", "abandoned_reconciled"].includes(d.status) ||
           !d.session_id || !d.launch_call_id || !d.claim_required || !d.prepared_by_session_id ||
           !d.expected_agent || !d.wu_id) return stop("Exact claimed, launched child identity required")
@@ -293,6 +327,8 @@ export function createSessionRecovery(ctx, projectRoot) {
         const current = before.state.dispatches[input.dispatch_id]
         if (before.state.revision !== snap.state.revision || current.status !== "launched" ||
             current.session_id !== childID) return stop("Controller changed during pre-fence observation", "SNAPSHOT_CHANGED")
+        const freshPolicyStop = checkPolicy(before.state, current)
+        if (freshPolicyStop) return stop(freshPolicyStop, "ORPHAN_POLICY_REFUSED")
         const proof = { kind: "VERIFIED_QUIESCENT_CHILD", child_session_id: childID,
           parent_session_id: parentID, launch_call_id: d.launch_call_id, agent: d.expected_agent,
           runtime_quiescent: true, pending_tools: interruptedPending.pending_tools, interrupted: true,
@@ -319,6 +355,8 @@ export function createSessionRecovery(ctx, projectRoot) {
       snap = await controller.snapshot()
       d = snap.state.dispatches[input.dispatch_id]
       if (!d.fence || d.fence.child_session_id !== childID) return stop("Missing durable fence", "EVIDENCE_CONFLICT")
+      const fencedPolicyStop = checkPolicy(snap.state, d)
+      if (fencedPolicyStop) return stop(fencedPolicyStop, "ORPHAN_POLICY_REFUSED")
       try { await readRuntime(() => ctx.session.interrupt({ sessionID: childID, continue: false })) }
       catch { return stop("Post-fence interruption not acknowledged", "CAPABILITY_UNAVAILABLE") }
       if (!(await idle())) return stop("Post-fence session is still active", "CHILD_ACTIVITY_UNKNOWN")
