@@ -2,6 +2,7 @@ import { expiredWait } from "./external-observation.js"
 import { stableHash } from "./serialize.js"
 import { isTechnicalWuContractBlocker } from "./jit-contract.js"
 import { isStaleWorktreeScopeBlocker } from "./scope-recovery.js"
+import { classifyContinuation } from "./workflow-router.js"
 // Deliberately excludes checkpoints, blocker text, leases and revision counters.
 export function executionProgress(state) {
   return stableHash({ ...(state.process_policy ? { process_policy: state.process_policy, process_recoveries: state.process_recoveries } : {}), ...(state.process_red ? { process_red: state.process_red } : {}), ...(state.time_policy ? { time_policy: state.time_policy } : {}), mandate: state.mandate, wu: state.wu, budget: state.budget,
@@ -40,10 +41,8 @@ export function recoveryAction(state) {
 }
 
 export function supervisorProgress(state) {
-  const toolingTriage = state.blocker?.class === "BLOCKED_TOOLING" && !expiredWait(state)
-  const contractTriage = isTechnicalWuContractBlocker(state.blocker) && (!state.wu || state.wu.completed)
-  const scopeTriage = isStaleWorktreeScopeBlocker(state.blocker)
-  return toolingTriage || contractTriage || scopeTriage
-    ? stableHash({ phase: toolingTriage ? "TOOLING_TRIAGE" : contractTriage ? "JIT_CONTRACT" : "SCOPE_WORKTREE_TRIAGE", progress: executionProgress(state), blocked_at_revision: state.blocker.at_revision })
-    : executionProgress(state)
+  const { mode } = classifyContinuation(state)
+  return mode === "ORDINARY"
+    ? executionProgress(state)
+    : stableHash({ phase: mode, progress: executionProgress(state), blocked_at_revision: state.blocker.at_revision })
 }
