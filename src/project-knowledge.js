@@ -1122,3 +1122,70 @@ export async function findApprovedDispatchAbandonment(projectRoot, artifactId) {
   return { ...decision, source_artifact_id: record.source_id,
     source_record_key: record.record_key, source_hash: record.sha256 }
 }
+
+
+/**
+ * Separate, strictly bounded standing authority for orphan recovery.
+ *
+ * The exact-dispatch reader above remains unchanged. A standing policy does
+ * not grant new WU scope, budget, permission or a terminal outcome. The
+ * runtime checks the per-policy durable fence count before each mutation.
+ * No policy is active merely because it exists in the index: a caller must
+ * supply its exact ID or the supervisor must have explicit opt-in config.
+ */
+export async function findApprovedOrphanRecoveryPolicy(projectRoot, artifactId) {
+  const root = assertRoot(projectRoot)
+  if (!safeId(artifactId)) throw new Error("ORPHAN_POLICY_REQUIRED: exact policy artifact ID required")
+  const index = await readIndex(root)
+  const matches = index.records.filter(record =>
+    record.classification === "DECISION" &&
+    record.declared_authority === "APPROVED" &&
+    record.import_status === "OWNER_APPROVED_ARTIFACT" &&
+    record.source_system === "harness-artifact" &&
+    (record.source_id === artifactId || record.record_key === artifactId))
+  if (matches.length !== 1) throw new Error("ORPHAN_POLICY_REQUIRED: exactly one indexed APPROVED policy decision required")
+  const record = matches[0]
+  const path = resolve(root, record.archive_path)
+  if (!inside(root, path)) throw new Error("ORPHAN_POLICY_INTEGRITY: path escapes project root")
+  await ensureSafeParents(root, path)
+  const info = await lstat(path)
+  if (!info.isFile() || info.isSymbolicLink()) throw new Error("ORPHAN_POLICY_INTEGRITY: expected regular file")
+  const bytes = await readFile(path)
+  const hash = sha256(bytes)
+  if (hash !== record.sha256 || hash !== record.source_revision)
+    throw new Error("ORPHAN_POLICY_INTEGRITY: approved decision hash does not match indexed source")
+  const content = bytes.toString("utf8")
+  const lines = content.split(/\r?\n/).filter(line => line.startsWith("orphan_recovery_policy: "))
+  if (lines.length !== 1 || content.split(/\r?\n/).some(line => line.startsWith("dispatch_abandonment: ")))
+    throw new Error("ORPHAN_POLICY_UNMAPPED: exactly one standing policy and no exact dispatch binding required")
+  const raw = lines[0].slice("orphan_recovery_policy: ".length)
+  const fields = ["action", "execution_id", "wu_id", "max_dispatches", "max_reserved_seconds", "expires_at"]
+  let keys
+  try { keys = [...raw.matchAll(/("(?:\\.|[^"\\])*")\s*:/g)].map(match => JSON.parse(match[1])) }
+  catch { throw new Error("ORPHAN_POLICY_UNMAPPED: invalid JSON keys") }
+  if (keys.length !== fields.length || new Set(keys).size !== fields.length ||
+      !fields.every(field => keys.includes(field)))
+    throw new Error("ORPHAN_POLICY_UNMAPPED: duplicate or missing policy fields")
+  let policy
+  try { policy = JSON.parse(raw) } catch { throw new Error("ORPHAN_POLICY_UNMAPPED: invalid JSON") }
+  if (!policy || Array.isArray(policy) || typeof policy !== "object" ||
+      Object.keys(policy).length !== fields.length ||
+      !fields.every(field => Object.hasOwn(policy, field)) ||
+      policy.action !== "RECOVER_READ_ONLY_ORPHANS" ||
+      !safeId(policy.execution_id) || !safeId(policy.wu_id) ||
+      !Number.isSafeInteger(policy.max_dispatches) || policy.max_dispatches < 1 || policy.max_dispatches > 3 ||
+      !Number.isSafeInteger(policy.max_reserved_seconds) ||
+      policy.max_reserved_seconds < 1 || policy.max_reserved_seconds > 5400 ||
+      typeof policy.expires_at !== "string" ||
+      !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(policy.expires_at) ||
+      !Number.isFinite(Date.parse(policy.expires_at))) {
+    throw new Error("ORPHAN_POLICY_UNMAPPED: invalid scope, limits, action or expiry")
+  }
+  const until = Date.parse(policy.expires_at)
+  if (until <= Date.now()) throw new Error("ORPHAN_POLICY_EXPIRED: standing recovery authority expired")
+  if (until - Date.now() > 7 * 24 * 3600 * 1000)
+    throw new Error("ORPHAN_POLICY_UNMAPPED: standing recovery authority may not exceed seven days")
+  return { ...policy, authority_kind: "BOUNDED_STANDING_POLICY",
+    source_artifact_id: record.source_id, source_record_key: record.record_key,
+    source_hash: record.sha256 }
+}
