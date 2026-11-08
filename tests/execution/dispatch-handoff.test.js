@@ -157,3 +157,41 @@ test("blocked launched dispatch can be read then explicitly finished and reconci
   assert.deepEqual((await f.controller.snapshot()).state, settled.state)
   assert.equal((await f.run("verify")).passed, true)
 })
+
+test("handoff reports the same read-only recovery effect preflight without granting abandonment", async t => {
+  const f = await fixture(t)
+  f.child.outcome = null
+  f.parent[0].content[0].state.status = "running"
+  f.parent[0].content[0].state.metadata.status = "running"
+  f.messages[0].content.push({
+    type: "tool", id: "pwd-1", name: "shell",
+    state: { status: "running", input: { command: "pwd" }, content: [] },
+  })
+  f.messages[0].content.push({
+    type: "tool", id: "read-2", name: "read",
+    state: { status: "running", input: { filePath: "WU.md" }, content: [] },
+  })
+  const prior = await f.controller.snapshot()
+  const result = await f.read()
+  assert.equal(result.terminal_observed, false)
+  assert.equal(result.recovery_tool_preflight.read_only_pending_eligible, true)
+  assert.equal(result.recovery_tool_preflight.pending_tools, 2)
+  assert.equal(result.recovery_tool_preflight.scope, "TOOL_EFFECTS_ONLY_NOT_ORPHAN_AUTHORITY")
+  assert.equal(result.summary.unsettled_tools, true)
+  assert.deepEqual(await f.controller.snapshot(), prior)
+  f.messages[0].content[1].state.input.command = "pwd; touch /tmp/unsafe"
+  const denied = await f.read()
+  assert.equal(denied.recovery_tool_preflight.read_only_pending_eligible, false)
+  assert.equal(denied.recovery_tool_preflight.reason_code, "SHELL_COMMAND_NOT_LITERAL_GREP")
+  assert.equal(denied.terminal_observed, false)
+  assert.deepEqual(await f.controller.snapshot(), prior)
+})
+
+test("unavailable child context is not treated as zero pending tools", async t => {
+  const f = await fixture(t)
+  f.ctx.session.context = async ({ sessionID }) => sessionID === "parent" ? f.parent : null
+  const result = await f.read()
+  assert.equal(result.recovery_tool_preflight.read_only_pending_eligible, false)
+  assert.equal(result.recovery_tool_preflight.reason_code, "CHILD_CONTEXT_UNAVAILABLE")
+  assert.equal(result.recovery_tool_preflight.pending_tools, null)
+})

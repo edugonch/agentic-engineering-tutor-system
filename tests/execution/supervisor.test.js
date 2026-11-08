@@ -256,3 +256,89 @@ test("no-progress retry cannot be committed without admitted and observed previo
   assert.equal((await f.c.snapshot()).state.supervisor.intent.intent_id, intent.intent_id)
   assert.equal((await f.c.snapshot()).state.blocker, null)
 })
+
+test("stability hold auto-arms and resumes after due without a user message, even after supervisor restart", async t => {
+  const f = await fixture(t)
+  t.after(() => f.s.dispose())
+  for (let i = 1; i <= 2; i++) {
+    const dispatch_id = `abandoned-${i}`, child = `ses_child_${i}`, call = `call_${i}`
+    await f.commit("DISPATCH_RESERVE", { dispatch_id, reserved_seconds: 10 })
+    await f.commit("DISPATCH_PREPARE", {
+      dispatch_id, prepared_by_session_id: "ses_root",
+      expected_agent: "harness-builder", claim_required: true,
+    })
+    await f.commit("DISPATCH_LAUNCH_CLAIM", { dispatch_id, call_id: call })
+    await f.commit("DISPATCH_LAUNCH", { dispatch_id, session_id: child })
+    const before = (await f.c.snapshot()).state
+    const proof = {
+      kind: "VERIFIED_QUIESCENT_CHILD", child_session_id: child,
+      parent_session_id: "ses_root", launch_call_id: call,
+      agent: "harness-builder", runtime_quiescent: true, pending_tools: 0,
+      interrupted: true, fence_hook_installed: true, observation_hash: "a".repeat(64),
+    }
+    await f.commit("DISPATCH_FENCE", {
+      dispatch_id, expected_revision: before.revision, child_session_id: child,
+      parent_session_id: "ses_root", launch_call_id: call, agent: "harness-builder", wu_id: "WU1", proof,
+    })
+    const d = (await f.c.snapshot()).state.dispatches[dispatch_id]
+    await f.commit("DISPATCH_ABANDON", {
+      dispatch_id, child_session_id: child, fence_generation: d.fence.generation,
+      proof: {
+        kind: "POST_FENCE_QUIESCENCE", child_session_id: child,
+        pending_tools: 0, runtime_quiescent: true, fence_enforced: true, observation_hash: "b".repeat(64),
+      },
+    })
+    await f.commit("DISPATCH_RECONCILE_ABANDONED", {
+      dispatch_id, fence_generation: d.fence.generation,
+    })
+  }
+  let nowMs = Date.now()
+  const timers = []
+  const make = () => createExecutionSupervisor(f.ctx, f.root, {
+    now: () => nowMs, runtimeStartedAtMs: nowMs - 5 * 60000,
+    schedule: (fn, delay) => { const timer = { fn, delay }; timers.push(timer); return timer },
+    cancel: timer => { timer.cancelled = true },
+  })
+  const first = make()
+  assert.equal(await first.tick("E"), false)
+  assert.equal(f.prompts.size, 0)
+  assert.equal(timers.length, 1)
+  assert.ok(timers[0].delay > 20 * 60000)
+  first.dispose()
+  assert.equal(timers[0].cancelled, true)
+  const second = make()
+  t.after(() => second.dispose())
+  await second.resume()
+  assert.equal(timers.length, 2)
+  assert.equal(f.prompts.size, 0)
+  nowMs += 31 * 60000
+  // The timer itself drives a new tick. It must re-read durable state, rather
+  // than unconditionally invoking the builder or silently bypassing admission.
+  timers[1].fn()
+  for (let i = 0; i < 40 && !f.prompts.size; i++)
+    await new Promise(resolve => setTimeout(resolve, 10))
+  assert.equal(f.prompts.size, 1)
+  assert.match([...f.prompts.values()][0].text, /Continue execution E from operational_status first/)
+  assert.equal((await f.c.snapshot()).state.wu.wu_id, "WU1")
+  assert.equal((await f.c.snapshot()).state.budget.used_seconds, 20)
+})
+
+test("an active builder must not be preempted by the stability rescheduler", async t => {
+  const f = await fixture(t)
+  t.after(() => f.s.dispose())
+  await f.commit("DISPATCH_RESERVE", { dispatch_id: "live", reserved_seconds: 10 })
+  await f.commit("DISPATCH_PREPARE", { dispatch_id: "live",
+    expected_agent: "harness-builder", prepared_by_session_id: "ses_root", claim_required: true })
+  await f.commit("DISPATCH_LAUNCH_CLAIM", { dispatch_id: "live", call_id: "call-live" })
+  await f.commit("DISPATCH_LAUNCH", { dispatch_id: "live", session_id: "ses_live" })
+  const timers = []
+  const supervisor = createExecutionSupervisor(f.ctx, f.root, {
+    runtimeStartedAtMs: Date.now() - 60000,
+    schedule: (fn, delay) => { timers.push({ fn, delay }); return {} },
+    cancel: () => {},
+  })
+  t.after(() => supervisor.dispose())
+  await supervisor.tick("E")
+  assert.equal(timers.length, 0)
+  assert.match([...f.prompts.values()][0].text, /Inspect\/recover the existing dispatch/)
+})

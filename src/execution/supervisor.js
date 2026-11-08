@@ -10,11 +10,14 @@ import { isValidatedHistoricalTerminal } from "./historical-terminal.js"
 import { supervisorProgress } from "./progress.js"
 import { wuBudgetUsage } from "./wu-budget.js"
 import { stableHash } from "./serialize.js"
-import { classifyContinuation, hasPendingSupervisorDispatch } from "./workflow-router.js"
+import { classifyContinuation, hasPendingSupervisorDispatch, routeExecution } from "./workflow-router.js"
+import { inspectOrphanBuilderRisk } from "./orphan-circuit-breaker.js"
+import { composeSupervisorPrompt } from "./supervisor-prompt.js"
 
 export function createExecutionSupervisor(ctx, projectRoot, {
   enabled = true, now = () => Date.now(), schedule = setTimeout, cancel = clearTimeout,
   orphanRecovery = null, orphanPolicyId = null,
+  runtimeStartedAtMs = null,
 } = {}) {
   const running = new Set()
   const internal = new Set()
@@ -115,6 +118,20 @@ export function createExecutionSupervisor(ctx, projectRoot, {
           state = (await c.snapshot()).state
         }
       }
+      // The stability guard is a *timed dependency*, not a permanent
+      // blocker. Observe the same risk as prepare_launch before sending a
+      // prompt that would only reserve/reject a worker. Restore this timer on
+      // supervisor.resume() after restart, and recheck all durable gates at
+      // the due time. No builder is launched by this timer.
+      const route = routeExecution(state)
+      const stability = inspectOrphanBuilderRisk(state, {
+        nowMs: now(), runtimeLoadedAtMs: runtimeStartedAtMs,
+      })
+      if (route.nextAction === "LAUNCH_ONE_BUILDER" &&
+          stability.launch_temporarily_blocked) {
+        arm(execution, now() + stability.retry_after_seconds * 1000 + 100)
+        return false
+      }
       const unsettled = hasPendingSupervisorDispatch(state)
       // The root may inspect/recover existing work but cannot start duplicates;
       // public controller admission enforces those limits.
@@ -146,10 +163,8 @@ export function createExecutionSupervisor(ctx, projectRoot, {
       try {
       await ctx.session.prompt({ sessionID: session, id: intent.intent_id, delivery: "queue", resume: true,
         metadata: { harness_continuation: intent.intent_id, execution_id: execution },
-        text: scopeTriage ? `One bounded stale-worktree scope recovery triage for execution ${execution}, blocker at revision ${state.blocker.at_revision}. Do not clear BLOCKED_SCOPE generically, change the original WU scope, or manipulate the journal. Call inspect_scope_worktree, and only if Git HEAD equals the previous verified merge with matching frozen predecessor bytes and no tracked drift, call reconcile_stale_worktree_scope with the current expected_revision and exact blocked_at_revision. Re-read controller status/verify and continue the original WU. If evidence fails, preserve BLOCKED_SCOPE and report the exact mismatch; do not attempt new dispatch or candidate.`
-          : contractTriage ? `Next frozen Work Unit technical contract is incomplete for execution ${execution}; blocker revision ${state.blocker.at_revision}. Read status/verify and inspect_next_wu_contract, then derive_and_stage_next_wu_contract using the exact DRAFT source ID and observed revision. This consumes only owner-approved Epic authority under planning estimates; do not assert an individual owner approval. If staging resolves the exact technical blocker, activate the staged WU using the approved mandate, and continue normal verification/review/merge. A product/scope/security/permission blocker remains a hard stop.`
-          : toolingTriage ? `One-time tooling diagnosis for execution ${execution}, blocker at revision ${state.blocker.at_revision}. Inspect exact runtime/source facts and recovery audit once. If and ONLY if the blocker concerns an existing frozen verification setup timeout with an immutable FAIL receipt for the exact candidate/check, use harness_retry_blocked_verification once: it runs unchanged frozen setup + declared check with measured budget and may clear only this tooling stop after a full PASS receipt. This governed verification retry is the sole billable exception. Do not invoke a setup id such as install as a declared check. Otherwise remain read-only, and clear only causes independently demonstrably repaired. Never start a new WU, reserve or launch a dispatch, implement new code, change authority or waive review/CI. If outside the mandate, state only the narrow unresolved cause.`
-          : `Continue execution ${execution} from operational_status first; use full durable status and verify only for exact receipts/gates under the existing approved mandate. ${expiredWait(state) ? `Observe the remote condition for expired wait ${expiredWait(state).operation}; recovery is read-only until terminal evidence is obtained. Never assume success.` : state.external_wait ? `The durable external wait is due: observe and retry ${state.external_wait.operation}; never assume remote success.` : unsettled ? "Inspect/recover the existing dispatch before any new work." : "Execute the next authorized transition."} Preserve budget, scope, permissions and all evidence. A runtime terminal result is not acceptance. Do not request approvals already applicable. Stop on a real unresolved blocker or completion.` })
+        text: composeSupervisorPrompt({ execution, state,
+          toolingTriage, contractTriage, scopeTriage, unsettled }) })
       await commit(c, session, "SUPERVISOR_SENT", { intent_id: intent.intent_id }, `${execution}:sent:${intent.intent_id}`)
       } catch (error) {
         internal.delete(intent.intent_id)

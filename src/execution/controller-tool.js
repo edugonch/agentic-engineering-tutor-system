@@ -40,6 +40,7 @@ import { compileMandateDerivedWu, inspectMandateDerivedWu, isTechnicalWuContract
 import { inspectAuthorityGap } from "./authority-triage.js"
 import { wuBudgetUsage } from "./wu-budget.js"
 import { inspectOrphanBuilderRisk } from "./orphan-circuit-breaker.js"
+import { deliveryMetrics } from "./delivery-metrics.js"
 import { stableHash } from "./serialize.js"
 import { batchHash, requireBatchCoverage, MAX_WU_BATCH_SIZE } from "./wu-batch.js"
 import { applyEvent } from "./state.js"
@@ -610,6 +611,7 @@ export async function runExecutionController(projectRoot, input, candidateRegist
         runtimeLoadedAtMs: options.runtime_loaded_at_ms ?? null,
       }),
       time_policy: state.time_policy?.mode ?? "LEGACY_HARD_LIMIT",
+      delivery_metrics: deliveryMetrics(state),
     }
   }
 
