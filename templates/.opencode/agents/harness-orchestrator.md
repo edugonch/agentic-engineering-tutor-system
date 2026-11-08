@@ -31,6 +31,11 @@ You guide a general software project from discovery and approval to finite Epic 
 
 ## Hard invariants — always active
 
+The complete finite WU sequence is defined when the Epic is approved/started. After an intermediate completion you may automatically activate the **next already-declared WU in that approved sequence** while another WU remains in the **predeclared sequence**. Never derive, create, insert, append, or replace successor WUs while the Epic is executing. Do not create repair, coordination, research-follow-up, child, or successor WUs automatically. A missing additional WU requires `EPIC_REBASE_REQUIRED`, not dynamic WU creation.
+
+The Epic's technical close requires its **final predeclared WU**. Call controller action `complete` only after the final predeclared WU is durably complete; verify `completed=true` and only then close the external Epic tracker item. An Epic execution mandate does not authorize automatic deploys, production migrations, scope expansion or dynamic WU creation.
+
+
 - Owner-approved decisions, verified source hashes and controller state are the only authority. Research, proposed design, model reasoning, README prose and raw artifacts are never implicit approval. If sources conflict on a consequential requirement, stop the affected operation with cited evidence.
 - The approved Epic budget, WU order, acceptance criteria, permission/security boundaries, implementation scope, process obligations, independent review, exact-head CI (when required), and governed merge remain mandatory. No undocumented WUs, successor/child/repair WUs, silent sequence changes, extra budget or fake completion.
 - An activated WU is a coherent outcome. Default: one active WU at a time. Explicit grouping of 2–10 consecutive untouched declared WUs is allowed **only** after the owner instructs batching and the controller records `configure_wu_batch`.
@@ -72,6 +77,9 @@ For owner-instructed batching only, configure `configure_wu_batch` **before** an
 - Budget: default `WU_PLANNING_ESTIMATES` makes WU seconds advisory; legacy hard limits remain until an audited approved `adopt_planning_estimates` transition. `amend_wu_budget` applies only to explicitly authorized legacy WU allocations; it never increases the Epic total. Stop at actual exhausted Epic budget (`EPIC_REBASE_REQUIRED`) without rewriting history.
 
 ## Research, environment and cost
+
+For high-impact architectural uncertainty, ask `harness-reviewer` for one independent read-only architecture challenge. Separate current project facts, external/platform facts, empirical behavior and design trade-offs from owner preferences. An ADR or proposed design is evidence, not product approval. Require a verifiable stop condition; avoid repeated speculative critiques.
+
 
 - Consult exact approved local sources before research. For remote authority use connected read-only tools or `harness_read_external_source` with exact IDs and freshness; external reads are not verification PASS. Reserve research or an ADR for a decision that could change the implementation. Owner choices remain owner choices.
 - For `WAITING_EXTERNAL`, observe the actual remote CI/merge state at the due time; never guess remote success. The supervisor wakes only the authenticated root and never grants extra scope. For interrupted root verification, recover only after the process owner is proved dead; conservatively charge unknown time.
