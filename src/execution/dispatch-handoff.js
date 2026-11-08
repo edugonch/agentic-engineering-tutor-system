@@ -3,6 +3,7 @@
 import { join } from "node:path"
 import { createExecutionController } from "./execution.js"
 import { stableHash } from "./serialize.js"
+import { classifyOrphanReadTools } from "./orphan-read-evidence.js"
 
 const unwrap = value => value?.data ?? value
 const errorInfo = error => error ? { type: error.type ?? error._tag ?? error.name ?? "Error", message: String(typeof error === "string" ? error : error.message ?? "Unspecified runtime error") } : null
@@ -125,8 +126,18 @@ export function createDispatchHandoffReader(ctx, projectRoot, { timeoutMs = 5000
     const outcome = after.outcome ?? null // Last execution outcome, never WU acceptance.
     const terminalObserved = idle === "observed" && ["succeeded", "failed", "interrupted"].includes(outcome)
     const terminalSource = terminalObserved ? "session.wait + session.get.outcome" : parentCompleted && idle !== "not_confirmed" ? "exact_parent_call" : null
-    const unfinishedTools = messages.some(m => m.tools.some(p => ["running", "streaming"].includes(p.status)))
+    const effects = classifyOrphanReadTools(childContext, { projectRoot })
+    const unfinishedTools = messages.some(m => m.tools.some(p => ["running", "streaming", "pending"].includes(p.status)))
     if (unfinishedTools) warnings.push("Context contains unsettled tool entries; inspect interruption/error evidence and repository effects before reconciling")
+    // Same effect classifier as the governed recovery. This is only an early
+    // diagnostic; it cannot establish idle, owner authority, fencing or success.
+    const recoveryEffectPreflight = {
+      read_only_pending_eligible: effects.eligible,
+      pending_tools: effects.eligible ? effects.pending_tools : null,
+      reason_code: effects.eligible ? null : effects.reason_code ?? "UNKNOWN_TOOL_EFFECT",
+      rejected_tool: effects.rejected_tool ?? null,
+      scope: "TOOL_EFFECTS_ONLY_NOT_ORPHAN_AUTHORITY",
+    }
     const evidence = {
       session: { id: after.id, parentID: after.parentID, agent: after.agent, outcome, time: after.time ? { created: after.time.created, updated: after.time.updated, idle: after.time.idle } : null },
       parent_call: parentCall, messages,
@@ -145,6 +156,7 @@ export function createDispatchHandoffReader(ctx, projectRoot, { timeoutMs = 5000
       idle_observation: idle, last_execution_outcome: outcome,
       parent_call_status: parentCall?.status ?? null, parent_child_status: parentCall?.child_status ?? null,
       evidence_hash: evidenceHash, warnings,
+      recovery_tool_preflight: recoveryEffectPreflight,
       summary: {
         runtime_outcome: outcome, acceptance: "UNVERIFIED",
         latest_assistant_text: messages.find(m => m.text)?.text.slice(0, 6000) ?? null,
