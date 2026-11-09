@@ -13,6 +13,8 @@ import { runMergeCandidate } from "../../src/execution/merge.js"
 import { createVerificationReceipt, writeVerificationReceipt } from "../../src/execution/verification-results.js"
 import { seedWuContract } from "./wu-fixture.js"
 import { soloAccepted } from "../../src/execution/solo-delivery.js"
+import { initialState, applyEvent } from "../../src/execution/state.js"
+import { stableHash } from "../../src/execution/serialize.js"
 
 const SHA = "a".repeat(40), BASE = "b".repeat(40)
 const policy = { execution_id: "E1", mandate_id: "E1-MANDATE-001",
@@ -175,4 +177,33 @@ test("unlisted, batched, blocked or independently rejected work cannot use the l
     f.candidate.candidate_id), false)
   await f.run("block", { class: "BLOCKED_TOOLING", reason: "unresolved runtime" })
   await assert.rejects(merge(f), /blocker/)
+})
+
+
+test("historical SOLO_CI receipts replay but cannot be emitted or authorize fresh work", () => {
+  const state = initialState()
+  state.execution_id = "E1:exec"
+  state.mandate = { mandate_id: "E1-MANDATE-001",
+    authority_kind: "OWNER_APPROVED_EPIC", merge_policy: "governed_auto",
+    required_ci_checks: ["obsolete"] }
+  state.wu = { wu_id: "WU-01", completed: false }
+  state.candidates["cand-legacy"] = { wu_id: "WU-01",
+    tree_hash: "t", manifest_hash: "m" }
+  state.pr_binding = { candidate_id: "cand-legacy", head_sha: SHA }
+  state.solo_delivery = { policy: {
+    execution_id: "E1", mandate_id: "E1-MANDATE-001", mode: "SOLO_CI",
+    eligible_wu_ids: ["WU-01"], ci_check: "verify",
+  }, source_hash: "f".repeat(64) }
+  const body = { candidate_id: "cand-legacy", head_sha: SHA,
+    candidate_hashes: { manifest_hash: "m", tree_hash: "t" },
+    source_hash: "f".repeat(64), basis: "LIVE_GITHUB_CI",
+    ci_check: "verify", conclusion: "SUCCESS", evidence_ref: "old-run" }
+  const event = { operation_type: "SOLO_CI_ACCEPT", operation_id: "legacy",
+    sequence: 1, previous_revision: 0, next_revision: 1,
+    fencing_token: 1, timestamp: "2026-11-01T00:00:00.000Z",
+    operation_hash: stableHash(body), body }
+  const replay = applyEvent(state, event, { historicalReplay: true })
+  assert.equal(soloAccepted(replay, "cand-legacy", { historicalReplay: true }), true)
+  assert.equal(soloAccepted(replay, "cand-legacy"), false)
+  assert.throws(() => applyEvent(state, event), /SOLO_CI_DEPRECATED/)
 })
