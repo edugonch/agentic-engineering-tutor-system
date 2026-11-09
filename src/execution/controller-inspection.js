@@ -71,6 +71,8 @@ export async function summary(controller) {
     contract_status: state.wu?.contract ? (state.wu.contract.normalization_required ? "NORMALIZATION_REQUIRED" : "COMPILED") : "LEGACY_UNBOUND",
     candidates: state.candidates,
     reviews: state.reviews,
+    solo_delivery: state.solo_delivery ?? null,
+    solo_acceptances: state.solo_acceptances ?? {},
     pr_binding: state.pr_binding ?? null,
     pr_bindings: state.pr_bindings ?? {},
     merges: state.merges ?? {},
