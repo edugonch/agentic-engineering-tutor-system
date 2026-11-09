@@ -8,16 +8,15 @@ export function expiredWait(state, operation) {
   return state.blocker.reason === reason ? wait : null
 }
 // A terminal remote observation only authorizes leaving the timeout. The merge
-// path must still re-read the PR/checks and enforce every ordinary gate.
+// path must still re-read the exact PR and enforce ordinary merge gates.
 export function terminalObservation(state, operation, observation) {
   const binding = state.pr_binding
   if (!binding || !['harness_merge_candidate:', 'harness_verify_external_merge:'].some(prefix => operation === prefix + binding.candidate_id) ||
-      stableHash(observation?.binding) !== stableHash(binding) || !observation?.pr || !Array.isArray(observation.checks)) return false
+      stableHash(observation?.binding) !== stableHash(binding) || !observation?.pr) return false
+  // The exact PR observation shows the remote API is available again. It
+  // retires only the transient wait; ordinary head/base/tree/merge gates are
+  // still applied after it. GitHub Actions conclusions have no authority.
   const pr = observation.pr
-  if (pr.head_sha !== binding.head_sha || pr.base_sha !== binding.base_sha || pr.state !== 'open' || pr.merged) return true // drift/failure is diagnosed by the normal gate
-  const required = state.mandate?.required_ci_checks ?? []
-  return required.every(name => {
-    const c = observation.checks.find(check => check.name === name)
-    return c && !c.pending && ['SUCCESS', 'FAILURE', 'CANCELLED', 'TIMED_OUT', 'ACTION_REQUIRED', 'NEUTRAL', 'SKIPPED', 'STALE', 'STARTUP_FAILURE', 'ERROR'].includes(String(c.conclusion).toUpperCase())
-  })
+  return typeof pr.state === 'string' && typeof pr.head_sha === 'string' &&
+    typeof pr.base_sha === 'string' && typeof pr.merged === 'boolean'
 }
