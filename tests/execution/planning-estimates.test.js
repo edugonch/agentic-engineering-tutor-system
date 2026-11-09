@@ -33,26 +33,23 @@ async function fixture(t, { planning = false, total = 10000 } = {}) {
   return { root, c, commit, run, decision }
 }
 
-test("WU065 budget stop migrates once, preserving accounting and every historical event", async t => {
+test("legacy WU estimates do not require adoption, budget authority or a new Epic", async t => {
   const f = await fixture(t)
   await f.commit("DISPATCH_RESERVE", { dispatch_id: "partial", reserved_seconds: 1952 })
   await f.commit("DISPATCH_LAUNCH", { dispatch_id: "partial", session_id: "interrupted" })
-  await f.commit("DISPATCH_FINISH", { dispatch_id: "partial", result: "partial repair preserved" })
+  await f.commit("DISPATCH_FINISH", { dispatch_id: "partial", result: "partial work retained" })
   await f.commit("DISPATCH_RECONCILE", { dispatch_id: "partial" })
-  await f.commit("BLOCK", { class: "BUDGET_EXHAUSTED", reason: "448 left, prior review took 578" })
-  const authority = await f.decision()
   const before = await f.c.snapshot()
-  const migrated = await f.run("adopt_planning_estimates", { decision_artifact_id: authority.record_key })
-  assert.equal(migrated.blocker, null)
-  assert.equal(migrated.time_policy.mode, PLANNING_ESTIMATES)
-  assert.equal(migrated.wu_budget.enforced, false)
+  const ongoing = await f.run("reserve", { dispatch_id: "repair", reserved_seconds: 99000 })
+  assert.equal(ongoing.budget.enforced, false)
+  assert.equal(ongoing.budget.estimate_exceeded, true)
+  await assert.rejects(f.run("block", { class: "BUDGET_EXHAUSTED", reason: "WU duration estimate exceeded" }), /TIME_ESTIMATE_NOT_A_BLOCKER/)
+  await f.run("release", { dispatch_id: "repair" })
   const after = await f.c.snapshot()
-  assert.deepEqual(after.events.slice(0, -1), before.events)
-  for (const key of ["budget", "dispatches", "wu", "candidates", "reviews", "mandate"]) assert.deepEqual(after.state[key], before.state[key])
-  assert.equal((await f.run("adopt_planning_estimates", { decision_artifact_id: authority.record_key })).commit_status, "replayed")
-  await f.run("reserve", { dispatch_id: "repair", reserved_seconds: 1000 })
+  assert.deepEqual(after.events.slice(0, before.events.length), before.events)
+  assert.equal(after.state.budget.used_seconds, 1952)
+  assert.equal(after.state.blocker, null)
   assert.equal((await f.run("verify")).passed, true)
-  await assert.rejects(f.run("block", { class: "BUDGET_EXHAUSTED", reason: "WU estimate exceeded" }), /estimates are advisory/)
 })
 
 for (const scenario of ["unsettled", "security", "stale", "epic-change", "unapproved", "tampered"]) {
@@ -69,16 +66,17 @@ for (const scenario of ["unsettled", "security", "stale", "epic-change", "unappr
   })
 }
 
-test("Epic exhaustion is preserved by migration and still prevents new work", async t => {
+test("exceeded Epic time estimate does not prevent continuing the same WU", async t => {
   const f = await fixture(t, { total: 10 })
   await f.commit("PHASE_START", { phase: "ACTIVE", started_at: 0 })
-  await f.commit("PHASE_END", { ended_at: 10 })
-  await f.commit("BLOCK", { class: "BUDGET_EXHAUSTED", reason: "Epic consumed" })
-  const a = await f.decision()
-  const result = await f.run("adopt_planning_estimates", { decision_artifact_id: a.record_key })
-  assert.equal(result.blocker.class, "BUDGET_EXHAUSTED")
-  assert.equal(result.budget.used_seconds, 10)
-  await assert.rejects(f.run("reserve", { dispatch_id: "no", reserved_seconds: 1 }), /BUDGET/)
+  await f.commit("PHASE_END", { ended_at: 12 })
+  const result = await f.run("reserve", { dispatch_id: "continue", reserved_seconds: 3000 })
+  assert.equal(result.budget.total_seconds, 10)
+  assert.equal(result.budget.used_seconds, 12)
+  assert.equal(result.budget.enforced, false)
+  assert.equal(result.budget.estimate_exceeded, true)
+  assert.equal(result.blocker, null)
+  await f.run("release", { dispatch_id: "continue" })
 })
 
 test("builder survives expired reservation; elapsed overrun is still charged and CI can proceed", async t => {
@@ -114,7 +112,7 @@ test("new owner-approved mandates default to estimates", async t => {
   await recordKnowledgeArtifact(f.root, { artifact_type: "epic", artifact_id: "EPIC", title: "Epic", status: "APPROVED", owner_confirmed: true,
     source_refs: ["https://example.com/owner-instruction"], content: 'execution_mandate: {"max_wus":2,"total_seconds":10000}' })
   const args = { execution_id: "NEW", session_id: "root", action: "approve_mandate", epic_artifact_id: "EPIC" }
-  assert.equal((await runExecutionController(f.root, args)).time_policy.mode, PLANNING_ESTIMATES)
+  assert.equal((await runExecutionController(f.root, args)).time_policy.mode, "PLANNING_ESTIMATES_ONLY")
   assert.equal((await runExecutionController(f.root, args)).commit_status, "replayed")
 })
 
