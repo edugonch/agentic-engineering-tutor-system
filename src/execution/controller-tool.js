@@ -47,7 +47,7 @@ import { applyEvent } from "./state.js"
 import { createExecutionController } from "./execution.js"
 import { createCandidateRegistry } from "./candidate-registry.js"
 import { readVerificationReceipt } from "./verification-results.js"
-import { findApprovedProcessPolicy, findApprovedTimePolicy, findApprovedEpic, findApprovedWuBudgetAmendment, findApprovedAuthorityResolution, verifyDeclaredWorkUnits, readWorkUnitDefinition } from "../project-knowledge.js"
+import { findApprovedProcessPolicy, findApprovedTimePolicy, findApprovedEpic, findApprovedWuBudgetAmendment, findApprovedAuthorityResolution, verifyDeclaredWorkUnits, readWorkUnitDefinition, findApprovedSoloDeliveryPolicy } from "../project-knowledge.js"
 import { DISPATCH_STATUS, RESERVATION_STATUS, MANDATE_AUTHORITY, RECOVERABLE_BLOCKER_CLASSES } from "./constants.js"
 
 function sanitizeId(raw, label) {
@@ -171,6 +171,27 @@ export async function runExecutionController(projectRoot, input, candidateRegist
     }
     const res = await commitAction(controller, holder, `${executionId}:mandate`, "MANDATE_APPROVE", body)
     return { action, commit_status: res.status, source_artifact_id: epic.source_id, source_hash: epic.sha256, ...(await summary(controller)) }
+  }
+
+  if (action === "adopt_solo_delivery") {
+    // Single opt-in for the owner's explicitly named low-risk frozen WUs.
+    // No inferred policy, reviewer waiver boolean, or CLI override.
+    const source = await findApprovedSoloDeliveryPolicy(projectRoot, String(input.decision_artifact_id ?? ""))
+    if (source.policy.execution_id !== executionId)
+      throw new Error("SOLO_CI: approved decision belongs to a different execution")
+    const body = { policy: source.policy, source_artifact_id: source.source_artifact_id,
+      source_record_key: source.source_record_key, source_hash: source.source_hash }
+    const snap = await controller.snapshot()
+    if (snap.state.solo_delivery) {
+      if (snap.state.solo_delivery.source_hash === source.source_hash &&
+          snap.state.solo_delivery.source_record_key === source.source_record_key) {
+        return { action, commit_status: "already_adopted", ...(await summary(controller)) }
+      }
+      throw new Error("SOLO_CI: another immutable delivery policy already adopted")
+    }
+    const res = await commitAction(controller, holder,
+      `${executionId}:solo-ci-policy:${source.source_hash}`, "SOLO_DELIVERY_ADOPT", body)
+    return { action, commit_status: res.status, solo_delivery: body, ...(await summary(controller)) }
   }
 
   if (action === "amend_mandate") {
