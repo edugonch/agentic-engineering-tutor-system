@@ -968,9 +968,9 @@ function parseExecutionMandate(content) {
         }
         requiredCiChecks = mandate.required_ci_checks
       }
-      // New governed_auto mandates must explicitly declare checks, including [].
-      // An omitted property is not an implicit opt-out.
-      if (mergePolicy === "governed_auto" && !Object.prototype.hasOwnProperty.call(mandate, "required_ci_checks")) return null
+      // GitHub CI was deprecated by the owner. Existing required_ci_checks
+      // remain visible in historical mandates but never condition acceptance.
+      // New governed_auto mandates may omit them entirely.
 
       // Optional frozen WU sequence. New full-Epic mandates should provide this;
       // omission remains readable for legacy executions but grants no structural
