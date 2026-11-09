@@ -37,10 +37,12 @@ test("a declared browser that is absent → blocked", async () => {
   assert.equal(result.requirements.find((r) => r.capability === "browser.headless").reason, "browser unavailable")
 })
 
-test("insufficient budget → BLOCKED_BUDGET (separate from capability)", async () => {
+test("exceeded estimates remain READY and report advisory overrun", async () => {
   const result = await checkExecutionReadiness({ contract, phase: "BUILD", probe: readyProbe, budget: { remaining: 5, buildReserve: 10, reviewReserve: 10 } })
-  assert.equal(result.status, "BLOCKED_BUDGET")
-  assert.equal(result.budget.status, "BLOCKED_BUDGET")
+  assert.equal(result.status, "READY")
+  assert.equal(result.budget.status, "READY")
+  assert.equal(result.budget.enforced, false)
+  assert.equal(result.budget.estimate_exceeded, true)
   assert.equal(result.requirements.every((r) => r.status === "READY"), true)
 })
 
@@ -74,7 +76,9 @@ test("READY neither creates nor modifies authority/state", async () => {
 })
 
 test("budgetStatus and pathDigest are deterministic", async () => {
-  assert.equal(budgetStatus({ remaining: 9, buildReserve: 5, reviewReserve: 5 }).status, "BLOCKED_BUDGET")
+  assert.equal(budgetStatus({ remaining: 9, buildReserve: 5, reviewReserve: 5 }).status, "READY")
+  assert.equal(budgetStatus({ remaining: -999, buildReserve: 5, reviewReserve: 5 }).estimate_exceeded, true)
+  assert.equal(budgetStatus({ remaining: null }).status, "READY")
   assert.equal(budgetStatus({ remaining: 10, buildReserve: 5, reviewReserve: 5 }).status, "READY")
   assert.equal(pathDigest("/a:/b"), pathDigest("/a:/b"))
   assert.notEqual(pathDigest("/a:/b"), pathDigest("/a:/c"))
