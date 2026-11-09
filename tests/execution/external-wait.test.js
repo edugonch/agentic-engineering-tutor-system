@@ -117,7 +117,6 @@ for (const oldStatus of ["SUCCESS", "FAILURE", "PENDING"]) test(
     assert.equal(state.external_wait_history.at(-1).observation.classification, "CI_DEPRECATED_NON_AUTHORITATIVE")
     assert.equal(events.filter(e => e.operation_type === "EXTERNAL_WAIT_END").length, 1)
   })
-)
 test('expired timeout recovery is read-only until terminal observation and never clears another blocker', async t => {
   const { c, commit } = await fixture(t)
   await commit('FREEZE_CANDIDATE', { candidate_id: 'candidate', wu_id: 'WU1', manifest_hash: 'm', tree_hash: 't' })
