@@ -6,7 +6,6 @@ import { join } from "node:path"
 import { readVerificationReceipt } from "./verification-results.js"
 
 const ID = /^[A-Za-z0-9._:-]{1,181}$/
-const SHA = /^[a-f0-9]{64}$/
 const HEAD = /^[a-f0-9]{40}$/
 const cleanList = a => Array.isArray(a) && a.length >= 1 && a.length <= 20 &&
   a.every(id => typeof id === "string" && ID.test(id)) && new Set(a).size === a.length
@@ -16,12 +15,10 @@ export function validSoloPolicy(p) {
       !ID.test(p.mandate_id ?? "")) return false
   if (p.mode === "SOLO_CI") return Object.keys(p).sort().join(",") ===
     "ci_check,eligible_wu_ids,execution_id,mandate_id,mode" &&
-    ID.test(p.ci_check ?? "") && cleanList(p.eligible_wu_ids) ||
-    (p.mode === "SOLO_CI" && Object.keys(p).length === 5 && ID.test(p.ci_check ?? "") &&
-      Array.isArray(p.eligible_wu_ids) && p.eligible_wu_ids.length <= 100 &&
-      p.eligible_wu_ids.length >= 1 && p.eligible_wu_ids.every(x => typeof x === "string" && ID.test(x)) &&
-      new Set(p.eligible_wu_ids).size === p.eligible_wu_ids.length &&
-      Object.keys(p).sort().join(",") === "ci_check,eligible_wu_ids,execution_id,mandate_id,mode")
+    ID.test(p.ci_check ?? "") && Array.isArray(p.eligible_wu_ids) &&
+    p.eligible_wu_ids.length >= 1 && p.eligible_wu_ids.length <= 100 &&
+    p.eligible_wu_ids.every(id => typeof id === "string" && ID.test(id)) &&
+    new Set(p.eligible_wu_ids).size === p.eligible_wu_ids.length
   if (p.mode !== "SOLO_LOCAL" || Object.keys(p).sort().join(",") !==
       "checks_by_wu,execution_id,mandate_id,mode" || !p.checks_by_wu ||
       Array.isArray(p.checks_by_wu) || typeof p.checks_by_wu !== "object") return false
