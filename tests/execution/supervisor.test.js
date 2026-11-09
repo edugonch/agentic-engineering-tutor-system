@@ -66,7 +66,7 @@ test("supervisor restores durable wait timer after restart and wakes only when d
   const f = await fixture(t)
   const start = new Date(Date.now() - 1000).toISOString()
   const due = new Date(Date.now() + 100000).toISOString()
-  await f.commit("EXTERNAL_WAIT", { wait_id: "w", operation: "merge:candidate", kind: "CI_PENDING", reason: "running",
+  await f.commit("EXTERNAL_WAIT", { wait_id: "w", operation: "merge:candidate", kind: "REMOTE_TRANSIENT", reason: "running",
     attempt: 1, started_at: start, next_retry_at: due, deadline_at: new Date(Date.now() + 200000).toISOString() })
   const timers = []
   const restored = createExecutionSupervisor(f.ctx, f.root, { enabled: true,
@@ -78,9 +78,27 @@ test("supervisor restores durable wait timer after restart and wakes only when d
   assert.ok(timers[0].delay > 0)
 })
 
+test("supervisor retires historical CI_PENDING immediately and wakes root without waiting", async t => {
+  const f = await fixture(t)
+  const now = Date.now()
+  await f.commit("EXTERNAL_WAIT", {
+    wait_id: "deprecated-ci", operation: "merge:candidate", kind: "CI_PENDING",
+    reason: "obsolete GitHub check", attempt: 1,
+    started_at: new Date(now).toISOString(),
+    next_retry_at: new Date(now + 100_000).toISOString(),
+    deadline_at: new Date(now + 200_000).toISOString(),
+  })
+  await f.s.resume()
+  const state = (await f.c.snapshot()).state
+  assert.equal(state.external_wait, null)
+  assert.equal(state.external_wait_history.at(-1).observation.classification, "CI_DEPRECATED_NON_AUTHORITATIVE")
+  assert.equal(f.prompts.size, 1)
+  assert.match([...f.prompts.values()][0].text, /Continue execution E from operational_status/)
+})
+
 test("a due external wait wakes once and never duplicates an admitted continuation", async t => {
   const f = await fixture(t)
-  await f.commit("EXTERNAL_WAIT", { wait_id: "due-wait", operation: "merge:candidate", kind: "CI_PENDING", reason: "running",
+  await f.commit("EXTERNAL_WAIT", { wait_id: "due-wait", operation: "merge:candidate", kind: "REMOTE_TRANSIENT", reason: "running",
     attempt: 1, started_at: new Date(Date.now() - 2000).toISOString(), next_retry_at: new Date(Date.now() - 1000).toISOString(), deadline_at: new Date(Date.now() + 60000).toISOString() })
   await f.s.resume()
   assert.equal(f.prompts.size, 1)
@@ -117,7 +135,7 @@ test("supervisor resumes after WU estimate overrun while Epic budget remains", a
 test('expired external wait schedules one observational continuation, survives restart and respects cancellation', async t => {
   const f = await fixture(t)
   const at = new Date(Date.now() - 1000).toISOString()
-  await f.commit('EXTERNAL_WAIT', { wait_id: 'expired', operation: 'harness_merge_candidate:candidate', kind: 'CI_PENDING', reason: 'running', attempt: 1, started_at: at, next_retry_at: at, deadline_at: at })
+  await f.commit('EXTERNAL_WAIT', { wait_id: 'expired', operation: 'harness_merge_candidate:candidate', kind: 'REMOTE_TRANSIENT', reason: 'running', attempt: 1, started_at: at, next_retry_at: at, deadline_at: at })
   await f.commit('EXTERNAL_WAIT_END', { wait_id: 'expired', outcome: 'EXPIRED' })
   f.ctx.session.get = async () => ({ id: 'ses_root', agent: 'harness-orchestrator', outcome: 'interrupted' })
   assert.equal(await f.s.tick('E'), false)

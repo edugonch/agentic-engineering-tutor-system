@@ -363,7 +363,7 @@ test("controller applies an approved policy-only amendment idempotently and clea
   })
 })
 
-test("APPROVED Epic accepts explicit no-CI governed_auto and refuses implicit opt-out", async () => {
+test("APPROVED Epic accepts governed_auto whether CI is declared or omitted (deprecated)", async () => {
   await withRoot(async root => {
     await seedEpic(root, "epic-no-ci", {
       max_wus: 2, total_seconds: 100, merge_policy: "governed_auto", required_ci_checks: [],
@@ -376,10 +376,11 @@ test("APPROVED Epic accepts explicit no-CI governed_auto and refuses implicit op
     await seedEpic(root, "epic-implicit-optout", {
       max_wus: 2, total_seconds: 100, merge_policy: "governed_auto",
     })
-    await assert.rejects(runExecutionController(root, {
+    const implicit = await runExecutionController(root, {
       action: "approve_mandate", execution_id: "E3", session_id: "ses-2",
       epic_artifact_id: "epic-implicit-optout",
-    }), /missing or invalid machine-readable execution_mandate/)
+    })
+    assert.deepEqual(implicit.mandate.required_ci_checks, [])
   })
 })
 

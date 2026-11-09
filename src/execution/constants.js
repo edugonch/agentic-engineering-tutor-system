@@ -48,7 +48,8 @@ export const OPERATION_TYPES = Object.freeze([
   "DISPATCH_RESOLVE_AMBIGUOUS_LAUNCH", // ambiguous -> launched after exact external session identity is independently recovered
   "FREEZE_CANDIDATE", // pin an immutable candidate (manifest hash + tree hash), bound to the active WU
   "SOLO_DELIVERY_ADOPT", // one-time hash-verified owner approval for named low-risk WUs
-  "SOLO_CI_ACCEPT", // live GitHub CI acceptance for one frozen candidate; never a review PASS
+  "SOLO_CI_ACCEPT", // historical only: deprecated GitHub CI-authoritative acceptance
+  "SOLO_LOCAL_ACCEPT", // exact local PASS receipts for owner-scoped low-risk WU
   "RECORD_REVIEW", // bind a review verdict to one exact candidate's hashes
   "WU_COMPLETE", // close one WU: candidate + PASS review + settled dispatches (distinct from EPIC COMPLETE)
   "CHECKPOINT", // persist a resumable checkpoint

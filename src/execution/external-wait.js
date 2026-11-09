@@ -19,6 +19,18 @@ export async function runWithExternalWait({ controller, session_id, operation, r
   }
   let { state } = await controller.snapshot()
   if (state.completed || state.wu?.completed) return run() // allow read-only idempotent merge recovery
+  // A historical expired CI-only timeout can leave BLOCKED_EXTERNAL_FACT.
+  // The exact expiredWait fingerprint corroborates that its *only* cause was
+  // the now-deprecated CI dependency. Retire just that blocker through CAS.
+  const obsoleteCiStop = expiredWait(state, operation)
+  if (obsoleteCiStop?.kind === "CI_PENDING") {
+    await commit("CLEAR_BLOCKER", {
+      blocker_class: "BLOCKED_EXTERNAL_FACT", blocked_at_revision: state.blocker.at_revision,
+      resolution: "Deprecated CI_PENDING no longer gates execution; historical wait retained",
+      recovery_evidence: { wait_id: obsoleteCiStop.wait_id, kind: "CI_DEPRECATED_NON_AUTHORITATIVE" },
+    }, `${obsoleteCiStop.wait_id}:clear:CI_DEPRECATED`)
+    state = (await controller.snapshot()).state
+  }
   if (state.blocker) {
     if (observeExistingMerge && ["STARTED", "RECORDED", "VERIFIED"].includes(state.merge?.status)) return run()
     const expired = expiredWait(state, operation)
@@ -32,6 +44,17 @@ export async function runWithExternalWait({ controller, session_id, operation, r
   if (state.budget.total_seconds - state.budget.used_seconds <= 0 || (!usesPlanningEstimates(state) && wu?.ceiling_seconds != null && wu.used_seconds >= wu.ceiling_seconds))
     throw new Error("BUDGET_EXHAUSTED: no authorized execution budget remains")
   let wait = state.external_wait
+  // The owner deprecated GitHub CI as an execution dependency. Close an
+  // already-recorded CI_PENDING wait once through an audited controller event;
+  // do not sleep until its historical retry time or query GitHub Actions.
+  if (wait?.kind === "CI_PENDING") {
+    await commit("EXTERNAL_WAIT_END", { wait_id: wait.wait_id,
+      outcome: "RESOLVED", recovery_version: 1,
+      observation: { classification: "CI_DEPRECATED_NON_AUTHORITATIVE" } },
+    `${wait.wait_id}:end:CI_DEPRECATED`)
+    state = (await controller.snapshot()).state
+    wait = null
+  }
   if (wait && wait.operation !== operation) throw new Error(`WAITING_EXTERNAL: pending operation ${wait.operation} must be resolved first`)
   async function end(outcome, observation) {
     if (wait) await commit("EXTERNAL_WAIT_END", { wait_id: wait.wait_id, outcome, recovery_version: 1, ...(observation ? { observation } : {}) }, `${wait.wait_id}:end:${outcome}`)
@@ -55,8 +78,8 @@ export async function runWithExternalWait({ controller, session_id, operation, r
     if (!(error instanceof ExternalWaitError)) { await end("REJECTED"); throw error }
     state = (await controller.snapshot()).state
     if (state.completed || state.blocker) throw error
-    if (error.kind === "CI_PENDING" && (state.mandate?.required_ci_checks ?? []).length === 0) {
-      throw new Error("CI_PENDING cannot be scheduled when CI is disabled by approved policy")
+    if (error.kind === "CI_PENDING") {
+      throw new Error("CI_PENDING_DEPRECATED: GitHub Actions is informational and never creates an external wait")
     }
     // A race must not replace another operation's wait.
     wait = state.external_wait

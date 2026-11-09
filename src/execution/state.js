@@ -74,16 +74,9 @@ export function canStartMerge(state, { historicalReplay = false } = {}) {
   const settled = new Set([DISPATCH_STATUS.RESULT_RECONCILED, DISPATCH_STATUS.ABANDONED_RECONCILED, DISPATCH_STATUS.RELEASED])
   const unsettled = Object.values(state.dispatches).filter((d) => !settled.has(d.status))
   if (unsettled.length > 0) return { allowed: false, reason: `${unsettled.length} unsettled dispatch(es)` }
-  const required = state.mandate?.required_ci_checks ?? []
-  // [] disables CI by approved mandate, never implying that CI passed.
-  // The review, process, dispatch and exact-binding gates above still apply.
-  const evidence = state.ci_evidence[binding.candidate_id]
-  for (const check of required) {
-    const e = evidence?.[check]
-    if (!e) return { allowed: false, reason: `required CI ${check} is missing` }
-    if (e.conclusion !== "SUCCESS") return { allowed: false, reason: `required CI ${check} conclusion is ${e.conclusion}, not SUCCESS` }
-    if (e.head_sha !== binding.head_sha) return { allowed: false, reason: `required CI ${check} head ${e.head_sha} does not match bound head ${binding.head_sha}` }
-  }
+  // GitHub CI is deprecated as a merge gate. Keep historical records as
+  // observations only. All acceptance follows the actual review or the
+  // verified local, owner-scoped Solo Developer check set.
   return { allowed: true }
 }
 
@@ -961,16 +954,33 @@ export function applyEvent(previous, event, { historicalReplay = false } = {}) {
     }
 
     case "SOLO_DELIVERY_ADOPT": {
-      if (state.solo_delivery || state.completed ||
+      if (state.completed ||
           state.mandate?.authority_kind !== "OWNER_APPROVED_EPIC" ||
           !validSoloPolicy(body.policy) ||
           state.execution_id !== body.policy.execution_id + ":exec" ||
           state.mandate.mandate_id !== body.policy.mandate_id ||
           state.mandate.merge_policy !== "governed_auto" ||
           !Array.isArray(state.mandate.wu_sequence) ||
-          body.policy.eligible_wu_ids.some(id => !state.mandate.wu_sequence.includes(id)) ||
+          (body.policy.mode === "SOLO_LOCAL"
+            ? Object.keys(body.policy.checks_by_wu).some(id => !state.mandate.wu_sequence.includes(id))
+            : body.policy.eligible_wu_ids.some(id => !state.mandate.wu_sequence.includes(id))) ||
           !body.source_record_key || !/^[a-f0-9]{64}$/.test(body.source_hash ?? "")) {
         throw new Error("SOLO_CI: requires one owner-approved policy for named frozen WUs and governed_auto mandate")
+      }
+      // New policies are local-only. A prior approved SOLO_CI policy may be
+      // prospectively replaced by another owner-approved policy while keeping
+      // its original event and acceptance history unmodified.
+      if (!historicalReplay && body.policy.mode !== "SOLO_LOCAL")
+        throw new Error("SOLO_CI_DEPRECATED: use owner-approved SOLO_LOCAL; CI cannot authorize delivery")
+      if (state.solo_delivery) {
+        if (state.solo_delivery.policy.mode !== "SOLO_CI" ||
+            body.policy.mode !== "SOLO_LOCAL")
+          throw new Error("SOLO_LOCAL: only a historical SOLO_CI policy may be superseded")
+        const oldIDs = new Set(state.solo_delivery.policy.eligible_wu_ids)
+        if (Object.keys(body.policy.checks_by_wu).some(id => !oldIDs.has(id)))
+          throw new Error("SOLO_LOCAL: replacement policy may not broaden previously approved WU scope")
+        state.solo_delivery_history ??= []
+        state.solo_delivery_history.push(state.solo_delivery)
       }
       state.solo_delivery = {
         policy: structuredClone(body.policy),
@@ -983,11 +993,38 @@ export function applyEvent(previous, event, { historicalReplay = false } = {}) {
     }
 
     case "SOLO_CI_ACCEPT": {
+      // Historical compatibility ONLY. Never accept a new CI-only event. Old
+      // accepted work can replay unmodified, even after a prospective
+      // SOLO_LOCAL policy supersedes its previous authority record.
+      if (!historicalReplay) throw new Error("SOLO_CI_DEPRECATED: CI is observational only")
+      assertProcessAcceptance(state, body.candidate_id)
+      const oldPolicy = state.solo_delivery_history?.find(p => p.source_hash === body.source_hash) ?? state.solo_delivery
+      const legacy = state.candidates[body.candidate_id]
+      if (oldPolicy?.policy?.mode !== "SOLO_CI" ||
+          oldPolicy.source_hash !== body.source_hash ||
+          !oldPolicy.policy.eligible_wu_ids.includes(legacy?.wu_id) ||
+          !state.pr_binding || state.pr_binding.candidate_id !== body.candidate_id ||
+          state.pr_binding.head_sha !== body.head_sha ||
+          body.candidate_hashes?.manifest_hash !== legacy?.manifest_hash ||
+          body.candidate_hashes?.tree_hash !== legacy?.tree_hash ||
+          body.ci_check !== oldPolicy.policy.ci_check ||
+          body.basis !== "LIVE_GITHUB_CI" || body.conclusion !== "SUCCESS")
+        throw new Error("SOLO_CI historical receipt does not match original approved candidate")
+      state.solo_acceptances ??= {}
+      if (state.solo_acceptances[body.candidate_id])
+        throw new Error("SOLO_CI: candidate already accepted; do not repeat")
+      state.solo_acceptances[body.candidate_id] = {
+        ...structuredClone(body), at_revision: state.revision,
+      }
+      break
+    }
+
+    case "SOLO_LOCAL_ACCEPT": {
       assertProcessAcceptance(state, body.candidate_id)
       assertSoloAcceptanceEvent(state, body)
       state.solo_acceptances ??= {}
       if (state.solo_acceptances[body.candidate_id])
-        throw new Error("SOLO_CI: candidate already accepted; do not repeat")
+        throw new Error("SOLO_LOCAL: candidate already accepted")
       state.solo_acceptances[body.candidate_id] = {
         ...structuredClone(body), at_revision: state.revision,
       }
@@ -1387,7 +1424,7 @@ export function applyEvent(previous, event, { historicalReplay = false } = {}) {
         throw new Error(`WU_COMPLETE: candidate ${candidateId} belongs to ${candidate.wu_id}, not the active WU ${state.wu.wu_id}.`)
       }
       const review = state.reviews[candidateId]
-      const acceptedSolo = soloAccepted(state, candidateId)
+      const acceptedSolo = soloAccepted(state, candidateId, { historicalReplay })
       if (!review && !acceptedSolo) throw new Error(`WU_COMPLETE: no review recorded for candidate ${candidateId}.`)
       if (state.wu.batch) {
         if (body.batch_hash !== state.wu.batch.batch_hash ||
@@ -1433,7 +1470,7 @@ export function applyEvent(previous, event, { historicalReplay = false } = {}) {
       }
       state.wu.completed = true
       state.wu.completion = { candidate_id: candidateId, at_revision: state.revision,
-        ...(acceptedSolo ? { acceptance_basis: "SOLO_CI", solo_ci_check: state.solo_delivery.policy.ci_check } : {}),
+        ...(acceptedSolo ? { acceptance_basis: state.solo_acceptances[candidateId].basis } : {}),
         ...(state.wu.batch ? { batch_hash: state.wu.batch.batch_hash } : {}) }
       state.completed_wus ??= {}
       if (state.wu.batch) {
