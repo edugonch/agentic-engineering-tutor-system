@@ -190,3 +190,39 @@ test("orphan recovery is exposed but cannot mutate without an indexed owner deci
   }, { sessionID: "ses_root" })
   await assert.rejects(result, /ORPHAN_AUTHORITY_REQUIRED/)
 })
+
+
+test("live plugin hook blocks production edits before RED, permits only test preparation in the same WU", async t => {
+  const f = await host(t, "0")
+  await assert.rejects(f.run({ action: "status" }), /HARNESS_HANDOFF_REQUIRED/)
+  await recordKnowledgeArtifact(f.root, {
+    artifact_type: "epic", artifact_id: "epic-tdd", title: "Epic", status: "APPROVED",
+    owner_confirmed: true, source_refs: ["https://example.invalid/owner"],
+    content: 'execution_mandate: {"max_wus":1,"total_seconds":3600,"merge_policy":"none","wu_sequence":["WU-TDD"]}',
+  })
+  await recordKnowledgeArtifact(f.root, {
+    artifact_type: "work-unit", artifact_id: "WU-TDD", title: "WU-TDD", status: "PROPOSED",
+    owner_confirmed: true, parent_refs: ["epic-tdd"],
+    content: 'Active-time limit: 120 seconds\nexecution_contract: ' +
+      JSON.stringify({
+        active_seconds: 120, process_obligations: [{ kind: "tdd", required: true }],
+        verification_contract: { commands: [{ id: "behavior", program: "node", args: ["test/seed.test.js"] }], environment: { network_policy: "UNRESTRICTED" } },
+      }),
+  })
+  await f.run({ action: "approve_mandate", epic_artifact_id: "epic-tdd" })
+  await f.run({ action: "activate_wu", wu_id: "WU-TDD", mandate_id: "E-MANDATE-001" })
+  const status = await f.run({ action: "operational_status" })
+  assert.equal(status.tdd_gate.status, "RED_FIRST")
+  await f.run({ action: "reserve", dispatch_id: "red-first", reserved_seconds: 30 })
+  await f.run({ action: "prepare_launch", dispatch_id: "red-first", launch_agent: "harness-builder" })
+  const launch = { tool: "subagent", id: "call-tdd", sessionID: "ses_root", agent: "harness-orchestrator", input: { agent: "harness-builder" } }
+  await f.hooks.get("tool:execute.before")(launch)
+  f.sessions.set("ses_child", { id: "ses_child", parentID: "ses_root", agent: "harness-builder" })
+  await f.definitions.get("subagent").execute(launch.input, { ...launch, progress: async () => {} })
+  const builderAction = (tool, filePath) => ({ tool, id: "builder-tdd", sessionID: "ses_child", agent: "harness-builder", input: { filePath } })
+  await assert.rejects(f.hooks.get("tool:execute.before")(builderAction("edit", "commerce/src/product.ts")), /TDD_RED_FIRST/)
+  await assert.rejects(f.hooks.get("tool:execute.before")(builderAction("shell", "test/seed.test.js")), /TDD_RED_FIRST/)
+  await f.hooks.get("tool:execute.before")(builderAction("edit", "test/seed.test.js"))
+  // No candidate or RED receipt has been fabricated just by editing a test.
+  assert.equal((await f.run({ action: "operational_status" })).tdd_gate.status, "RED_FIRST")
+})

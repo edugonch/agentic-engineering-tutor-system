@@ -1,4 +1,5 @@
 import { readProjectInstructions, projectInstructionContext } from "./src/project-instructions.js"
+import { assertTddPreimplementation } from "./src/execution/tdd-preflight.js"
 import { assertEgmDispatch, assertEgmReviewerTool, egmEnabled, isEgmReviewer, registerHarnessEgmCommand } from "./src/integrations/egm.js"
 import { readExternalSource } from "./src/external-source-reader.js"
 import { usesPlanningEstimates, epicExecutionRemaining } from "./src/execution/time-policy.js"
@@ -263,6 +264,7 @@ export default Plugin.define({
           "Before BLOCKED_AUTHORITY, inspect approved sources, preserve the in-scope partial design, isolate the exact missing product decision and supply authority_question with domain/source_ref/why_not_delegated. A WU commissioned to design a state table may draft options, not present an unapproved option as settled policy.",
           "For an existing authority stop call inspect_authority_gap. Never clear a business/safety stop through JIT. Do not ask the owner to create the technical design assigned to an active WU.",
           "If a verification gate fails, compare baseline and candidate evidence but keep FAIL until the mandated gate actually succeeds. Do not treat an untracked local file as authority to fabricate PASS.",
+          "Before launching a builder read operational_status.tdd_gate. RED_FIRST means a test-only first dispatch: reconcile, freeze a test-only baseline, run a declared check, record real behavioral RED, then implement on the same WU. No production edits, shell or apply_patch before RED; no fake missing-module RED or additional approval for the normal TDD sequence.",
         ].join("\\n") })
       }
       if (String(event.agent ?? "").startsWith("harness-") && !isEgmReviewer(event.agent)) {
@@ -290,7 +292,11 @@ export default Plugin.define({
       }
       await assertSessionNotOrphanFenced(requireProjectRoot(), event.sessionID)
       await ownership.beforeTool(event)
-      await workerBudget.inspect(event.sessionID, event.agent)
+      const workerContext = await workerBudget.inspect(event.sessionID, event.agent)
+      // Enforce TDD before any production-mutating builder tool, not at review time.
+      // Test-only edits remain possible; the orchestrator must record a real
+      // negative receipt before allowing implementation tools.
+      await assertTddPreimplementation(event, workerContext, requireProjectRoot())
       // Run the circuit breaker first. If it trips, the subagent is rejected and
       // no claim is written — the pre-side-effect failure stays NEVER_LAUNCHED and
       // releasable (this is the WU-058 case, now structural).
