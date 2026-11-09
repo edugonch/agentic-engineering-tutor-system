@@ -1,4 +1,4 @@
-import { realpath } from "node:fs/promises"
+import { realpath, stat } from "node:fs/promises"
 import { isAbsolute, relative, resolve, sep, join } from "node:path"
 
 export const EGM_UPSTREAM_REVISION = "5382b17619be07811a14b2146c7672620b34a791"
@@ -100,6 +100,7 @@ export async function registerHarnessEgmCommand(ctx, ownership, { env = process.
       const projectRoot = await realpath(ctx.location?.project?.canonical)
       const target = await realpath(resolve(projectRoot, match[2].trim()))
       if (!inside(projectRoot, target) || isSensitive(target)) throw new Error("EGM_TARGET_SCOPE: design file must be within the project")
+      if (!(await stat(target)).isFile()) throw new Error("EGM_TARGET_SCOPE: design target must be a regular file")
       const agent = MODES[mode]
       const inventory = await ctx.agent.list()
       const records = Array.isArray(inventory) ? inventory : (inventory?.data ?? inventory?.agents)
