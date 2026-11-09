@@ -848,7 +848,8 @@ export function applyEvent(previous, event, { historicalReplay = false } = {}) {
       // missing report consumes the whole reservation.
       const actual = reported === undefined || reported === null ? (d.usage?.seconds ?? reserved) : reported
       if (!Number.isFinite(actual) || actual < 0) throw new Error("DISPATCH_RECONCILE actual_consumption must be a finite non-negative number.")
-      if (actual > reserved && !d.usage) throw new Error(`DISPATCH_RECONCILE consumption ${actual} exceeds reservation ${reserved}; overrun requires an explicit transition, never a silent adjustment.`)
+      // A duration estimate is not a ceiling. Preserve the measured/reported
+      // overrun in the ledger; no extra owner approval or WU is required.
       d.status = DISPATCH_STATUS.RESULT_RECONCILED
       d.reservation_status = RESERVATION_STATUS.CONSUMED
       d.actual_consumption = actual
@@ -856,13 +857,13 @@ export function applyEvent(previous, event, { historicalReplay = false } = {}) {
       d.reconciled = { verdict: body.verdict ?? null, evidence: body.evidence ?? null, at_revision: state.revision }
       state.budget.reserved_seconds -= reserved
       state.budget.used_seconds += actual
-      if (state.blocker?.class === "BUDGET_EXHAUSTED" && state.blocker.budget_reason === "reservation_expired" && state.blocker.dispatch_id === body.dispatch_id) {
-        const remainingWu = wuBudgetUsage(state, d.wu_id).available_seconds
-        if (remainingWu > 0 && deriveBudget(state.budget).available_seconds > 0) {
-          state.last_blocker_resolution = { class: state.blocker.class, blocked_at_revision: state.blocker.at_revision,
-            resolution: "Reservation settled; unused authorized WU allocation remains", at_revision: state.revision }
-          state.blocker = null
-        }
+      if (state.blocker?.class === "BUDGET_EXHAUSTED" && state.blocker.budget_reason === "reservation_expired" &&
+          state.blocker.dispatch_id === body.dispatch_id &&
+          !state.budget.active_phase && !state.external_wait &&
+          Object.values(state.dispatches).every(other => ["released", "result_reconciled", "abandoned_reconciled"].includes(other.status))) {
+        state.last_blocker_resolution = { class: state.blocker.class, blocked_at_revision: state.blocker.at_revision,
+          resolution: "Obsolete duration-estimate stop retired after exact dispatch settlement", at_revision: state.revision }
+        state.blocker = null
       }
       break
     }
@@ -1190,8 +1191,13 @@ export function applyEvent(previous, event, { historicalReplay = false } = {}) {
     case "CLEAR_BLOCKER": {
       if (state.blocker?.class === "NO_PROGRESS" && state.blocker.progress_hash === executionProgress(state)) throw new Error("NO_PROGRESS requires new durable execution evidence; a resolution string or checkpoint is insufficient")
       if (!state.blocker) throw new Error("CLEAR_BLOCKER requires an active blocker.")
-      if (!RECOVERABLE_BLOCKER_CLASSES.has(state.blocker.class)) {
+      const historicalTimeStop = state.blocker.class === "BUDGET_EXHAUSTED"
+      if (!RECOVERABLE_BLOCKER_CLASSES.has(state.blocker.class) && !historicalTimeStop) {
         throw new Error(`CLEAR_BLOCKER cannot clear non-recoverable blocker ${state.blocker.class}.`)
+      }
+      if (historicalTimeStop && (state.budget.active_phase || state.verification_phase || state.external_wait ||
+          Object.values(state.dispatches).some(d => !["released", "result_reconciled", "abandoned_reconciled"].includes(d.status)))) {
+        throw new Error("TIME_ESTIMATE_RECOVERY_UNSETTLED: settle existing dispatches, verification and waits first")
       }
       if (body.blocker_class !== state.blocker.class || body.blocked_at_revision !== state.blocker.at_revision) {
         throw new Error("CLEAR_BLOCKER target does not match the active blocker.")
