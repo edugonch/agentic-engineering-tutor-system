@@ -25,10 +25,16 @@ async function fixture(t) {
   return { root, configDir, projectRoot }
 }
 
-test("EGM is strictly opt-in and not the WU reviewer", () => {
-  assert.equal(egmEnabled({}), false)
-  assert.equal(egmEnabled({ HARNESS_EGM_ENABLED: "true" }), false)
+test("EGM is enabled by default, explicitly switchable off, and not the WU reviewer", () => {
+  assert.equal(egmEnabled({}), true)
+  assert.equal(egmEnabled({ HARNESS_EGM_ENABLED: "" }), true)
+  assert.equal(egmEnabled({ HARNESS_EGM_ENABLED: "true" }), true)
   assert.equal(egmEnabled({ HARNESS_EGM_ENABLED: "1" }), true)
+  assert.equal(egmEnabled({ HARNESS_EGM_ENABLED: "on" }), true)
+  assert.equal(egmEnabled({ HARNESS_EGM_ENABLED: "0" }), false)
+  assert.equal(egmEnabled({ HARNESS_EGM_ENABLED: "false" }), false)
+  assert.equal(egmEnabled({ HARNESS_EGM_ENABLED: "off" }), false)
+  assert.throws(() => egmEnabled({ HARNESS_EGM_ENABLED: "typo" }), /HARNESS_EGM_ENABLED must be/)
   assert.equal(isEgmReviewer("harness-reviewer"), false)
   assert.equal(isEgmReviewer("harness-egm-design"), true)
   assert.deepEqual(Object.keys(EGM_PROFILES), [
@@ -72,12 +78,12 @@ test("read-only reviewer tool guard prevents writes, Harness calls, secrets and 
   await assertEgmReviewerTool({ agent: "harness-builder", tool: "edit", input: {} }, options)
 })
 
-test("existing install is unchanged by default; opt-in provisions pinned personas idempotently", async t => {
+test("explicit off preserves five core agents; default on provisions EGM personas idempotently", async t => {
   const { configDir } = await fixture(t)
-  const first = await provisionGlobalHarnessAgents({ packageRoot, configDir })
+  const first = await provisionGlobalHarnessAgents({ packageRoot, configDir, enableEgm: false })
   assert.equal(first.created.length, 5)
   assert.ok(first.created.every(id => !isEgmReviewer(id)))
-  const optedIn = await provisionGlobalHarnessAgents({ packageRoot, configDir, enableEgm: true })
+  const optedIn = await provisionGlobalHarnessAgents({ packageRoot, configDir })
   assert.deepEqual(optedIn.created.slice().sort(), Object.keys(EGM_PROFILES).sort())
   const profile = await readFile(join(configDir, "agents", "harness-egm-design.md"), "utf8")
   assert.match(profile, new RegExp(EGM_UPSTREAM_REVISION))
@@ -104,9 +110,9 @@ test("command rejects missing input, nonproject files and missing runtime role, 
     session: { prompt: async input => prompts.push(input) },
   }
   const ownership = { takeOwnership: async () => { owned++ } }
-  assert.equal(await registerHarnessEgmCommand(ctx, ownership, { env: {}, packageRoot }), false)
+  assert.equal(await registerHarnessEgmCommand(ctx, ownership, { env: { HARNESS_EGM_ENABLED: "0" }, packageRoot }), false)
   assert.equal(commands.size, 0)
-  assert.equal(await registerHarnessEgmCommand(ctx, ownership, { env: { HARNESS_EGM_ENABLED: "1" }, packageRoot }), true)
+  assert.equal(await registerHarnessEgmCommand(ctx, ownership, { env: {}, packageRoot }), true)
   const execute = commands.get("harness-egm-review").execute
   await assert.rejects(execute({ sessionID: "one", prompt: { text: "design" } }), /Usage/)
   await assert.rejects(execute({ sessionID: "one", prompt: { text: "design ../missing.md" } }), /ENOENT/)
