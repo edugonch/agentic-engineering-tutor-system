@@ -524,14 +524,16 @@ test("F08: same candidate can receive a fresh review without rewriting history",
   })
 })
 
-test("F04/F12: original WU allocation is effective and arbitrary verification contracts are rejected", async () => {
+test("F04/F12: WU estimate does not block work, but verification scope stays frozen", async () => {
   await withRoot(async root => {
     const sid = "ses-1"
     await governed(root, sid)
     const base = { execution_id: "E1", session_id: sid }
     const active = await runExecutionController(root, { ...base, action: "activate_wu", wu_id: "WU-01", mandate_id: "E1-MANDATE-001" })
     assert.equal(active.wu_budget.ceiling_seconds, 100)
-    await assert.rejects(runExecutionController(root, { ...base, action: "reserve", dispatch_id: "too-large", reserved_seconds: 101 }), /BUDGET/)
+    const scheduled = await runExecutionController(root, { ...base, action: "reserve", dispatch_id: "too-large", reserved_seconds: 101 })
+    assert.equal(scheduled.budget.enforced, false)
+    await runExecutionController(root, { ...base, action: "release", dispatch_id: "too-large" })
     const candidate = await seedCandidateWithContract(root, [{ id: "invented", program: "node", args: ["-e", "process.exit(0)"] }])
     await assert.rejects(runExecutionController(root, { ...base, action: "record_candidate", candidate_id: candidate.candidate_id }), /differs from the active WU/)
   })
