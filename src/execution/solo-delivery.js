@@ -53,7 +53,8 @@ export function acceptedForMerge(state, candidateId, { historicalReplay = false 
     return { allowed: true, route: "INDEPENDENT_REVIEW" }
   }
   if (soloAccepted(state, candidateId)) return { allowed: true, route: "SOLO_CI" }
-  return { allowed: false, reason: "no PASS review or verified solo CI acceptance" }
+  return { allowed: false, reason: soloCandidateEligible(state, candidateId)
+    ? "no PASS review or verified solo CI acceptance" : "no PASS review" }
 }
 
 export function assertSoloAcceptanceEvent(state, body) {
