@@ -264,6 +264,7 @@ export default Plugin.define({
           "Before BLOCKED_AUTHORITY, inspect approved sources, preserve the in-scope partial design, isolate the exact missing product decision and supply authority_question with domain/source_ref/why_not_delegated. A WU commissioned to design a state table may draft options, not present an unapproved option as settled policy.",
           "For an existing authority stop call inspect_authority_gap. Never clear a business/safety stop through JIT. Do not ask the owner to create the technical design assigned to an active WU.",
           "If a verification gate fails, compare baseline and candidate evidence but keep FAIL until the mandated gate actually succeeds. Do not treat an untracked local file as authority to fabricate PASS.",
+          "Before launching a builder read operational_status.tdd_gate. RED_FIRST means a test-only first dispatch: reconcile, freeze a test-only baseline, run a declared check, record real behavioral RED, then implement on the same WU. No production edits, shell or apply_patch before RED; no fake missing-module RED or additional approval for the normal TDD sequence.",
         ].join("\\n") })
       }
       if (String(event.agent ?? "").startsWith("harness-") && !isEgmReviewer(event.agent)) {
