@@ -9,6 +9,7 @@ import { isStaleWorktreeScopeBlocker } from "./scope-recovery.js"
 import { wuBudgetUsage } from "./wu-budget.js"
 import { assertBatchConfiguration, requireBatchCoverage } from "./wu-batch.js"
 import { validOrphanPendingProof } from "./orphan-read-evidence.js"
+import { acceptedForMerge, soloCandidateEligible, soloAccepted, validSoloPolicy, assertSoloAcceptanceEvent } from "./solo-delivery.js"
 // State projection. state is derived, never canonical: events.ndjson is the
 // source of truth and every read replays it. This makes divergence between a
 // cached state file and the log impossible by construction.
@@ -66,11 +67,8 @@ export function canStartMerge(state, { historicalReplay = false } = {}) {
     return { allowed: false, reason: "batch candidate or review does not match the exact frozen WU batch" }
   }
   if (candidate.superseded_by_contract) return { allowed: false, reason: "candidate contract superseded; refreeze and review" }
-  const review = state.reviews[binding.candidate_id]
-  if (!review || review.verdict !== "PASS") return { allowed: false, reason: "no PASS review" }
-  if (!historicalReplay && (!Array.isArray(review.verification_evidence_ids) || review.verification_evidence_ids.length === 0)) {
-    return { allowed: false, reason: "PASS review lacks verification evidence; reverify and review the candidate" }
-  }
+  const approval = acceptedForMerge(state, binding.candidate_id, { historicalReplay })
+  if (!approval.allowed) return approval
   if (state.mandate?.merge_policy !== "governed_auto") return { allowed: false, reason: `merge policy is ${state.mandate?.merge_policy ?? "none"}, not governed_auto` }
   if (state.blocker) return { allowed: false, reason: `unresolved blocker ${state.blocker.class}` }
   const settled = new Set([DISPATCH_STATUS.RESULT_RECONCILED, DISPATCH_STATUS.ABANDONED_RECONCILED, DISPATCH_STATUS.RELEASED])
@@ -109,11 +107,8 @@ export function canVerifyExternalMerge(state) {
     return { allowed: false, reason: "batch candidate or review does not match the exact frozen WU batch" }
   }
   if (candidate.superseded_by_contract) return { allowed: false, reason: "candidate contract superseded; refreeze and review" }
-  const review = state.reviews[binding.candidate_id]
-  if (!review || review.verdict !== "PASS") return { allowed: false, reason: "no PASS review" }
-  if (!Array.isArray(review.verification_evidence_ids) || review.verification_evidence_ids.length === 0) {
-    return { allowed: false, reason: "PASS review lacks verification evidence; reverify and review the candidate" }
-  }
+  const approval = acceptedForMerge(state, binding.candidate_id)
+  if (!approval.allowed) return approval
   if (state.mandate?.merge_policy !== "human") return { allowed: false, reason: `merge policy is ${state.mandate?.merge_policy ?? "none"}, not human` }
   if (state.blocker) return { allowed: false, reason: `unresolved blocker ${state.blocker.class}` }
   const settled = new Set([DISPATCH_STATUS.RESULT_RECONCILED, DISPATCH_STATUS.ABANDONED_RECONCILED, DISPATCH_STATUS.RELEASED])
@@ -965,6 +960,40 @@ export function applyEvent(previous, event, { historicalReplay = false } = {}) {
       break
     }
 
+    case "SOLO_DELIVERY_ADOPT": {
+      if (state.solo_delivery || state.completed ||
+          state.mandate?.authority_kind !== "OWNER_APPROVED_EPIC" ||
+          !validSoloPolicy(body.policy) ||
+          state.execution_id !== body.policy.execution_id + ":exec" ||
+          state.mandate.mandate_id !== body.policy.mandate_id ||
+          state.mandate.merge_policy !== "governed_auto" ||
+          !Array.isArray(state.mandate.wu_sequence) ||
+          body.policy.eligible_wu_ids.some(id => !state.mandate.wu_sequence.includes(id)) ||
+          !body.source_record_key || !/^[a-f0-9]{64}$/.test(body.source_hash ?? "")) {
+        throw new Error("SOLO_CI: requires one owner-approved policy for named frozen WUs and governed_auto mandate")
+      }
+      state.solo_delivery = {
+        policy: structuredClone(body.policy),
+        source_artifact_id: body.source_artifact_id,
+        source_record_key: body.source_record_key,
+        source_hash: body.source_hash,
+        at_revision: state.revision,
+      }
+      break
+    }
+
+    case "SOLO_CI_ACCEPT": {
+      assertProcessAcceptance(state, body.candidate_id)
+      assertSoloAcceptanceEvent(state, body)
+      state.solo_acceptances ??= {}
+      if (state.solo_acceptances[body.candidate_id])
+        throw new Error("SOLO_CI: candidate already accepted; do not repeat")
+      state.solo_acceptances[body.candidate_id] = {
+        ...structuredClone(body), at_revision: state.revision,
+      }
+      break
+    }
+
     case "RECORD_REVIEW": {
       const candidate = state.candidates[body.candidate_id]
       if (candidate?.superseded_by_contract) throw new Error("Candidate contract superseded; refreeze and obtain fresh review")
@@ -1186,7 +1215,7 @@ export function applyEvent(previous, event, { historicalReplay = false } = {}) {
           const revalidated = body.revalidated === true && existing.candidate_id === binding.candidate_id && !state.merge &&
             existing.repository === binding.repository && existing.pr_number === binding.pr_number && /^[a-f0-9]{40}$/.test(body.tree_sha ?? "")
           if ((!revalidated && (existing.candidate_id === binding.candidate_id || state.pr_bindings?.[binding.candidate_id])) ||
-              !state.wu || state.wu.completed || state.reviews[binding.candidate_id]?.verdict !== "PASS" ||
+              !state.wu || state.wu.completed || (state.reviews[binding.candidate_id]?.verdict !== "PASS" && !soloCandidateEligible(state, binding.candidate_id)) ||
               (!sameWuReplacement && !completedPredecessor)) {
             throw new Error(`BIND_PR: already bound to repository ${existing.repository} PR #${existing.pr_number} head ${existing.head_sha}; replacement requires a new reviewed candidate and a settled predecessor (no merge in progress).`)
           }
@@ -1358,7 +1387,8 @@ export function applyEvent(previous, event, { historicalReplay = false } = {}) {
         throw new Error(`WU_COMPLETE: candidate ${candidateId} belongs to ${candidate.wu_id}, not the active WU ${state.wu.wu_id}.`)
       }
       const review = state.reviews[candidateId]
-      if (!review) throw new Error(`WU_COMPLETE: no review recorded for candidate ${candidateId}.`)
+      const acceptedSolo = soloAccepted(state, candidateId)
+      if (!review && !acceptedSolo) throw new Error(`WU_COMPLETE: no review recorded for candidate ${candidateId}.`)
       if (state.wu.batch) {
         if (body.batch_hash !== state.wu.batch.batch_hash ||
             candidate.batch_hash !== state.wu.batch.batch_hash ||
@@ -1369,10 +1399,10 @@ export function applyEvent(previous, event, { historicalReplay = false } = {}) {
       } else if (body.batch_hash) {
         throw new Error("WU_COMPLETE unexpected batch hash")
       }
-      if (review.verdict !== "PASS") {
+      if (!acceptedSolo && review.verdict !== "PASS") {
         throw new Error(`WU_COMPLETE: review verdict is ${review.verdict}, not PASS.`)
       }
-      if (!historicalReplay && (!Array.isArray(review.verification_evidence_ids) || review.verification_evidence_ids.length === 0)) {
+      if (!acceptedSolo && !historicalReplay && (!Array.isArray(review.verification_evidence_ids) || review.verification_evidence_ids.length === 0)) {
         throw new Error("WU_COMPLETE: PASS review lacks verification evidence; reverify and review the candidate.")
       }
       const settled = new Set([DISPATCH_STATUS.RESULT_RECONCILED, DISPATCH_STATUS.ABANDONED_RECONCILED, DISPATCH_STATUS.RELEASED])
@@ -1403,6 +1433,7 @@ export function applyEvent(previous, event, { historicalReplay = false } = {}) {
       }
       state.wu.completed = true
       state.wu.completion = { candidate_id: candidateId, at_revision: state.revision,
+        ...(acceptedSolo ? { acceptance_basis: "SOLO_CI", solo_ci_check: state.solo_delivery.policy.ci_check } : {}),
         ...(state.wu.batch ? { batch_hash: state.wu.batch.batch_hash } : {}) }
       state.completed_wus ??= {}
       if (state.wu.batch) {
