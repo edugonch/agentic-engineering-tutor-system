@@ -30,7 +30,8 @@ export function soloCandidateEligible(state, candidateId) {
 }
 
 export function soloAccepted(state, candidateId) {
-  if (!soloCandidateEligible(state, candidateId)) return false
+  if (!soloCandidateEligible(state, candidateId) ||
+      ["CHANGES_REQUIRED", "BLOCKED"].includes(state.reviews?.[candidateId]?.verdict)) return false
   const proof = state.solo_acceptances?.[candidateId]
   const c = state.candidates[candidateId]
   const binding = state.pr_binding
