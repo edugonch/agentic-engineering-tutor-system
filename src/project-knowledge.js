@@ -1222,7 +1222,7 @@ export async function findApprovedSoloDeliveryPolicy(projectRoot, artifactId) {
   const raw = lines[0].slice("solo_delivery: ".length)
   let keys, policy
   try {
-    keys = [...raw.matchAll(/("(?:\\.|[^"\\])*")\\s*:/g)].map(match => JSON.parse(match[1]))
+    keys = [...raw.matchAll(/("(?:\\.|[^"\\])*")\s*:/g)].map(match => JSON.parse(match[1]))
     policy = JSON.parse(raw)
   } catch { throw new Error("SOLO_DELIVERY_UNMAPPED: invalid policy JSON") }
   const oldFields = ["execution_id","mandate_id","mode","eligible_wu_ids","ci_check"]
