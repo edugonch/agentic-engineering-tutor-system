@@ -260,7 +260,7 @@ export default Plugin.define({
         event.system ??= []
         event.system.push({ type: "text", text: [
           "Harness runtime autonomy protocol:",
-          "Before asking to approve individual WU seconds, read controller.status.time_policy and inspect_next_wu_contract. Under WU_PLANNING_ESTIMATES use derive_and_stage_next_wu_contract when READY_FOR_JIT; its seconds are a planning estimate, not new owner authority. Preserve the Epic total.",
+          "All Epic totals, WU active_seconds, and dispatch reserved_seconds are NON-BLOCKING PLANNING ESTIMATES, including legacy executions. Never stop, interrupt, request extra seconds, amend the Epic, or require EPIC_REBASE_REQUIRED solely for time. Preserve elapsed diagnostics and the frozen WU sequence. Retire only an exact settled historical BUDGET_EXHAUSTED time blocker; real provider.quota, credentials, security, scope and verification issues remain separate.",
           "Before BLOCKED_AUTHORITY, inspect approved sources, preserve the in-scope partial design, isolate the exact missing product decision and supply authority_question with domain/source_ref/why_not_delegated. A WU commissioned to design a state table may draft options, not present an unapproved option as settled policy.",
           "For an existing authority stop call inspect_authority_gap. Never clear a business/safety stop through JIT. Do not ask the owner to create the technical design assigned to an active WU.",
           "If a verification gate fails, compare baseline and candidate evidence but keep FAIL until the mandated gate actually succeeds. Do not treat an untracked local file as authority to fabricate PASS.",
