@@ -66,6 +66,15 @@ export function createExecutionSupervisor(ctx, projectRoot, {
       if (!session || state.completed || (state.blocker && !expiredWait(state) && !toolingTriage && !contractTriage && !scopeTriage) || state.mandate?.authority_kind !== "OWNER_APPROVED_EPIC") { disarm(execution); return false }
       const info = await identity(session)
       if (info.outcome !== "succeeded") { disarm(execution); return false } // never override cancellation or failure
+      const obsoleteCiStop = expiredWait(state)
+      if (obsoleteCiStop?.kind === "CI_PENDING") {
+        await commit(c, session, "CLEAR_BLOCKER", {
+          blocker_class: "BLOCKED_EXTERNAL_FACT", blocked_at_revision: state.blocker.at_revision,
+          resolution: "Deprecated CI_PENDING no longer gates execution; historical wait retained",
+          recovery_evidence: { wait_id: obsoleteCiStop.wait_id, kind: "CI_DEPRECATED_NON_AUTHORITATIVE" },
+        }, `${obsoleteCiStop.wait_id}:clear:CI_DEPRECATED`)
+        state = (await c.snapshot()).state
+      }
       // Explicit opt-in only: the named policy must be an indexed, hash-verified
       // owner APPROVED bounded recovery decision. This never operates on an
       // apparently live builder or in the absence of a tooling blocker.
