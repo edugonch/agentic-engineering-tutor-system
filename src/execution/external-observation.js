@@ -18,5 +18,5 @@ export function terminalObservation(state, operation, observation) {
   // still applied after it. GitHub Actions conclusions have no authority.
   const pr = observation.pr
   return typeof pr.state === 'string' && typeof pr.head_sha === 'string' &&
-    typeof pr.base_sha === 'string' && typeof pr.merged === 'boolean'
+    typeof pr.base_sha === 'string'
 }
