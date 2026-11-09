@@ -19,6 +19,18 @@ export async function runWithExternalWait({ controller, session_id, operation, r
   }
   let { state } = await controller.snapshot()
   if (state.completed || state.wu?.completed) return run() // allow read-only idempotent merge recovery
+  // A historical expired CI-only timeout can leave BLOCKED_EXTERNAL_FACT.
+  // The exact expiredWait fingerprint corroborates that its *only* cause was
+  // the now-deprecated CI dependency. Retire just that blocker through CAS.
+  const obsoleteCiStop = expiredWait(state, operation)
+  if (obsoleteCiStop?.kind === "CI_PENDING") {
+    await commit("CLEAR_BLOCKER", {
+      blocker_class: "BLOCKED_EXTERNAL_FACT", blocked_at_revision: state.blocker.at_revision,
+      resolution: "Deprecated CI_PENDING no longer gates execution; historical wait retained",
+      recovery_evidence: { wait_id: obsoleteCiStop.wait_id, kind: "CI_DEPRECATED_NON_AUTHORITATIVE" },
+    }, `${obsoleteCiStop.wait_id}:clear:CI_DEPRECATED`)
+    state = (await controller.snapshot()).state
+  }
   if (state.blocker) {
     if (observeExistingMerge && ["STARTED", "RECORDED", "VERIFIED"].includes(state.merge?.status)) return run()
     const expired = expiredWait(state, operation)
