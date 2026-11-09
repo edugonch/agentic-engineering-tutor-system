@@ -1,6 +1,6 @@
 # Optional EGM design reviews for the OpenCode V2 Harness
 
-Status: **EXPERIMENTAL / opt-in**. This is a *selective adapter*, not Google's complete Elephant-Goldfish Model workflow or an assertion of native OpenCode V2 support by Google.
+Status: **EXPERIMENTAL / enabled by default, invoked on demand**. This is a *selective adapter*, not Google's complete Elephant-Goldfish Model workflow or an assertion of native OpenCode V2 support by Google.
 
 ## Provenance and distribution
 
@@ -12,15 +12,19 @@ Three **unaltered** original EGM reviewer personas, three unaltered standards an
 
 The complete EGM skill set, orchestrator, synthesizer, five-stage review process, bootstrap, document draft loop, and drift report are **not** installed. Using this adapter does **not** mean that `egm-review`, `egm-brainstorm` or a multi-stage EGM review is available. Google maintains a separate experimental V1 OpenCode adapter.
 
-## Enable
+## Default enablement and opt-out
 
 The normal Harness plugin package contains these resources under `docs/` and `src/`; no manual copying into the project and no `python3 adapters/opencode/install.py` is required.
 
-Set `HARNESS_EGM_ENABLED=1` **for the OpenCode server process**, then restart/reload OpenCode. For example, when launching OpenCode from a shell:
+EGM is enabled when `HARNESS_EGM_ENABLED` is unset (the default). Install/update the Harness plugin and restart/reload OpenCode as usual. The optional `/harness-egm-review` command becomes available without extra configuration. This does **not** automatically run reviews.
+
+To explicitly disable EGM for the OpenCode server process:
 
 ```sh
-HARNESS_EGM_ENABLED=1 opencode
+HARNESS_EGM_ENABLED=0 opencode
 ```
+
+`1`, `true` and `on` also enable; `0`, `false` and `off` disable. Other values are rejected to avoid silent misconfiguration.
 
 The Harness global agent provisioner then creates (or upgrades **only unchanged managed copies**) these profiles in the selected OpenCode global config directory:
 
@@ -28,7 +32,7 @@ The Harness global agent provisioner then creates (or upgrades **only unchanged 
 - `harness-egm-design` — architectural assumptions, failure modes, alternatives;
 - `harness-egm-readiness` — implementation-plan actionability.
 
-Existing customized or unmanaged profiles are preserved. An already-running OpenCode session may need restart/reload to see newly provisioned agents. Without the env flag, no EGM profiles or command are installed on a fresh configuration; previously installed profiles are not deleted, but the Harness rejects their tool calls and dispatch while disabled.
+Existing customized or unmanaged profiles are preserved. An already-running OpenCode session may need restart/reload to see newly provisioned agents. When explicitly disabled, no EGM profiles or command are installed on a fresh configuration; previously installed profiles are not deleted, but the Harness rejects their tool calls and dispatch while disabled.
 
 ## Use
 
@@ -48,7 +52,7 @@ The review command requires an existing regular file inside the project and an e
 
 ## Controls and limits
 
-- **Opt-in only**: `HARNESS_EGM_ENABLED=1`. No new mandatory review gates, WUs, rounds or budgets.
+- **Enabled by default; manually invoked**. Use `HARNESS_EGM_ENABLED=0` for opt-out. No new mandatory review gates, WUs, rounds or budgets.
 - **Tool-boundary read-only**: A V2 `execute.before` hook denies EGM reviewer tools other than `read` and `glob`. Reads must resolve inside the active project or the vendored rubrics directory. `.env`, `.git`, credentials and sensitive home directories are denied, including through symlinks. Glob roots must remain inside the project. Ordinary Harness roles are not affected.
 - **Dispatch isolation**: Only the Harness orchestrator may launch a listed EGM reviewer, when EGM is enabled and no active WU execution context is associated with the caller. EGM sessions are excluded from the Harness project-instruction and WU-context injection hooks.
 - **Preserved invariants**: The existing WU activation, frozen candidate, verification, independent implementation review, merge and historical Phase-4 recovery records remain untouched.
@@ -56,7 +60,7 @@ The review command requires an existing regular file inside the project and an e
 - **Failure handling**: A failed reviewer launch or inaccessible mandatory source is **NOT_REVIEWED**, not a PASS; never synthesize a simulated Goldfish.
 - **Scope**: Only design criticism. No automatic document rewrite, EGM five-stage iteration, automated code correction, policy override or autonomous historical recovery.
 
-## Verification before production opt-in
+## Verification before production use
 
 Run the repository checks:
 
@@ -65,6 +69,6 @@ npm run check
 node --test tests/egm-integration.test.js
 ```
 
-Then in an isolated OpenCode V2 profile and disposable project: verify profile discovery, one real fresh child session, required target/rubric reads, child tool-call denial for write/shell/Harness actions, symlink and `.env` denial, parent-only random marker not leaked via Harness injection, and the effective merged role permissions. Test the existing candidate/WU acceptance path with EGM enabled and disabled. Retain recorded traces; if native isolation fails, keep EGM disabled and report the limitation. No model call is needed just to install the files.
+Then in an isolated OpenCode V2 profile and disposable project: verify profile discovery, one real fresh child session, required target/rubric reads, child tool-call denial for write/shell/Harness actions, symlink and `.env` denial, parent-only random marker not leaked via Harness injection, and the effective merged role permissions. Test the existing candidate/WU acceptance path with EGM enabled and disabled. Retain recorded traces; if native isolation fails, run with `HARNESS_EGM_ENABLED=0` and report the limitation. No model call is needed just to install the files.
 
 This feature intentionally does not resolve orphaned-dispatch liveness defects: those belong to the separate Harness recovery controller.
