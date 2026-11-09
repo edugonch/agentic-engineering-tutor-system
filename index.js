@@ -1,4 +1,5 @@
 import { readProjectInstructions, projectInstructionContext } from "./src/project-instructions.js"
+import { assertEgmDispatch, assertEgmReviewerTool, egmEnabled, isEgmReviewer, registerHarnessEgmCommand } from "./src/integrations/egm.js"
 import { readExternalSource } from "./src/external-source-reader.js"
 import { usesPlanningEstimates, epicExecutionRemaining } from "./src/execution/time-policy.js"
 import { observeSubagentProgress } from "./src/execution/launch-progress.js"
@@ -80,7 +81,9 @@ export default Plugin.define({
     const runtimeLoadedAtMs = Date.now()
     // Process lifetime survives plugin hot reload; true process restart resets it.
     const processStartedAtMs = Date.now() - Math.floor(process.uptime() * 1000)
-    const packageRevision = await packageFingerprint(fileURLToPath(new URL(".", import.meta.url)))
+    const packageRoot = fileURLToPath(new URL(".", import.meta.url))
+    const enableEgm = egmEnabled(process.env)
+    const packageRevision = await packageFingerprint(packageRoot)
     const settings = readGuardSettings(process.env)
     const guard = createTurnGuard(settings)
     const ownership = createOrchestratorOwnership(ctx)
@@ -125,8 +128,9 @@ export default Plugin.define({
     let agentProvisioning
     try {
       agentProvisioning = await provisionGlobalHarnessAgents({
-        packageRoot: fileURLToPath(new URL(".", import.meta.url)),
+        packageRoot,
         configDir: resolveOpenCodeConfigDir(process.env),
+        enableEgm,
       })
     } catch (error) {
       agentProvisioning = {
@@ -239,7 +243,9 @@ export default Plugin.define({
 
     // V2 calls this hook before every agent-loop request, including tool continuations.
     await ctx.session.hook("context", async (event) => {
-      const executionContext = await workerBudget.inspect(event.sessionID, event.agent)
+      // Fresh Goldfish sessions must not receive root WU context at this hook.
+      // OpenCode's own AGENTS.md inheritance still needs a native isolation probe.
+      const executionContext = isEgmReviewer(event.agent) ? null : await workerBudget.inspect(event.sessionID, event.agent)
       if (executionContext?.execution_id) efficiencyTelemetry.associate(event.sessionID, executionContext.execution_id,
         executionContext.wu_id, event.agent === "harness-reviewer" ? "REVIEW" :
           event.agent === "harness-builder" ? "BUILD" : "OTHER")
@@ -259,7 +265,7 @@ export default Plugin.define({
           "If a verification gate fails, compare baseline and candidate evidence but keep FAIL until the mandated gate actually succeeds. Do not treat an untracked local file as authority to fabricate PASS.",
         ].join("\\n") })
       }
-      if (String(event.agent ?? "").startsWith("harness-")) {
+      if (String(event.agent ?? "").startsWith("harness-") && !isEgmReviewer(event.agent)) {
         const instructions = projectInstructionContext(await readProjectInstructions(requireProjectRoot()))
         if (instructions) { event.system ??= []; event.system.push({ type: "text", text: instructions }) }
       }
@@ -277,6 +283,11 @@ export default Plugin.define({
     // Count tool calls and delegations for the session that actually ran them,
     // and (Wave B) claim a bound prepared dispatch at the launch boundary.
     await ctx.tool.hook("execute.before", async (event) => {
+      await assertEgmReviewerTool(event, { projectRoot: requireProjectRoot(), packageRoot, enabled: enableEgm })
+      if (event.tool === "subagent" && isEgmReviewer(event.input?.agent)) {
+        const active = await workerBudget.inspect(event.sessionID, event.agent)
+        assertEgmDispatch(event, { enabled: enableEgm, activeExecution: Boolean(active?.execution_id) })
+      }
       await assertSessionNotOrphanFenced(requireProjectRoot(), event.sessionID)
       await ownership.beforeTool(event)
       await workerBudget.inspect(event.sessionID, event.agent)
@@ -1106,6 +1117,7 @@ export default Plugin.define({
     }
 
     await registerHarnessCommand(ctx, ownership)
+    await registerHarnessEgmCommand(ctx, ownership, { env: process.env, packageRoot })
 
     // Do not make server Location activation depend on runtime registry reload
     // or historical execution scans. They are recoverable background work, not
