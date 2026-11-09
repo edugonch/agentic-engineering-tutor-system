@@ -1550,16 +1550,14 @@ export function applyEvent(previous, event, { historicalReplay = false } = {}) {
 // Structural budget invariants enforced on every projection step. These are the
 // fail-closed guards that make "reservation/liquidation is balanced" a property
 // of the projection, not of the caller. They never depend on the wall-clock
-// total (total_seconds is a soft ceiling, checked at readiness, not here).
+// total (total_seconds is a planning estimate only).
 function assertBudgetInvariants(budget) {
   if (budget.reserved_seconds < 0) throw new Error("Invariant violation: reserved_seconds must never be negative.")
   if (budget.used_seconds < 0) throw new Error("Invariant violation: used_seconds must never be negative.")
 }
 
-// Derived budget view for authorization. The projection reproduces the ledger
-// faithfully (it may describe over-budget history); this function computes the
-// authorization view WITHOUT invalidating anything. available_seconds may be
-// negative (overrun) — that is a reconstructible fact, not a projection error.
+// Pure historical estimate/accounting projection. Negative remaining seconds
+// are a planning overrun, never a permission or delivery gate.
 export function deriveBudget(budget) {
   const available_seconds = budget.total_seconds - budget.used_seconds - budget.reserved_seconds
   return {
@@ -1567,7 +1565,9 @@ export function deriveBudget(budget) {
     used_seconds: budget.used_seconds,
     reserved_seconds: budget.reserved_seconds,
     available_seconds,
-    exhausted: available_seconds <= 0,
+    exhausted: false, // no time-based execution ceiling
+    enforced: false, time_policy: "planning_estimate",
+    estimate_exceeded: available_seconds <= 0,
     overrun: available_seconds < 0,
   }
 }
