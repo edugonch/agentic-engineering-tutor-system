@@ -6,7 +6,7 @@ import { join } from "node:path"
 import { createExecutionController } from "../../src/execution/execution.js"
 import { createWorkerBudgetGuard } from "../../src/execution/worker-budget.js"
 
-test("worker expiry interrupts the exact child, preserves reservation and records recoverable budget cause", async t => {
+test("worker duration overrun never interrupts the child or raises a time blocker", async t => {
   const root = await mkdtemp(join(tmpdir(), "worker-budget-"))
   t.after(() => rm(root, { recursive: true, force: true }))
   const c = await createExecutionController({ dir: join(root, ".harness/execution/controller/E") })
@@ -27,16 +27,15 @@ test("worker expiry interrupts the exact child, preserves reservation and record
   const guard = createWorkerBudgetGuard(ctx, root, {}, { now: () => Date.now() + 20000 })
   t.after(() => guard.dispose())
   assert.equal(await guard.inspect("unrelated", "harness-builder"), undefined)
-  await assert.rejects(guard.inspect("child", "harness-builder"), /HARNESS_BUDGET_EXHAUSTED/)
-  let state
-  const deadline = Date.now() + 2000
-  do {
-    await new Promise(resolve => setTimeout(resolve, 10))
-    state = (await c.snapshot()).state
-  } while (!state.blocker && Date.now() < deadline)
-  assert.deepEqual(interrupts, [{ sessionID: "child", continue: false }])
-  assert.equal(state.blocker.class, "BUDGET_EXHAUSTED")
-  assert.equal(state.blocker.budget_reason, "reservation_expired")
+  const context = await guard.inspect("child", "harness-builder")
+  const state = (await c.snapshot()).state
+  assert.equal(context.time_policy, "planning_estimate")
+  assert.equal(context.enforced, false)
+  assert.equal(context.estimate_exceeded, true)
+  assert.ok(context.estimate_overrun_seconds >= 10)
+  assert.equal(context.dispatch_id, "D")
+  assert.deepEqual(interrupts, [])
+  assert.equal(state.blocker, null)
   assert.equal(state.budget.reserved_seconds, 10)
   assert.equal(state.budget.used_seconds, 0)
   assert.deepEqual(guard.failures(), [])
