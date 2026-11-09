@@ -60,6 +60,20 @@ export function createExecutionSupervisor(ctx, projectRoot, {
       const c = await controller(execution)
       let { state } = await c.snapshot()
       const session = state.supervisor?.session_id
+      // Existing BUDGET_EXHAUSTED events remain immutable history, but time
+      // estimates no longer justify a stop. Retire only that exact blocker after
+      // every runtime side effect is durably settled, then resume ordinary routing.
+      if (session && !state.completed && state.blocker?.class === "BUDGET_EXHAUSTED" &&
+          !state.budget.active_phase && !state.verification_phase && !state.external_wait &&
+          Object.values(state.dispatches).every(d => ["released", "result_reconciled", "abandoned_reconciled"].includes(d.status))) {
+        await identity(session)
+        const blocker = state.blocker
+        await commit(c, session, "CLEAR_BLOCKER", {
+          blocker_class: blocker.class, blocked_at_revision: blocker.at_revision,
+          resolution: "Retire legacy time estimate stop; no WU/Epic duration gate under current policy",
+        }, `${execution}:clear-blocker:${blocker.at_revision}`)
+        state = (await c.snapshot()).state
+      }
       const { toolingTriage, contractTriage, scopeTriage } = classifyContinuation(state)
       if (!session || state.completed || (state.blocker && !expiredWait(state) && !toolingTriage && !contractTriage && !scopeTriage) || state.mandate?.authority_kind !== "OWNER_APPROVED_EPIC") { disarm(execution); return false }
       const info = await identity(session)
