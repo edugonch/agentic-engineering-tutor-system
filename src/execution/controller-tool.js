@@ -637,7 +637,7 @@ export async function runExecutionController(projectRoot, input, candidateRegist
         nowMs: options.now_ms ?? Date.now(),
         runtimeLoadedAtMs: options.runtime_loaded_at_ms ?? null,
       }),
-      time_policy: state.time_policy?.mode ?? "LEGACY_HARD_LIMIT",
+      time_policy: "PLANNING_ESTIMATES_ONLY", time_budget_enforced: false,
       delivery_metrics: deliveryMetrics(state),
     }
   }
