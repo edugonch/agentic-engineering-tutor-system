@@ -62,13 +62,15 @@ Confirm the package appears with `opencode plugin list`. If it does not, inspect
 
 ## Optional Elephant-Goldfish design critique (OpenCode V2, experimental)
 
-EGM is an **opt-in** pre-implementation design-review aid, not a replacement for the Harness controller or the independent candidate reviewer. This package vendors a pinned, licensed **subset** of EGM (three reviewers and their rubrics), not Google's complete five-stage workflow. Nothing about ordinary WU delivery changes when EGM is disabled.
+EGM is **available by default** as an on-demand pre-implementation design-review aid, not a replacement for the Harness controller or the independent candidate reviewer. This package vendors a pinned, licensed **subset** of EGM (three reviewers and their rubrics), not Google's complete five-stage workflow. Nothing about ordinary WU delivery changes when EGM is disabled.
 
-Launch OpenCode with `HARNESS_EGM_ENABLED=1` and restart after installing/updating the plugin:
+EGM profiles and the `/harness-egm-review` command are enabled automatically after a normal plugin installation/update and OpenCode restart. No environment variable is required. To disable EGM explicitly, start OpenCode with:
 
 ```sh
-HARNESS_EGM_ENABLED=1 opencode
+HARNESS_EGM_ENABLED=0 opencode
 ```
+
+The default-on setting **does not trigger any automatic reviews**. One Goldfish review still requires invoking the command.
 
 Then run, on an existing project-local design document:
 
