@@ -148,20 +148,18 @@ test('second WU recovers a crash after remote merge and durable record without m
   })
 })
 
-test('new candidate cannot reuse predecessor CI or close against predecessor merge', async () => {
+test('new candidate cannot close against predecessor merge; CI_PENDING cannot stop its own verified merge', async () => {
   await fixture(async f => {
     await f.prepare(1); await f.bind(1); await f.ci(1); await f.merge(1)
     await f.tool({ action: 'complete_wu', candidate_id: 'c1' })
     await f.prepare(2)
     await assert.rejects(f.tool({ action: 'complete_wu', candidate_id: 'c2' }), /does not match/)
     await f.bind(2)
-    f.adapter.getChecks = async ({ head_sha }) => {
-      assert.equal(head_sha, 'h2') // predecessor CI cannot satisfy the new head
-      return [{ name: 'verify', conclusion: 'PENDING', pending: true }]
-    }
-    await assert.rejects(f.merge(2), /CI verify.*PENDING/)
-    assert.deepEqual(f.calls, [1])
-    assert.equal((await f.controller.snapshot()).state.merge, null)
+    f.adapter.getChecks = async () => { assert.fail("deprecated CI must not be queried") }
+    assert.equal((await f.merge(2)).status, "merged")
+    assert.deepEqual(f.calls, [1, 2])
+    assert.equal((await f.controller.snapshot()).state.merge.candidate_id, 'c2')
+    await f.tool({ action: 'complete_wu', candidate_id: 'c2' })
   })
 })
 
