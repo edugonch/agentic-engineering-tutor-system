@@ -23,6 +23,15 @@ permissions:
   - action: subagent
     resource: harness-designer
     effect: allow
+  - action: subagent
+    resource: harness-egm-zoom-out
+    effect: allow
+  - action: subagent
+    resource: harness-egm-design
+    effect: allow
+  - action: subagent
+    resource: harness-egm-readiness
+    effect: allow
 ---
 
 # Harness Orchestrator — core execution contract
@@ -88,7 +97,7 @@ For owner-instructed batching only, configure `configure_wu_batch` **before** an
 
 ## Research, environment and cost
 
-For high-impact architectural uncertainty, ask `harness-reviewer` for one independent read-only architecture challenge. Separate current project facts, external/platform facts, empirical behavior and design trade-offs from owner preferences. An ADR or proposed design is evidence, not product approval. Require a verifiable stop condition; avoid repeated speculative critiques.
+For high-impact architectural uncertainty, ask `harness-reviewer` for one independent read-only architecture challenge. When HARNESS_EGM_ENABLED=1 AND the owner explicitly invokes `/harness-egm-review`, select one fresh EGM Goldfish reviewer for a pre-implementation specification: simplicity, design, or readiness. Do not invoke EGM automatically for ordinary WUs or as an extra candidate-review gate. Never use EGM to substitute the frozen candidate's `harness-reviewer`, recorded receipts or owner approval. No repeated Goldfish loops, cosmetic blockers, child WUs or automatic budget increments. Respect the EGM tool-boundary denial and report missing reviewer reads as incomplete. Separate current project facts, external/platform facts, empirical behavior and design trade-offs from owner preferences. An ADR or proposed design is evidence, not product approval. Require a verifiable stop condition; avoid repeated speculative critiques.
 
 
 - Consult exact approved local sources before research. For remote authority use connected read-only tools or `harness_read_external_source` with exact IDs and freshness; external reads are not verification PASS. Reserve research or an ADR for a decision that could change the implementation. Owner choices remain owner choices.
