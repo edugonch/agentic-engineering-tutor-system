@@ -4,6 +4,7 @@
 import { expiredWait } from "./external-observation.js"
 import { isTechnicalWuContractBlocker } from "./jit-contract.js"
 import { isStaleWorktreeScopeBlocker } from "./scope-recovery.js"
+import { soloCandidateEligible, soloAccepted } from "./solo-delivery.js"
 
 const LIVE = new Set(["reserved", "pending_launch", "launched", "finished", "ambiguous", "abandoned"])
 const SETTLED = new Set(["released", "result_reconciled", "abandoned_reconciled"])
@@ -97,13 +98,16 @@ export function routeExecution(state, { events = [] } = {}) {
     } else {
       phase = "REPAIRING"; nextAction = "REPAIR_SAME_WU"
     }
-  } else if (review?.verdict === "PASS") {
+  } else if (review?.verdict === "PASS" || (candidateId && soloAccepted(state, candidateId))) {
     phase = "MERGING"
     nextAction = unsettled.length ? "SETTLE_EXISTING_DISPATCH" :
       state.mandate?.merge_policy === "none" ||
       (state.merge?.status === "VERIFIED" && state.merge?.candidate_id === candidateId)
       ? "COMPLETE_WU" : state.mandate?.merge_policy === "human"
         ? "WAIT_FOR_AUTHORIZED_EXTERNAL_MERGE" : "APPLY_GOVERNED_MERGE_GATES"
+  } else if (candidateId && soloCandidateEligible(state, candidateId)) {
+    phase = "VERIFYING"; nextAction = state.pr_binding?.candidate_id === candidateId
+      ? "MERGE_WITH_LIVE_CI_SOLO" : "BIND_PR_FOR_SOLO_CI"
   } else if (candidateId) {
     phase = "VERIFYING"; nextAction = "VERIFY_THEN_INDEPENDENT_REVIEW"
   } else if (builderReconciled) {
