@@ -1220,26 +1220,39 @@ export async function findApprovedSoloDeliveryPolicy(projectRoot, artifactId) {
   const lines = content.split(/\r?\n/).filter(line => line.startsWith("solo_delivery: "))
   if (lines.length !== 1) throw new Error("SOLO_CI_AUTHORITY_UNMAPPED: expected exactly one solo_delivery: JSON line")
   const raw = lines[0].slice("solo_delivery: ".length)
-  const fields = ["execution_id","mandate_id","mode","eligible_wu_ids","ci_check"]
   let keys, policy
   try {
-    keys = [...raw.matchAll(/("(?:\\.|[^"\\])*")\s*:/g)].map(match => JSON.parse(match[1]))
+    keys = [...raw.matchAll(/("(?:\\.|[^"\\])*")\\s*:/g)].map(match => JSON.parse(match[1]))
     policy = JSON.parse(raw)
-  } catch { throw new Error("SOLO_CI_AUTHORITY_UNMAPPED: invalid policy JSON") }
+  } catch { throw new Error("SOLO_DELIVERY_UNMAPPED: invalid policy JSON") }
+  const oldFields = ["execution_id","mandate_id","mode","eligible_wu_ids","ci_check"]
+  const newFields = ["execution_id","mandate_id","mode","checks_by_wu"]
+  const fields = policy?.mode === "SOLO_LOCAL" ? newFields : oldFields
   if (!policy || Array.isArray(policy) || typeof policy !== "object" ||
       keys.length !== fields.length || new Set(keys).size !== fields.length ||
       !fields.every(field => keys.includes(field)) ||
       Object.keys(policy).length !== fields.length ||
       !fields.every(field => Object.hasOwn(policy, field)) ||
-      policy.mode !== "SOLO_CI" ||
       !/^[A-Za-z0-9._-]+$/.test(policy.execution_id ?? "") ||
       !/^[A-Za-z0-9._-]+$/.test(policy.mandate_id ?? "") ||
-      !/^[A-Za-z0-9._:-]{1,181}$/.test(policy.ci_check ?? "") ||
-      !Array.isArray(policy.eligible_wu_ids) ||
-      policy.eligible_wu_ids.length === 0 || policy.eligible_wu_ids.length > 100 ||
-      policy.eligible_wu_ids.some(id => typeof id !== "string" || !/^[A-Za-z0-9._:-]{1,181}$/.test(id)) ||
-      new Set(policy.eligible_wu_ids).size !== policy.eligible_wu_ids.length)
-    throw new Error("SOLO_CI_AUTHORITY_UNMAPPED: invalid policy, duplicate keys, scope or CI gate")
+      (policy.mode === "SOLO_LOCAL" ?
+        (!policy.checks_by_wu || Array.isArray(policy.checks_by_wu) ||
+          typeof policy.checks_by_wu !== "object" ||
+          Object.keys(policy.checks_by_wu).length < 1 ||
+          Object.keys(policy.checks_by_wu).length > 100 ||
+          Object.entries(policy.checks_by_wu).some(([id, checks]) =>
+            !/^[A-Za-z0-9._:-]{1,181}$/.test(id) ||
+            !Array.isArray(checks) || checks.length < 1 || checks.length > 20 ||
+            checks.some(c => typeof c !== "string" || !/^[A-Za-z0-9._:-]{1,181}$/.test(c)) ||
+            new Set(checks).size !== checks.length)) :
+        (policy.mode !== "SOLO_CI" ||
+          !/^[A-Za-z0-9._:-]{1,181}$/.test(policy.ci_check ?? "") ||
+          !Array.isArray(policy.eligible_wu_ids) ||
+          policy.eligible_wu_ids.length < 1 || policy.eligible_wu_ids.length > 100 ||
+          policy.eligible_wu_ids.some(id => typeof id !== "string" || !/^[A-Za-z0-9._:-]{1,181}$/.test(id)) ||
+          new Set(policy.eligible_wu_ids).size !== policy.eligible_wu_ids.length))) {
+    throw new Error("SOLO_DELIVERY_UNMAPPED: invalid policy, duplicate keys, WU scope or local checks")
+  }
   return { policy, source_record_key: record.record_key, source_artifact_id: record.source_id,
     source_hash: record.sha256 }
 }
