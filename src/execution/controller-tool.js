@@ -4,7 +4,7 @@ import { inspectAcceptanceCoverage } from "./acceptance-coverage.js"
 import { readLog, validateLog } from "./event-log.js"
 import { project } from "./state.js"
 import { projectOperationalView } from "./operational-view.js"
-import { processReviewAttestation, applicableAuthority, blockerFingerprint, activeRecovery } from "./process-recovery.js"
+import { processReviewAttestation, applicableAuthority, blockerFingerprint, activeRecovery, assertBehavioralNegativeReceipt } from "./process-recovery.js"
 import { validateControllerPreflight } from "./controller-preflight.js"
 import { PLANNING_ESTIMATES } from "./time-policy.js"
 import { deriveVerificationCorrection, correctionCheckMapping } from "./contract-correction.js"
@@ -326,6 +326,7 @@ export async function runExecutionController(projectRoot, input, candidateRegist
     const receipt = await readVerificationReceipt(join(projectRoot, ".harness/execution/verification-results"), String(input.evidence_id ?? ""))
     if (!receipt || receipt.status !== "FAIL" || receipt.evidence_version !== 2 || receipt.exit_code === 0 || receipt.exit_code === null ||
         receipt.output.timed_out || receipt.output.aborted || receipt.output.setup_results.some(r => !r.ok)) throw new Error("Executed negative check required; setup failures/timeouts/cancellation are not process evidence")
+    assertBehavioralNegativeReceipt(receipt)
     const candidate = await registry.load(receipt.candidate_id)
     if (!candidate || !candidate.verification_contract?.commands?.some(check => check.id === receipt.check_id) || candidate.verification_contract?.source_wu_id !== snap.state.wu?.wu_id ||
         receipt.verification_contract_hash !== snap.state.wu?.contract?.verification_contract_hash ||
