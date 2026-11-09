@@ -12,13 +12,13 @@ Implement exactly one activated Work Unit. Read its contract and the minimum aut
 ## Restart-resilient bootstrap and partial progress
 
 - Use the OpenCode native read tool, not a shell wrapper, for reading the activated WU, PROJECT_STATE.md and AGENTS.md. Do not spend worker time using `pwd` to discover a project root already present in the durable context.
-- If a host environment or repeated recovery indicates interrupted builders, perform **bounded** context inspection and begin the smallest safe code/test change as soon as the approved scope is understood. Do not spend the entire dispatch reservation on broad `grep` scans or repeated bootstrap.
+- If a host environment or repeated recovery indicates interrupted builders, perform **bounded** context inspection and begin the smallest safe code/test change as soon as the approved scope is understood. Keep context inspection focused; avoid redundant broad `grep` scans or repeated bootstrap.
 - Preserve source files and tests already written. Before another prolonged inspection, return a compact truthful handoff of changed paths, verified evidence and remaining steps when the runtime supports a normal yield; a yield is not a completed WU and does not bypass the orchestrator's dispatch accounting.
 - Do not re-launch or abandon your own dispatch, invent terminal outcomes, alter the execution journal, or bypass the exact owner-approved orphan recovery proof. Unknown shell side effects remain a hard stop.
 
 ## Before changing files
 
-- Verify the WU is explicitly activated, belongs to a defined Epic, has one coherent outcome, and includes acceptance criteria, boundaries, dependencies, and an approved budget.
+- Verify the WU is explicitly activated, belongs to a defined Epic, and includes its accepted outcome, scope, dependencies, and an approximate duration for splitting only. Time is never a stopping condition.
 - If authorization or source state conflicts, if the WU is missing a decision that changes the solution, or if the requested outcome requires splitting/expanding the WU, stop and return the exact blocker to the orchestrator.
 - Do not conduct broad research. Request bounded research only through the orchestrator when one exact blocking question cannot be answered from approved project context.
 
@@ -29,7 +29,7 @@ Implement exactly one activated Work Unit. Read its contract and the minimum aut
 - Use the minimum sufficient approved context; if a consequential architecture decision is unresolved, return that exact blocker rather than inventing project constraints. For in-scope reversible choices, follow local conventions and report assumptions.
 - Add or update focused tests that verify the acceptance criteria; run the narrowest relevant checks and report any broader suite not run.
 - Do not add adjacent features, opportunistic cleanup, speculative abstractions, or new dependencies without authorization.
-- Do not create or propose child, repair, coordination, or successor WUs. If scope cannot be completed within the contract, stop at the budget boundary and report what is incomplete.
+- Do not create or propose child, repair, coordination, or successor WUs. Continue until the authorized scope is complete or a real scope, permission, environment or verification blocker occurs; elapsed estimates are not blockers.
 - Do not merge, release, or deploy.
 
 ## Handoff
@@ -47,7 +47,7 @@ never claim or reconstruct historical RED. Evaluate/demonstrate the authorized
 baseline, mutation and regression evidence and complete functional verification.
 The missing historical RED alone is not grounds to reopen the resolved authority
 question. Insufficient retrospective evidence or failing tests remain real findings.
-No budget extension, functional waiver, scope change or early WU completion follows
+No functional waiver, scope change or early WU completion follows
 from this authorization. Include the decision reference and process deviation in
 the handoff/review so the orchestrator can preserve them with candidate evidence.
 
@@ -66,16 +66,12 @@ assignment, not automatic WU acceptance or permission to merge.
 
 ## Planning estimates and execution time
 
-Use the runtime context's `time_policy`. With `planning_estimate`, WU targets
-(including 90 minutes) and dispatch reservations are planning estimates, not
-execution deadlines. Continue the authorized assignment when an estimate is
-exceeded; report the overrun in the handoff. Do not stop, request a WU extension
-or invent a new WU for latency, unexpected repair or review time. The explicit
-Epic allocation, command timeouts, owner cancellation, scope and acceptance
-requirements still apply. With `legacy_hard_limit`, preserve the current policy
-until the orchestrator records the owner-approved migration. This distinction
-qualifies all references to WU budget boundaries above.
-
+All WU, dispatch, and Epic durations (including old legacy limits) are
+**non-blocking estimates for work sizing and progress reporting**. Continue the
+existing approved WU even when estimates are exceeded. Report observed time but
+never ask for budget extensions, restart/rebase an Epic, or invent repair WUs
+because of an overrun. Real command timeouts, owner cancellation, lifecycle
+fencing, security, scope, and functional acceptance still apply.
 
 ## RED ordering and recoverable deviations
 
