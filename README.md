@@ -60,6 +60,10 @@ opencode plugin add 'git+https://github.com/edugonch/agentic-engineering-tutor-s
 
 Confirm the package appears with `opencode plugin list`. If it does not, inspect the resolved configuration with `opencode debug config` and review OpenCode startup errors. The package declares `main: ./index.js` as its server entry point and targets the OpenCode V2 plugin API (`@opencode/plugin`); it has no Claude Code or V1 implementation.
 
+## RED-first TDD enforcement (same Work Unit)
+
+For active Work Units with structured mandatory TDD, the Harness exposes `operational_status.tdd_gate` and blocks builder production edits and shell until a real behavioral RED is recorded. The first same-WU builder dispatch is test-only; the orchestrator freezes the test baseline, runs the declared check, records its failing receipt, and resumes production implementation in the same WU. There are **no automatic successor WUs, extra Epics or additional owner approvals** for this existing requirement. Missing-module failures do not count as behavioral RED, and past deviations remain visible rather than being rewritten. See [RED-first operator guide](docs/tdd-red-first.md).
+
 ## Optional Elephant-Goldfish design critique (OpenCode V2, experimental)
 
 EGM is **available by default** as an on-demand pre-implementation design-review aid, not a replacement for the Harness controller or the independent candidate reviewer. This package vendors a pinned, licensed **subset** of EGM (three reviewers and their rubrics), not Google's complete five-stage workflow. Nothing about ordinary WU delivery changes when EGM is disabled.
