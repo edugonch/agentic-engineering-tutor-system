@@ -1,4 +1,5 @@
 import { readProjectInstructions, projectInstructionContext } from "./src/project-instructions.js"
+import { assertTddPreimplementation } from "./src/execution/tdd-preflight.js"
 import { assertEgmDispatch, assertEgmReviewerTool, egmEnabled, isEgmReviewer, registerHarnessEgmCommand } from "./src/integrations/egm.js"
 import { readExternalSource } from "./src/external-source-reader.js"
 import { usesPlanningEstimates, epicExecutionRemaining } from "./src/execution/time-policy.js"
@@ -290,7 +291,11 @@ export default Plugin.define({
       }
       await assertSessionNotOrphanFenced(requireProjectRoot(), event.sessionID)
       await ownership.beforeTool(event)
-      await workerBudget.inspect(event.sessionID, event.agent)
+      const workerContext = await workerBudget.inspect(event.sessionID, event.agent)
+      // Enforce TDD before any production-mutating builder tool, not at review time.
+      // Test-only edits remain possible; the orchestrator must record a real
+      // negative receipt before allowing implementation tools.
+      await assertTddPreimplementation(event, workerContext, requireProjectRoot())
       // Run the circuit breaker first. If it trips, the subagent is rejected and
       // no claim is written — the pre-side-effect failure stays NEVER_LAUNCHED and
       // releasable (this is the WU-058 case, now structural).
