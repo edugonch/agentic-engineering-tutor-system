@@ -483,7 +483,7 @@ test("pending historical CI cannot create an external wait", async () => {
       }) })
     assert.equal(result.status, "merged")
     const state = (await controller.snapshot()).state
-    assert.equal(state.external_wait, null)
+    assert.equal(state.external_wait ?? null, null)
     assert.equal(state.ci_evidence[candidate.candidate_id]["check-1"].conclusion, "PENDING")
   })
 })
