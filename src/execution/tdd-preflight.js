@@ -34,6 +34,10 @@ async function safeProjectPath(projectRoot, userPath) {
   const root = await realpath(projectRoot)
   const target = resolve(root, userPath)
   if (!within(root, target) || target === root) throw new Error("TDD_RED_FIRST: test edits must stay inside the project")
+  const forbidden = new Set([".git", ".harness", ".env", ".ssh", ".aws", "node_modules", "secrets", "credentials"])
+  if (relative(root, target).split(sep).some(part => forbidden.has(part) || part.startsWith(".env."))) {
+    throw new Error("TDD_RED_FIRST: protected directories and environment files may not be edited")
+  }
   // Check the real file or its nearest existing parent to reject symlink escapes
   // for both overwrites and newly created test files.
   let probe = target
