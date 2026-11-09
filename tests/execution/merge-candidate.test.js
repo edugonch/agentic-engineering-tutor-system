@@ -134,15 +134,13 @@ test("base drift fails closed", async () => {
   })
 })
 
-test("missing/failed required CI is rejected", async () => {
-  await withRoot(async (root) => {
+test("deprecated CI never blocks a verified reviewed candidate", async () => {
+  await withRoot(async root => {
     const candidate = await setupReady(root, "ses-1")
-    // getChecks returns null (missing) for the required check
     const adapter = fakeAdapter({ checks: { "check-1": null } })
-    await assert.rejects(
-      runMergeCandidate(root, { candidate_id: candidate.candidate_id, adapter, session_id: "ses-1" }),
-      /not SUCCESS|missing/,
-    )
+    adapter.getChecks = async () => assert.fail("deprecated GitHub CI was queried")
+    assert.equal((await runMergeCandidate(root, { candidate_id: candidate.candidate_id,
+      adapter, session_id: "ses-1" })).status, "merged")
   })
 })
 
@@ -431,14 +429,13 @@ test("F01: a resumed STARTED merge rechecks a newly recorded security blocker", 
   })
 })
 
-test("F09: remote CI failure leaves no STARTED merge; corrected CI can proceed", async () => {
+test("F09: failed remote CI is informational and never rechecked before merge", async () => {
   await withRoot(async root => {
     const candidate = await setupReady(root, "ses-1")
-    const args = { candidate_id: candidate.candidate_id, session_id: "ses-1" }
-    await assert.rejects(runMergeCandidate(root, { ...args, adapter: fakeAdapter({ checks: { "check-1": "FAILURE" } }) }), /not SUCCESS/)
-    const status = await runExecutionController(root, { action: "status", execution_id: "E1" })
-    assert.equal(status.merge, null)
-    assert.equal((await runMergeCandidate(root, { ...args, adapter: fakeAdapter({ checks: { "check-1": "SUCCESS" } }) })).status, "merged")
+    const adapter = fakeAdapter({ checks: { "check-1": "FAILURE" } })
+    adapter.getChecks = async () => assert.fail("CI should not be queried")
+    assert.equal((await runMergeCandidate(root, { candidate_id: candidate.candidate_id,
+      session_id: "ses-1", adapter })).status, "merged")
   })
 })
 
@@ -465,30 +462,28 @@ test("F09: supported rebind preserves same candidate, clears stale CI and accept
     assert.equal(status.ci_evidence[candidate.candidate_id], undefined)
     assert.equal((await runMergeCandidate(root, input)).status, "merged")
     const refreshed = await runExecutionController(root, { action: "status", execution_id: "E1" })
-    assert.equal(refreshed.ci_evidence[candidate.candidate_id]["check-1"].binding_at_revision, refreshed.pr_binding.at_revision)
+    assert.equal(refreshed.ci_evidence[candidate.candidate_id], undefined)
   })
 })
 
-test("durable pending CI waits and recovers from real adapter evidence without model-written SUCCESS", async () => {
-  const { runWithExternalWait } = await import("../../src/execution/external-wait.js")
+test("pending historical CI cannot create an external wait", async () => {
   await withRoot(async root => {
     const candidate = await setupReady(root, "ses-1")
-    await runExecutionController(root, { action: "record_ci", execution_id: "E1", session_id: "ses-1", candidate_id: candidate.candidate_id,
+    await runExecutionController(root, { action: "record_ci", execution_id: "E1",
+      session_id: "ses-1", candidate_id: candidate.candidate_id,
       head_sha: "head-a", check_identity: "check-1", conclusion: "PENDING" })
     const controller = await createExecutionController({ dir: join(root, ".harness/execution/controller/E1") })
-    const checks = { "check-1": "PENDING" }, adapter = fakeAdapter({ checks })
-    let now = Date.now()
-    const input = { controller, session_id: "ses-1", operation: "merge:" + candidate.candidate_id, now: () => now,
-      run: () => runMergeCandidate(root, { candidate_id: candidate.candidate_id, session_id: "ses-1", adapter }) }
-    const wait = await runWithExternalWait(input)
-    assert.equal(wait.status, "WAITING_EXTERNAL")
-    assert.equal((await controller.snapshot()).state.merge, null)
-    now = Date.parse(wait.next_retry_at)
-    checks["check-1"] = "SUCCESS"
-    assert.equal((await runWithExternalWait(input)).status, "merged")
+    const adapter = fakeAdapter({ checks: { "check-1": "PENDING" } })
+    adapter.getChecks = async () => assert.fail("CI must never be polled")
+    const { runWithExternalWait } = await import("../../src/execution/external-wait.js")
+    const result = await runWithExternalWait({ controller, session_id: "ses-1",
+      operation: "merge:" + candidate.candidate_id,
+      run: () => runMergeCandidate(root, {
+        candidate_id: candidate.candidate_id, session_id: "ses-1", adapter,
+      }) })
+    assert.equal(result.status, "merged")
     const state = (await controller.snapshot()).state
     assert.equal(state.external_wait, null)
-    assert.equal(state.ci_evidence[candidate.candidate_id]["check-1"].conclusion, "SUCCESS")
-    assert.match(state.ci_evidence[candidate.candidate_id]["check-1"].evidence_ref, /github.adapter/)
+    assert.equal(state.ci_evidence[candidate.candidate_id]["check-1"].conclusion, "PENDING")
   })
 })
