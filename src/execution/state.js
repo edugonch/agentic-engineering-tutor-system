@@ -993,11 +993,23 @@ export function applyEvent(previous, event, { historicalReplay = false } = {}) {
     }
 
     case "SOLO_CI_ACCEPT": {
-      // Keep previously recorded controller events replayable; refuse to emit
-      // any new CI-authoritative acceptance after this release.
+      // Historical compatibility ONLY. Never accept a new CI-only event. Old
+      // accepted work can replay unmodified, even after a prospective
+      // SOLO_LOCAL policy supersedes its previous authority record.
       if (!historicalReplay) throw new Error("SOLO_CI_DEPRECATED: CI is observational only")
       assertProcessAcceptance(state, body.candidate_id)
-      assertSoloAcceptanceEvent(state, body)
+      const oldPolicy = state.solo_delivery_history?.find(p => p.source_hash === body.source_hash) ?? state.solo_delivery
+      const legacy = state.candidates[body.candidate_id]
+      if (oldPolicy?.policy?.mode !== "SOLO_CI" ||
+          oldPolicy.source_hash !== body.source_hash ||
+          !oldPolicy.policy.eligible_wu_ids.includes(legacy?.wu_id) ||
+          !state.pr_binding || state.pr_binding.candidate_id !== body.candidate_id ||
+          state.pr_binding.head_sha !== body.head_sha ||
+          body.candidate_hashes?.manifest_hash !== legacy?.manifest_hash ||
+          body.candidate_hashes?.tree_hash !== legacy?.tree_hash ||
+          body.ci_check !== oldPolicy.policy.ci_check ||
+          body.basis !== "LIVE_GITHUB_CI" || body.conclusion !== "SUCCESS")
+        throw new Error("SOLO_CI historical receipt does not match original approved candidate")
       state.solo_acceptances ??= {}
       if (state.solo_acceptances[body.candidate_id])
         throw new Error("SOLO_CI: candidate already accepted; do not repeat")
