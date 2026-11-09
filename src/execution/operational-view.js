@@ -1,6 +1,7 @@
 // Read-only public projection. Routing is centralized in workflow-router;
 // the event journal and controller remain the sole source of authority.
 import { routeExecution } from "./workflow-router.js"
+import { tddGate } from "./tdd-preflight.js"
 
 const known = value => value === undefined || value === null ? "UNKNOWN" : value
 
@@ -22,6 +23,7 @@ export function projectOperationalView(state, { events = [] } = {}) {
     budget_remaining_seconds: route.budgetRemaining,
     merge_policy: known(state.mandate?.merge_policy),
     blocker: state.blocker ? { class: state.blocker.class, at_revision: state.blocker.at_revision } : null,
+    tdd_gate: tddGate(state),
     next_action: route.nextAction,
   }
 }
