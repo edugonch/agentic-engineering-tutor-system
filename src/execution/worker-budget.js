@@ -1,4 +1,5 @@
 import { applicableAuthority } from "./process-recovery.js"
+import { tddGate } from "./tdd-preflight.js"
 import { usesPlanningEstimates, epicExecutionRemaining } from "./time-policy.js"
 import { readdir } from "node:fs/promises"
 import { join } from "node:path"
@@ -72,6 +73,7 @@ export function createWorkerBudgetGuard(ctx, projectRoot, recovery, { now = () =
           estimate_exceeded: now() > start + d.reserved_seconds * 1000,
           contract: state.wu?.contract ? { source_hash: state.wu.contract.source_hash,
             verification_contract: state.wu.contract.verification_contract, process_obligations: state.wu.contract.process_obligations } : null,
+          tdd_gate: tddGate(state),
           ...applicableAuthority(state),
           authority_resolution: state.authority_resolutions?.[state.wu?.wu_id]?.at(-1) ?? null }
       }
