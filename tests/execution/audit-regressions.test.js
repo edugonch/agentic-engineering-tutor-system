@@ -64,9 +64,10 @@ test("F07: release clears only the exact pending binding", () => {
   assert.equal(r.peek("s", "reviewer").dispatch_id, "r")
 })
 
-test("F11: absent probes and zero/unknown budget cannot report READY", async () => {
-  assert.equal(budgetStatus({ remaining: 0 }).status, "BLOCKED_BUDGET")
-  assert.equal(budgetStatus({ remaining: Infinity }).status, "BLOCKED_BUDGET")
+test("F11: absent capability probes still block, but time estimates never do", async () => {
+  assert.equal(budgetStatus({ remaining: 0 }).status, "READY")
+  assert.equal(budgetStatus({ remaining: -100 }).estimate_exceeded, true)
+  assert.equal(budgetStatus({ remaining: Infinity }).enforced, false)
   assert.equal((await evaluateReadiness([{ capability: "workspace" }], async () => undefined)).status, "BLOCKED_CAPABILITY")
 })
 
