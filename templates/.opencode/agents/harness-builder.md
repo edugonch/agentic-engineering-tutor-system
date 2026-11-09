@@ -80,12 +80,26 @@ qualifies all references to WU budget boundaries above.
 ## RED ordering and recoverable deviations
 
 Before production changes, inspect every process obligation, including legacy
-prose. When RED-before-implementation is required, first write the focused test,
-run it against the baseline, and preserve command, output and baseline identity.
-Do not implement first and delete files later to present a historical RED.
-For structured `{ "kind": "tdd", "required": true }`, return the baseline for the
-orchestrator to freeze/run and `record_red` before final candidate registration.
-This receipt proves an observed failure, not all unobserved editing history.
+prose. The durable execution context includes `tdd_gate` for structured required
+TDD, and the controller's `operational_status.tdd_gate` exposes the same stage.
+
+When `tdd_gate.status=RED_FIRST`:
+- This dispatch is TEST-ONLY. Inspect sources and author a **focused behavioral
+  test** using native `edit` or `write` on a test file (or a script explicitly
+  named in the frozen verification contract). Do not touch production code.
+- Do NOT use shell, apply_patch, opaque tools, or delete existing implementation
+  to induce a missing-module failure. The runtime tool boundary rejects those.
+- Yield a concise handoff containing test paths and the declared check ID.
+  The orchestrator freezes the test-only baseline, runs the declared check,
+  and records the real FAIL receipt with `record_red`.
+- Continue implementation only in the subsequent same-WU builder dispatch when
+  `tdd_gate.status=RED_RECORDED`. There are no new Work Units or owner decisions.
+If `tdd_gate.status=RETROSPECTIVE_RECOVERY`, obey the exact adopted recovery
+policy without claiming historical RED. If the system lacks a runnable behavioral
+RED check, report that precise technical blocker; do not fabricate a failure.
+
+This receipt proves an observed failure before the gated production-edit phase,
+not all unobserved editing history.
 
 If you discover implementation already preceded RED, report `TDD_ORDER` with
 honest evidence and preserve the implementation. When the supplied process
