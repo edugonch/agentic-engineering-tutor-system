@@ -36,8 +36,8 @@ export const requiresTdd = state => state.wu?.contract?.process_obligations?.som
 // Apply equally to historical RED attempts and retrospective negative evidence.
 export function assertBehavioralNegativeReceipt(receipt) {
   const output = receipt?.output
-  const text = String(output?.stderr ?? "") + "\\n" + String(output?.stdout ?? "")
-  if (/\\b(?:ERR_MODULE_NOT_FOUND|MODULE_NOT_FOUND|Cannot find module|Cannot find package|ModuleNotFoundError|No module named|ERR_UNKNOWN_FILE_EXTENSION)\\b/i.test(text)) {
+  const text = String(output?.stderr ?? "") + "\n" + String(output?.stdout ?? "")
+  if (/\b(?:ERR_MODULE_NOT_FOUND|MODULE_NOT_FOUND|Cannot find module|Cannot find package|ModuleNotFoundError|No module named|ERR_UNKNOWN_FILE_EXTENSION)\b/i.test(text)) {
     throw new Error("PROCESS_NON_BEHAVIORAL_RED: missing module/import is not a functional RED; execute a check asserting a product invariant on the genuine baseline")
   }
 }
