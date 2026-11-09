@@ -1,5 +1,4 @@
 import { expiredWait } from "./external-observation.js"
-import { usesPlanningEstimates } from "./time-policy.js"
 // Durable continuation outbox. Enabled by default; explicit opt-out remains available.
 // It wakes the existing root orchestrator; it never creates/finishes a worker,
 // clears a blocker, changes authority, or grants additional budget.
@@ -8,7 +7,6 @@ import { join } from "node:path"
 import { createExecutionController } from "./execution.js"
 import { isValidatedHistoricalTerminal } from "./historical-terminal.js"
 import { supervisorProgress } from "./progress.js"
-import { wuBudgetUsage } from "./wu-budget.js"
 import { stableHash } from "./serialize.js"
 import { classifyContinuation, hasPendingSupervisorDispatch, routeExecution } from "./workflow-router.js"
 import { inspectOrphanBuilderRisk } from "./orphan-circuit-breaker.js"
@@ -115,9 +113,6 @@ export function createExecutionSupervisor(ctx, projectRoot, {
           }
         }
       }
-      const budget = state.budget
-      const wu = state.wu && !state.wu.completed ? wuBudgetUsage(state, state.wu.wu_id) : null
-      if (budget.total_seconds - budget.used_seconds <= 0 || (!usesPlanningEstimates(state) && wu?.ceiling_seconds != null && wu.used_seconds >= wu.ceiling_seconds)) return false
       if (state.external_wait) {
         const wait = state.external_wait
         if (wait.kind === "CI_PENDING") {
