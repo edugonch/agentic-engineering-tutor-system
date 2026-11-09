@@ -60,6 +60,26 @@ opencode plugin add 'git+https://github.com/edugonch/agentic-engineering-tutor-s
 
 Confirm the package appears with `opencode plugin list`. If it does not, inspect the resolved configuration with `opencode debug config` and review OpenCode startup errors. The package declares `main: ./index.js` as its server entry point and targets the OpenCode V2 plugin API (`@opencode/plugin`); it has no Claude Code or V1 implementation.
 
+## Optional Elephant-Goldfish design critique (OpenCode V2, experimental)
+
+EGM is an **opt-in** pre-implementation design-review aid, not a replacement for the Harness controller or the independent candidate reviewer. This package vendors a pinned, licensed **subset** of EGM (three reviewers and their rubrics), not Google's complete five-stage workflow. Nothing about ordinary WU delivery changes when EGM is disabled.
+
+Launch OpenCode with `HARNESS_EGM_ENABLED=1` and restart after installing/updating the plugin:
+
+```sh
+HARNESS_EGM_ENABLED=1 opencode
+```
+
+Then run, on an existing project-local design document:
+
+```text
+/harness-egm-review simplicity docs/designs/my-design.md
+/harness-egm-review design docs/designs/my-design.md
+/harness-egm-review readiness docs/designs/my-design.md
+```
+
+Each invocation requests **one fresh, read-only Goldfish**. It may challenge design assumptions before implementation; it does not write code, start a WU, waive verification, count as `harness-reviewer` PASS, or introduce mandatory review rounds. This is an experimental V2 adapter; complete host context isolation and live-model execution are not yet established. See [installation, implementation limits and safety checks](docs/egm-integration.md).
+
 ## Start a new project
 
 1. Start OpenCode in the project and run the plugin command `/harness` with the project idea. The plugin command and global Harness specialists are registered by the plugin; no project-local agent installation is needed for governance-only projects.
