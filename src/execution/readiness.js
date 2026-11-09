@@ -70,17 +70,18 @@ export async function evaluateReadiness(requirements, probe) {
   return { status: blocked.length ? "BLOCKED_CAPABILITY" : "READY", requirements: checked }
 }
 
-export function budgetStatus({ remaining, buildReserve = 0, reviewReserve = 0 }) {
+// Historical callers still receive a budget field, but it is advisory only.
+export function budgetStatus({ remaining = null, buildReserve = 0, reviewReserve = 0 } = {}) {
   const required = buildReserve + reviewReserve
-  if (!Number.isFinite(remaining) || remaining <= 0 || remaining < required) {
-    return {
-      status: "BLOCKED_BUDGET",
-      remaining,
-      required,
-      reason: `remaining budget ${remaining} is below the required ${required} (build ${buildReserve} + review ${reviewReserve}).`,
-    }
+  const finite = Number.isFinite(remaining)
+  return {
+    status: "READY", enforced: false, time_policy: "planning_estimate",
+    remaining: finite ? remaining : null, required,
+    estimate_exceeded: finite && remaining < required,
+    reason: finite && remaining < required
+      ? "Estimated duration exceeded; continue approved WU with unchanged scope, permissions and checks"
+      : null,
   }
-  return { status: "READY", remaining, required }
 }
 
 export function pathDigest(path) {
@@ -110,11 +111,7 @@ export async function checkExecutionReadiness({ contract, phase = "BUILD", probe
   const capability = await evaluateReadiness(requirements, probe)
   const budgetResult = budgetStatus(budget ?? { remaining: null })
 
-  const status = capability.status !== "READY"
-    ? capability.status
-    : budgetResult.status !== "READY"
-      ? budgetResult.status
-      : "READY"
+  const status = capability.status // Duration is diagnostic, never a readiness gate.
 
   return {
     status,
