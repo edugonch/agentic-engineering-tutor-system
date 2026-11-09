@@ -158,7 +158,7 @@ test('new candidate cannot close against predecessor merge; CI_PENDING cannot st
     f.adapter.getChecks = async () => { assert.fail("deprecated CI must not be queried") }
     assert.equal((await f.merge(2)).status, "merged")
     assert.deepEqual(f.calls, [1, 2])
-    assert.equal((await f.controller.snapshot()).state.merge.candidate_id, 'c2')
+    assert.equal((await f.controller.snapshot()).state.merge.candidate_id, f.ids.c2)
     await f.tool({ action: 'complete_wu', candidate_id: 'c2' })
   })
 })
