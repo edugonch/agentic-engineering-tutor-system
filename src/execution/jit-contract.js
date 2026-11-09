@@ -6,7 +6,6 @@ export { isPlanningWuSource } from "../planning-wu-status.js"
 import { join } from "node:path"
 import { compileWuContract } from "./wu-contract.js"
 import { stableHash } from "./serialize.js"
-import { epicExecutionRemaining, usesPlanningEstimates } from "./time-policy.js"
 import { inspectAcceptanceCoverage } from "./acceptance-coverage.js"
 
 export const isTechnicalWuContractBlocker = blocker => {
@@ -51,10 +50,9 @@ export async function deriveVerificationContract(projectRoot) {
 // Outer artifact approval is distinct from the embedded planning state.
 // Frozen Epic authority permits technical normalization; the latter is not
 // new owner approval of business scope or permissions.
-// The estimate is derived from the *remaining Epic allocation* and remaining
-// frozen WU count. Under WU_PLANNING_ESTIMATES this is not an individual hard cap.
+// Derive a stable *planning size* from the original Epic estimate and frozen
+// sequence. Elapsed time never shrinks the next WU or requires another approval.
 export async function compileMandateDerivedWu(root, state, wuId, definition) {
-  if (!usesPlanningEstimates(state)) throw new Error("JIT_TIME_POLICY_REQUIRED: approved WU_PLANNING_ESTIMATES policy is required")
   if (!isPlanningWuSource(definition.content)) throw new Error("JIT_SOURCE_REQUIRED: only a planning DRAFT or PROPOSED WU can be normalized")
   if (/^execution_contract: /m.test(definition.content)) throw new Error("JIT_SOURCE_ALREADY_EXECUTABLE: select the existing executable source instead")
   // A planning identity alone is not permission to invent acceptance or scope.
@@ -66,11 +64,8 @@ export async function compileMandateDerivedWu(root, state, wuId, definition) {
   const sequence = state.mandate?.wu_sequence ?? []
   const index = state.activated_wu_ids.length
   if (sequence[index] !== wuId || state.wu && !state.wu.completed) throw new Error("JIT_WU_ORDER: next frozen WU with completed predecessor required")
-  const remaining = epicExecutionRemaining(state)
-  const remainingWus = sequence.length - index
-  if (!Number.isFinite(remaining) || remaining <= 0 || remainingWus < 1) throw new Error("JIT_BUDGET_EXHAUSTED: no remaining Epic allocation")
-  const active_seconds = Math.floor(remaining / remainingWus)
-  if (active_seconds < 1) throw new Error("JIT_BUDGET_EXHAUSTED: insufficient remaining Epic allocation")
+  const active_seconds = Math.max(1, Math.floor(state.budget.total_seconds / sequence.length))
+  // This number is metadata for splitting and diagnostics, not a WU ceiling.
   const verification_contract = await deriveVerificationContract(root)
   const appendix = `\n\n## Mandate-derived technical execution contract\n\nPlanning estimate only; technical authority is the approved Epic, not an individually owner-approved WU. Preserve all original scope, acceptance and exclusions.\nexecution_contract: ${JSON.stringify({ active_seconds, verification_contract, process_obligations: /\bTDD\s*(?:required|obligatorio)\b/i.test(definition.content) ? [{ kind: "tdd", required: true }] : [] })}\n`
   const compiled = compileWuContract(wuId, {
