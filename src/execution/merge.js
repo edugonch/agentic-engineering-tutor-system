@@ -1,6 +1,6 @@
 // Governed merge orchestration. The single public surface is runMergeCandidate,
 // exposed to the model as harness_merge_candidate(candidate_id). It resolves
-// repository/PR/head/base/policy/CI/review from durable state, consults GitHub
+// repository/PR/head/base/policy/acceptance from durable state, consults GitHub
 // before any side effect, pins the exact reviewed head, and recovers idempotently
 // after a crash (never a second merge).
 
@@ -10,12 +10,7 @@ import { createExecutionController } from "./execution.js"
 import { createCandidateRegistry } from "./candidate-registry.js"
 import { candidateGitTree } from "./git-tree.js"
 import { canStartMerge, canVerifyExternalMerge } from "./state.js"
-import { ExternalWaitError } from "./external-errors.js"
-import { soloCandidateEligible, soloAccepted } from "./solo-delivery.js"
-
-function isSuccessConclusion(value) {
-  return typeof value === "string" && value.toUpperCase() === "SUCCESS"
-}
+import { soloCandidateEligible, soloAccepted, collectLocalSoloEvidence } from "./solo-delivery.js"
 
 export async function commitMerge(controller, session_id, operation_id, operation_type, body) {
   // Project first. Only then acquire a fresh lease and immediately commit:
@@ -86,8 +81,8 @@ export async function findExecutionForCandidate(projectRoot, candidate_id) {
 }
 
 export async function runMergeCandidate(projectRoot, { candidate_id, adapter, session_id }) {
-  if (!adapter || typeof adapter.getPullRequest !== "function" || typeof adapter.getChecks !== "function" || typeof adapter.merge !== "function") {
-    throw new Error("runMergeCandidate requires a GitHubMergePort adapter (getPullRequest/getChecks/merge).")
+  if (!adapter || typeof adapter.getPullRequest !== "function" || typeof adapter.merge !== "function") {
+    throw new Error("runMergeCandidate requires a GitHubMergePort adapter (getPullRequest/merge).")
   }
   if (!session_id) throw new Error("runMergeCandidate requires a session_id.")
 
@@ -122,68 +117,34 @@ export async function runMergeCandidate(projectRoot, { candidate_id, adapter, se
   // the remote PR has already merged). The owner must resolve it first.
   if (state.blocker) throw new Error(`merge blocked: unresolved blocker ${state.blocker.class}.`)
 
-  // SOLO_CI is opt-in for exact owner-named low-risk WUs. The same merge
-  // command observes live GitHub CI for the exact bound PR and verifies the
-  // frozen candidate tree before appending a distinct acceptance receipt.
-  // Never manufacture a REVIEW PASS or trust the model's CI assertion.
+  // SOLO_LOCAL reuses real, tamper-checked local PASS receipts. It does not
+  // consult GitHub Actions or start a reviewer or repeat an expensive suite.
   if (!soloAccepted(state, candidate_id) && soloCandidateEligible(state, candidate_id) &&
       state.reviews?.[candidate_id]?.verdict !== "PASS") {
-    if (state.reviews?.[candidate_id]?.verdict === "CHANGES_REQUIRED") {
-      throw new Error("SOLO_CI: an existing independent defect finding must be repaired before acceptance")
-    }
-    if (state.blocker) throw new Error("SOLO_CI: unresolved blocker must be repaired first")
-    const ciName = state.solo_delivery.policy.ci_check
+    if (["CHANGES_REQUIRED","BLOCKED"].includes(state.reviews?.[candidate_id]?.verdict))
+      throw new Error("SOLO_LOCAL: unresolved independent finding")
     const pr = await adapter.getPullRequest({ repository: binding.repository, pr_number: binding.pr_number })
     if (pr.head_sha !== binding.head_sha || pr.base_sha !== binding.base_sha ||
-        pr.base_branch !== binding.base_branch) throw new Error("SOLO_CI: PR head/base changed")
-    if (pr.state !== "open" && !pr.merged) throw new Error("SOLO_CI: PR is closed without merge")
+        pr.base_branch !== binding.base_branch) throw new Error("SOLO_LOCAL: PR head/base changed")
+    if (pr.state !== "open" && !pr.merged) throw new Error("SOLO_LOCAL: PR closed without merge")
     await verifyCandidateTree(projectRoot, candidate_id, adapter, binding)
-    const checks = await adapter.getChecks({ repository: binding.repository,
-      head_sha: binding.head_sha, check_names: [ciName] })
-    const check = checks.find(c => c.name === ciName)
-    if (!check || !isSuccessConclusion(check.conclusion)) {
-      if (!check || check.pending || String(check.conclusion).toUpperCase() === "PENDING") {
-        throw new ExternalWaitError("CI_PENDING", `SOLO_CI: ${ciName} is not yet successful for ${binding.head_sha}`)
-      }
-      throw new Error(`SOLO_CI: live required CI ${ciName} is ${check.conclusion}, not SUCCESS`)
-    }
+    const evidence = await collectLocalSoloEvidence(projectRoot, state, candidate_id)
     const candidate = state.candidates[candidate_id]
     await commitMerge(controller, session_id,
-      `${execution_id}:solo-ci:${candidate_id}:${binding.head_sha}:${state.solo_delivery.source_hash}`,
-      "SOLO_CI_ACCEPT", { candidate_id, head_sha: binding.head_sha,
+      `${execution_id}:solo-local:${candidate_id}:${binding.head_sha}:${state.solo_delivery.source_hash}`,
+      "SOLO_LOCAL_ACCEPT", { candidate_id, head_sha: binding.head_sha,
         candidate_hashes: { manifest_hash: candidate.manifest_hash, tree_hash: candidate.tree_hash },
-        source_hash: state.solo_delivery.source_hash,
-        ci_check: ciName, conclusion: "SUCCESS", basis: "LIVE_GITHUB_CI",
-        evidence_ref: JSON.stringify({ source: "github.adapter", check_name: ciName,
-          head_sha: binding.head_sha, run_id: check.run_id ?? null, app_id: check.app_id ?? null }) })
+        verification_contract_hash: candidate.verification_contract_hash,
+        source_hash: state.solo_delivery.source_hash, basis: "LOCAL_VERIFICATION",
+        ...evidence })
     state = (await controller.snapshot()).state
   }
 
-  // A fresh start must pass the durable gate.
+  // CI is informational only; acceptance is an independent PASS or local receipts.
   if (!state.merge || (state.merge.status === "STARTED" && !state.blocker)) {
-    let gate = canStartMerge(state)
-    // CI is an observable external fact: refresh it directly, rather than
-    // requiring the model to translate a pending/absent receipt into SUCCESS.
-    if (!gate.allowed && gate.reason.startsWith("required CI ")) {
-      const checks = await adapter.getChecks({ repository: binding.repository, head_sha: binding.head_sha, check_names: state.mandate.required_ci_checks })
-      for (const name of state.mandate.required_ci_checks) {
-        const check = checks.find(c => c.name === name) ?? { name }
-        const raw = String(check.conclusion).toUpperCase()
-        const conclusion = raw === "SUCCESS" ? "SUCCESS" : check.pending || raw === "PENDING" ? "PENDING" : ["FAILURE", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED"].includes(raw) ? "FAILURE" : "ERROR"
-        const prior = state.ci_evidence[candidate_id]?.[name]
-        if (prior?.conclusion !== conclusion || prior?.head_sha !== binding.head_sha || prior?.binding_at_revision !== binding.at_revision) {
-          await commitMerge(controller, session_id, `${execution_id}:remote-ci:${state.revision}:${name}`, "RECORD_CI", {
-            candidate_id, head_sha: binding.head_sha, check_identity: name, conclusion, binding_at_revision: binding.at_revision,
-            evidence_ref: JSON.stringify({ source: "github.adapter", run_id: check.run_id ?? null, app_id: check.app_id ?? null }) })
-          state = (await controller.snapshot()).state
-        }
-      }
-      gate = canStartMerge(state)
-      if (!gate.allowed && /^required CI .* conclusion is PENDING/.test(gate.reason)) throw new ExternalWaitError("CI_PENDING", gate.reason)
-    }
+    const gate = canStartMerge(state)
     if (!gate.allowed) throw new Error(`merge blocked: ${gate.reason}.`)
   }
-
   const attempt = state.merge?.attempt_id ?? state.merge?.started_at_revision ?? state.revision
   const attemptKey = `${execution_id}:${candidate_id}:merge:${attempt}`
   const repository = binding.repository
@@ -235,18 +196,7 @@ export async function runMergeCandidate(projectRoot, { candidate_id, adapter, se
     throw new Error(`merge blocked: PR state is ${pr.state}, not open (closed without merge).`)
   }
 
-  // 5. Verify required CI remotely (governance coverage).
-  const required = state.mandate?.required_ci_checks ?? []
-  if (required.length > 0) {
-    const checks = await adapter.getChecks({ repository, head_sha: binding.head_sha, check_names: required })
-    for (const name of required) {
-      const c = checks.find(c => c.name === name) ?? { name, conclusion: null }
-      if (!isSuccessConclusion(c.conclusion)) {
-        if (c.pending || String(c.conclusion).toUpperCase() === "PENDING") throw new ExternalWaitError("CI_PENDING", `Required CI ${c.name} is pending on ${binding.head_sha}`)
-        throw new Error(`merge blocked: required CI ${c.name} conclusion ${c.conclusion ?? "missing"}, not SUCCESS.`)
-      }
-    }
-  }
+  // CI is deprecated as an authority and is not read or waited on.
 
   // 6. Merge, pinning the exact reviewed head — never a drifted head.
   const tree_sha = await verifyCandidateTree(projectRoot, candidate_id, adapter, binding)
@@ -307,8 +257,8 @@ export async function runMergeCandidate(projectRoot, { candidate_id, adapter, se
 // merge(). Never enters STARTED; the state goes null → RECORDED(source=HUMAN_
 // EXTERNAL) → VERIFIED. Recovers idempotently from RECORDED.
 export async function runVerifyExternalMerge(projectRoot, { candidate_id, adapter, session_id }) {
-  if (!adapter || typeof adapter.getPullRequest !== "function" || typeof adapter.getChecks !== "function") {
-    throw new Error("runVerifyExternalMerge requires a GitHub adapter (getPullRequest/getChecks).")
+  if (!adapter || typeof adapter.getPullRequest !== "function") {
+    throw new Error("runVerifyExternalMerge requires a GitHub adapter (getPullRequest).")
   }
   if (!session_id) throw new Error("runVerifyExternalMerge requires a session_id.")
 
@@ -358,18 +308,7 @@ export async function runVerifyExternalMerge(projectRoot, { candidate_id, adapte
 
   await verifyCandidateTree(projectRoot, candidate_id, adapter, binding)
 
-  // 3. Required CI (if governance declares it), on the exact head.
-  const required = state.mandate?.required_ci_checks ?? []
-  if (required.length > 0) {
-    const checks = await adapter.getChecks({ repository, head_sha: binding.head_sha, check_names: required })
-    for (const name of required) {
-      const c = checks.find(c => c.name === name) ?? { name, conclusion: null }
-      if (!isSuccessConclusion(c.conclusion)) {
-        if (c.pending || String(c.conclusion).toUpperCase() === "PENDING") throw new ExternalWaitError("CI_PENDING", `Required CI ${c.name} is pending on ${binding.head_sha}`)
-        throw new Error(`external merge blocked: required CI ${c.name} conclusion ${c.conclusion ?? "missing"}, not SUCCESS.`)
-      }
-    }
-  }
+  // No external CI gate: remote merge identity remains mandatory.
 
   // 4. Recovery from RECORDED → verify only; else record + verify.
   if (state.merge?.status === "RECORDED") {
@@ -410,9 +349,7 @@ export async function observeMergeProgress(projectRoot, candidate_id, adapter) {
   return {
     binding, blocker: state.blocker, review: state.reviews[candidate_id],
     pr: await adapter.getPullRequest({ repository: binding.repository, pr_number: binding.pr_number }),
-    checks: (state.mandate?.required_ci_checks ?? []).length > 0
-      ? await adapter.getChecks({ repository: binding.repository, head_sha: binding.head_sha, check_names: state.mandate.required_ci_checks })
-      : [],
+    checks: [], // Deprecated CI is not queried.
   }
 }
 
@@ -429,9 +366,7 @@ export async function runRebindPR(projectRoot, { candidate_id, adapter, session_
   await controller.commit({ operation_id: `${execution_id}:rebind:${state.revision}`, operation_type: "BIND_PR",
     body: { ...next, revalidated: true, tree_sha } }, { holder_session_id: session_id, expected_revision: state.revision, lease_fencing_token: lease.fencing_token })
   return { status: "rebound", binding: next, tree_sha,
-    next_action: (state.mandate?.required_ci_checks ?? []).length > 0
-      ? "Record fresh exact-head CI evidence before merge"
-      : "Continue mandatory non-CI gates; CI disabled by policy" }
+    next_action: "Continue local acceptance and governed merge; CI is informational only" }
 }
 
 export async function runAbortMerge(projectRoot, { candidate_id, adapter, session_id }) {
