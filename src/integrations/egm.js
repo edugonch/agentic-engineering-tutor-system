@@ -3,7 +3,7 @@ import { isAbsolute, relative, resolve, sep, join } from "node:path"
 
 export const EGM_UPSTREAM_REVISION = "5382b17619be07811a14b2146c7672620b34a791"
 
-// Narrow, opt-in adaptation of EGM. These are NOT Harness WU implementation reviewers.
+// Default-enabled but explicitly invoked EGM design critique; never a Harness WU implementation reviewer.
 export const EGM_PROFILES = Object.freeze({
   "harness-egm-zoom-out": Object.freeze({ source: "zoom_out.md", standard: "zoom-out-standard.md" }),
   "harness-egm-design": Object.freeze({ source: "design_critic.md", standard: "feature-spec-standard.md" }),
@@ -16,7 +16,10 @@ const MODES = Object.freeze({
 })
 
 export function egmEnabled(env = process.env) {
-  return env.HARNESS_EGM_ENABLED === "1"
+  const value = String(env.HARNESS_EGM_ENABLED ?? "1").trim().toLowerCase()
+  if (value === "" || ["1", "true", "on"].includes(value)) return true
+  if (["0", "false", "off"].includes(value)) return false
+  throw new Error("HARNESS_EGM_ENABLED must be 1 or 0 (also accepts true/false, on/off).")
 }
 
 export function isEgmReviewer(agent) {
@@ -39,7 +42,7 @@ function isSensitive(path) {
 // These checks do not claim complete host/session isolation (AGENTS.md may be inherited).
 export async function assertEgmReviewerTool(event, { projectRoot, packageRoot, enabled }) {
   if (!isEgmReviewer(event?.agent)) return
-  if (!enabled) throw new Error("EGM_DISABLED: reviewer tools require HARNESS_EGM_ENABLED=1")
+  if (!enabled) throw new Error("EGM_DISABLED: reviewer tools disabled by HARNESS_EGM_ENABLED=0")
   if (event.tool !== "read" && event.tool !== "glob") {
     throw new Error("EGM_READ_ONLY: Goldfish reviewers may only use read and glob")
   }
@@ -69,7 +72,7 @@ export async function assertEgmReviewerTool(event, { projectRoot, packageRoot, e
 
 export function assertEgmDispatch(event, { enabled, activeExecution = false } = {}) {
   if (event?.tool !== "subagent" || !isEgmReviewer(event.input?.agent)) return
-  if (!enabled) throw new Error("EGM_DISABLED: set HARNESS_EGM_ENABLED=1 and restart OpenCode")
+  if (!enabled) throw new Error("EGM_DISABLED: remove HARNESS_EGM_ENABLED=0 and restart OpenCode")
   if (event.agent !== "harness-orchestrator") throw new Error("EGM_DISPATCH_DENIED: only the Harness orchestrator can delegate EGM reviews")
   if (activeExecution) throw new Error("EGM_DESIGN_ONLY: no EGM subagent dispatch inside an activated WU; use the existing Harness reviewer")
 }
