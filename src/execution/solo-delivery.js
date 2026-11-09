@@ -71,7 +71,7 @@ export function assertSoloAcceptanceEvent(state, body) {
       body.candidate_hashes?.tree_hash !== c.tree_hash ||
       !body.evidence_ref || typeof body.evidence_ref !== "string" ||
       body.evidence_ref.length > 2048 ||
-      state.reviews[body.candidate_id]?.verdict === "CHANGES_REQUIRED" ||
+      ["CHANGES_REQUIRED", "BLOCKED"].includes(state.reviews[body.candidate_id]?.verdict) ||
       state.blocker || state.verification_phase ||
       Object.values(state.dispatches).some(d => !["released","result_reconciled","abandoned_reconciled"].includes(d.status))) {
     throw new Error("SOLO_CI: require immutable candidate, bound exact head, live SUCCESS CI, settled dispatches and no blockers")
