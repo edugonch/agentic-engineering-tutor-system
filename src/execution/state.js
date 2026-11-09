@@ -527,7 +527,7 @@ export function applyEvent(previous, event, { historicalReplay = false } = {}) {
       const contract = body.contract
       const delegated = body.derived_technical === true
       const authorized = delegated
-        ? contract?.source_authority === "MANDATE_DERIVED" && state.time_policy?.mode === PLANNING_ESTIMATES &&
+        ? contract?.source_authority === "MANDATE_DERIVED" &&
           contract.mandate_source_hash === state.mandate.source_hash &&
           contract.origin_source_hash === contract.source_hash &&
           Boolean(contract.source_record_key)
