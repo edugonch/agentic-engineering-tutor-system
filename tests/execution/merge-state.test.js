@@ -97,10 +97,11 @@ test("canStartMerge rejects missing/changed review", () => {
   assert.equal(canStartMerge(readyState({ reviews: { "cand-1": { verdict: "CHANGES_REQUIRED" } } })).allowed, false)
 })
 
-test("canStartMerge rejects missing/failed/stale CI", () => {
-  assert.equal(canStartMerge(readyState({ ci_evidence: {} })).allowed, false)
-  assert.equal(canStartMerge(readyState({ ci_evidence: { "cand-1": { "check-1": { head_sha: "head-a", conclusion: "FAILURE" } } } })).allowed, false)
-  assert.equal(canStartMerge(readyState({ ci_evidence: { "cand-1": { "check-1": { head_sha: "stale", conclusion: "SUCCESS" } } } })).allowed, false)
+test("canStartMerge treats absent, failed and stale CI as historical metadata, not authority", () => {
+  assert.equal(canStartMerge(readyState({ ci_evidence: {} })).allowed, true)
+  assert.equal(canStartMerge(readyState({ ci_evidence: { "cand-1": { "check-1": { head_sha: "head-a", conclusion: "FAILURE" } } } })).allowed, true)
+  assert.equal(canStartMerge(readyState({ ci_evidence: { "cand-1": { "check-1": { head_sha: "stale", conclusion: "SUCCESS" } } } })).allowed, true)
+  assert.equal(canStartMerge(readyState({ ci_evidence: {}, reviews: {} })).allowed, false)
 })
 
 test("canStartMerge rejects candidate/binding mismatch and unsettled dispatches", () => {
