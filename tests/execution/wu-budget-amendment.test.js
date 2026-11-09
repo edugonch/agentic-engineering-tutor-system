@@ -1,150 +1,96 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { mkdtemp, rm, appendFile } from "node:fs/promises"
+import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { runExecutionController } from "../../src/execution/controller-tool.js"
 import { createExecutionController } from "../../src/execution/execution.js"
-import { recordKnowledgeArtifact, findApprovedEpic } from "../../src/project-knowledge.js"
+import { applyEvent, initialState } from "../../src/execution/state.js"
 
+// These tests replace the withdrawn "WU budget amendment" execution policy.
+// Old event types are still readable, but duration is now observational only.
 async function fixture(t) {
-  const root = await mkdtemp(join(tmpdir(), "wu-budget-"))
+  const root = await mkdtemp(join(tmpdir(), "time-estimate-"))
   t.after(() => rm(root, { recursive: true, force: true }))
-  const run = (action, extra = {}) => runExecutionController(root, { execution_id: "E1", session_id: "parent", action, ...extra })
-  await recordKnowledgeArtifact(root, { artifact_type: "epic", artifact_id: "EPIC03", title: "Epic", status: "APPROVED", owner_confirmed: true,
-    source_refs: ["https://example.com/approval"], content: 'execution_mandate: {"max_wus":10,"total_seconds":86400}' })
-  const historical = await createExecutionController({ dir: join(root, ".harness/execution/controller/E1") })
-  const lease = await historical.acquire("parent")
-  // Replay compatibility fixture: this mandate predates planning-estimate mode.
-  const epic = await findApprovedEpic(root, "EPIC03")
-  await historical.commit({ operation_id: "E1:mandate", operation_type: "MANDATE_APPROVE", body: {
-    execution_id: "E1:exec", mandate_id: "M1", mandate_revision: epic.source_revision,
-    max_wus: 10, total_seconds: 86400, merge_policy: "none", required_ci_checks: [],
-    authority_kind: "OWNER_APPROVED_EPIC", source_artifact_id: epic.source_id,
-    source_record_key: epic.record_key, source_hash: epic.sha256,
-  } }, { holder_session_id: "parent", expected_revision: 0, lease_fencing_token: lease.fencing_token })
-  assert.equal((await run("approve_mandate", { epic_artifact_id: "EPIC03", mandate_id: "M1" })).commit_status, "replayed")
-
-  await historical.commit({ operation_id: "legacy-activate", operation_type: "WU_ACTIVATE", body: { wu_id: "WU063", mandate_id: "M1" } },
-    { holder_session_id: "parent", expected_revision: (await historical.snapshot()).state.revision, lease_fencing_token: lease.fencing_token })
-  for (const [id, seconds] of [["build-1", 3600], ["build-2", 2400]]) {
-    await run("reserve", { dispatch_id: id, reserved_seconds: seconds })
-    await run("record_launch", { dispatch_id: id, launch_session_id: `ses_${id}` })
-    await run("record_finish", { dispatch_id: id, result: "INCOMPLETE" })
-    await run("reconcile", { dispatch_id: id })
-  }
-  const blocked = await run("block", { class: "BUDGET_EXHAUSTED", reason: "WU063 exhausted original 2400-second contract" })
-  const controller = await createExecutionController({ dir: join(root, ".harness", "execution", "controller", "E1") })
-  const envelope = { execution_id: "E1", mandate_id: "M1", wu_id: "WU063", blocked_at_revision: blocked.blocker.at_revision,
-    expected_used_seconds: 6000, additional_seconds: 8000, epic_total_seconds: 86400 }
-  const decision = (overrides = {}, metadata = {}) => recordKnowledgeArtifact(root, {
-    artifact_type: "decision", artifact_id: "WU063-BUDGET-V2", title: "Owner approved additional 8000 seconds", status: "APPROVED", owner_confirmed: true,
-    source_refs: ["https://example.com/owner-decision"], content: `Owner approved 8000 additional seconds; history unchanged.\nwu_budget_amendment: ${JSON.stringify({ ...envelope, ...overrides })}`,
-    ...metadata,
-  })
-  return { root, run, controller, envelope, decision }
-}
-
-test("ALFRAN regression: approved 8000 resumes blocked WU, preserving 6000 used and Epic total", async t => {
-  const f = await fixture(t)
-  await assert.rejects(f.run("clear_blocker", { resolution: "owner approved" }), /amend_wu_budget/)
-  const authority = await f.decision()
-  const before = await f.controller.snapshot()
-  const result = await f.run("amend_wu_budget", { decision_artifact_id: authority.record_key })
-  assert.equal(result.blocker, null)
-  assert.deepEqual(result.wu_budget, { wu_id: "WU063", used_seconds: 6000, reserved_seconds: 0, ceiling_seconds: 14000, available_seconds: 8000 })
-  assert.equal(result.budget.total_seconds, 86400)
-  assert.equal(result.budget.available_seconds, 80400)
-  const after = await f.controller.snapshot()
-  assert.deepEqual(after.events.slice(0, -1), before.events)
-  assert.deepEqual(after.state.dispatches, before.state.dispatches)
-  assert.deepEqual(after.state.mandate, before.state.mandate)
-  assert.equal(after.events.at(-1).operation_type, "WU_BUDGET_AMEND")
-  const replay = await f.run("amend_wu_budget", { decision_artifact_id: authority.record_key })
-  assert.equal(replay.commit_status, "replayed")
-  assert.equal(replay.revision, result.revision)
-  await f.run("reserve", { dispatch_id: "build-3", reserved_seconds: 5000 })
-  await assert.rejects(f.run("reserve", { dispatch_id: "too-much", reserved_seconds: 3001 }), /WU_BUDGET_EXHAUSTED/)
-  await f.run("prepare_launch", { dispatch_id: "build-3" })
-  await f.run("record_launch", { dispatch_id: "build-3", launch_session_id: "ses_build3" })
-  await f.run("record_finish", { dispatch_id: "build-3", result: "ready for review" })
-  await f.run("reconcile", { dispatch_id: "build-3" })
-  assert.equal((await f.run("status")).wu_budget.available_seconds, 3000)
-  assert.equal((await f.run("verify")).passed, true)
-})
-
-for (const [field, value, expected] of [
-  ["execution_id", "other", /execution_id mismatch/],
-  ["wu_id", "WU064", /active WU/],
-  ["mandate_id", "other", /mandate/],
-  ["blocked_at_revision", 0, /exact active/],
-  ["expected_used_seconds", 0, /stale consumed/],
-  ["additional_seconds", 0, /positive/],
-  ["additional_seconds", -1, /nonnegative/],
-  ["additional_seconds", 1.5, /integer/],
-  ["additional_seconds", 90000, /exceeds available Epic/],
-  ["epic_total_seconds", 99999, /cannot change the Epic/],
-]) test(`rejects invalid or stale authority ${field}=${value}`, async t => {
-  const f = await fixture(t)
-  const authority = await f.decision({ [field]: value })
-  const before = await f.controller.snapshot()
-  await assert.rejects(f.run("amend_wu_budget", { decision_artifact_id: authority.record_key }), expected)
-  assert.deepEqual((await f.controller.snapshot()).state, before.state)
-})
-
-test("proposed, prose-only, duplicated and tampered decisions cannot grant budget", async t => {
-  const f = await fixture(t)
-  for (const [artifact_id, metadata, expected] of [
-    ["proposed", { status: "PROPOSED" }, /owner-approved/],
-    ["prose", { content: "8000 additional seconds approved" }, /normalize existing approval/],
-    ["duplicate", { content: `wu_budget_amendment: ${JSON.stringify(f.envelope)}\nwu_budget_amendment: ${JSON.stringify(f.envelope)}` }, /exactly one/],
-  ]) {
-    const a = await f.decision({}, { artifact_id, ...metadata })
-    await assert.rejects(f.run("amend_wu_budget", { decision_artifact_id: a.record_key }), expected)
-  }
-  const a = await f.decision()
-  await appendFile(join(f.root, a.path), "\nmodified")
-  await assert.rejects(f.run("amend_wu_budget", { decision_artifact_id: a.record_key }), /INTEGRITY/)
-  assert.equal((await f.run("status")).blocker.class, "BUDGET_EXHAUSTED")
-})
-
-test("an old amendment cannot clear a later stop or be applied twice through another artifact", async t => {
-  const f = await fixture(t)
-  const a = await f.decision()
-  await f.run("amend_wu_budget", { decision_artifact_id: a.record_key })
-  const blocked = await f.run("block", { class: "BLOCKED_SECURITY", reason: "security decision required" })
-  const replay = await f.run("amend_wu_budget", { decision_artifact_id: a.record_key })
-  assert.equal(replay.blocker.class, "BLOCKED_SECURITY")
-  const duplicate = await f.decision({}, { artifact_id: "duplicate-authority" })
-  await assert.rejects(f.run("amend_wu_budget", { decision_artifact_id: duplicate.record_key }), /exact active/)
-  assert.equal((await f.run("status")).revision, blocked.revision)
-})
-
-test("unsettled reservations keep recovery blocked", async t => {
-  const f = await fixture(t)
-  const a = await f.decision()
-  await f.run("amend_wu_budget", { decision_artifact_id: a.record_key })
-  await f.run("reserve", { dispatch_id: "pending", reserved_seconds: 1000 })
-  const blocked = await f.run("block", { class: "BUDGET_EXHAUSTED", reason: "new budget stop" })
-  const next = await f.decision({ blocked_at_revision: blocked.blocker.at_revision, additional_seconds: 9000 }, { artifact_id: "next" })
-  await assert.rejects(f.run("amend_wu_budget", { decision_artifact_id: next.record_key }), /settled WU dispatches/)
-})
-
-test("billable phases count against amended WU allocation and permit debt settlement", async t => {
-  const f = await fixture(t)
-  const a = await f.decision()
-  await f.run("amend_wu_budget", { decision_artifact_id: a.record_key })
-  async function commit(type, body) {
-    const lease = await f.controller.acquire("parent")
-    const { state } = await f.controller.snapshot()
-    return f.controller.commit({ operation_id: `phase-${state.revision}`, operation_type: type, body }, {
-      holder_session_id: "parent", expected_revision: state.revision, lease_fencing_token: lease.fencing_token,
+  const controller = await createExecutionController({ dir: join(root, ".harness/execution/controller/E1") })
+  const commit = async (type, body) => {
+    const lease = await controller.acquire("owner")
+    const { state } = await controller.snapshot()
+    return controller.commit({ operation_id: `time-${state.revision}`, operation_type: type, body }, {
+      holder_session_id: "owner", expected_revision: state.revision, lease_fencing_token: lease.fencing_token,
     })
   }
-  await commit("PHASE_START", { phase: "ACTIVE", started_at: 0 })
-  await commit("PHASE_END", { ended_at: 8001 })
-  assert.equal((await f.run("status")).wu_budget.available_seconds, -1)
-  await assert.rejects(f.run("reserve", { dispatch_id: "over", reserved_seconds: 1 }), /WU_BUDGET_EXHAUSTED/)
-  await assert.rejects(commit("PHASE_START", { phase: "ACTIVE", started_at: 8001 }), /WU_BUDGET_EXHAUSTED/)
-  assert.equal((await f.run("verify")).passed, true)
+  await commit("MANDATE_APPROVE", { mandate_id: "M1", execution_id: "E1:exec", max_wus: 2, total_seconds: 100 })
+  await commit("WU_ACTIVATE", { mandate_id: "M1", wu_id: "WU063", contract: { active_seconds: 10 } })
+  return { controller, commit }
+}
+
+test("ALFRAN regression: WU and Epic durations can both overrun with no budget authority", async t => {
+  const f = await fixture(t)
+  await f.commit("PHASE_START", { phase: "ACTIVE", started_at: 0 })
+  await f.commit("PHASE_END", { ended_at: 150 })
+  await f.commit("DISPATCH_RESERVE", { dispatch_id: "continue", reserved_seconds: 200 })
+  const s = (await f.controller.snapshot()).state
+  assert.equal(s.budget.used_seconds, 150)
+  assert.equal(s.budget.reserved_seconds, 200)
+  assert.equal(s.budget.total_seconds, 100)
+  assert.equal(s.blocker, null)
+  assert.equal((await f.controller.budget()).enforced, false)
+  await assert.rejects(f.commit("BLOCK", { class: "BUDGET_EXHAUSTED", reason: "WU estimate exceeded" }), /TIME_ESTIMATE_NOT_A_BLOCKER/)
+  await f.commit("DISPATCH_RELEASE", { dispatch_id: "continue" })
+  assert.equal((await f.controller.snapshot()).state.blocker, null)
+})
+
+function legacyState() {
+  const state = initialState()
+  state.revision = 19
+  state.execution_id = "E1:exec"
+  state.mandate = { mandate_id: "M1", authority_kind: "OWNER_APPROVED_EPIC" }
+  state.wu = { wu_id: "WU063", completed: false, contract: { active_seconds: 10 } }
+  state.budget.total_seconds = 100
+  state.budget.used_seconds = 150
+  state.blocker = { class: "BUDGET_EXHAUSTED", reason: "historical estimate exhausted", at_revision: 18, budget_reason: "epic_exhausted" }
+  return state
+}
+function clear(s, blocked_at_revision = 18) {
+  return applyEvent(s, { operation_type: "CLEAR_BLOCKER",
+    body: { blocker_class: "BUDGET_EXHAUSTED", blocked_at_revision,
+      resolution: "Duration estimates do not require new authority" }, next_revision: s.revision + 1 })
+}
+
+test("historical budget stop retires with an exact audited event and preserves accounting", () => {
+  const original = legacyState()
+  const current = clear(original)
+  assert.equal(current.blocker, null)
+  assert.equal(current.last_blocker_resolution.class, "BUDGET_EXHAUSTED")
+  assert.equal(current.last_blocker_resolution.blocked_at_revision, 18)
+  assert.equal(current.budget.used_seconds, 150)
+  assert.equal(current.budget.total_seconds, 100)
+  assert.equal(current.wu.wu_id, "WU063")
+  assert.equal(current.revision, 20)
+})
+
+test("historical time stop cannot be retired with wrong revision or unsettled side effects", () => {
+  const state = legacyState()
+  assert.throws(() => clear(structuredClone(state), 16), /target does not match/)
+  const withDispatch = structuredClone(state)
+  withDispatch.dispatches.live = { status: "launched", reservation_status: "reserved", reserved_seconds: 10 }
+  withDispatch.budget.reserved_seconds = 10
+  assert.throws(() => clear(withDispatch), /TIME_ESTIMATE_RECOVERY_UNSETTLED/)
+  const withPhase = structuredClone(state)
+  withPhase.budget.active_phase = "ACTIVE"
+  assert.throws(() => clear(withPhase), /TIME_ESTIMATE_RECOVERY_UNSETTLED/)
+  const withWait = structuredClone(state)
+  withWait.external_wait = { wait_id: "remote" }
+  assert.throws(() => clear(withWait), /TIME_ESTIMATE_RECOVERY_UNSETTLED/)
+})
+
+test("real permission and authority blockers remain non-clearable", () => {
+  for (const cls of ["BLOCKED_PERMISSION", "BLOCKED_SECURITY", "BLOCKED_SCOPE", "BLOCKED_AUTHORITY"]) {
+    const state = legacyState()
+    state.blocker.class = cls
+    assert.throws(() => applyEvent(state, {
+      operation_type: "CLEAR_BLOCKER", body: { blocker_class: cls, blocked_at_revision: 18, resolution: "guess" },
+      next_revision: 20,
+    }), /non-recoverable/)
+  }
 })
