@@ -111,11 +111,22 @@ export function createExecutionSupervisor(ctx, projectRoot, {
       if (budget.total_seconds - budget.used_seconds <= 0 || (!usesPlanningEstimates(state) && wu?.ceiling_seconds != null && wu.used_seconds >= wu.ceiling_seconds)) return false
       if (state.external_wait) {
         const wait = state.external_wait
-        if (now() < Date.parse(wait.next_retry_at)) { arm(execution, Date.parse(wait.next_retry_at)); return false }
-        disarm(execution)
-        if (!wait.due) {
-          await commit(c, session, "EXTERNAL_WAIT_DUE", { wait_id: wait.wait_id, attempt: wait.attempt }, `${wait.wait_id}:due:${wait.attempt}`)
+        if (wait.kind === "CI_PENDING") {
+          // Historical CI waits have no remaining delivery authority. Retire
+          // them once under the existing supervisor lease and wake the root
+          // without waiting for the obsolete deadline or querying GitHub.
+          await commit(c, session, "EXTERNAL_WAIT_END", {
+            wait_id: wait.wait_id, outcome: "RESOLVED", recovery_version: 1,
+            observation: { classification: "CI_DEPRECATED_NON_AUTHORITATIVE" },
+          }, `${wait.wait_id}:end:CI_DEPRECATED`)
           state = (await c.snapshot()).state
+        } else {
+          if (now() < Date.parse(wait.next_retry_at)) { arm(execution, Date.parse(wait.next_retry_at)); return false }
+          disarm(execution)
+          if (!wait.due) {
+            await commit(c, session, "EXTERNAL_WAIT_DUE", { wait_id: wait.wait_id, attempt: wait.attempt }, `${wait.wait_id}:due:${wait.attempt}`)
+            state = (await c.snapshot()).state
+          }
         }
       }
       // The stability guard is a *timed dependency*, not a permanent
