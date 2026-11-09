@@ -120,10 +120,13 @@ test("reconcile without actual_consumption consumes the whole reservation (unkno
   assert.equal(s.dispatches.d1.actual_consumption, 10)
 })
 
-test("reconcile with actual_consumption > reserved fails closed (no silent overrun)", () => {
+test("reconcile preserves actual elapsed overrun beyond estimated reservation", () => {
   const ev = makeBuilder()
   const events = [ev("MANDATE_APPROVE", MANDATE), ...launchedDispatch(ev, { reserved: 10 }), ev("DISPATCH_RECONCILE", { dispatch_id: "d1", actual_consumption: 11 })]
-  assert.throws(() => project(events), /exceeds reservation/)
+  const result = project(events)
+  assert.equal(result.budget.reserved_seconds, 0)
+  assert.equal(result.budget.used_seconds, 11)
+  assert.equal(result.dispatches.d1.actual_consumption, 11)
 })
 
 test("ambiguous retains the reservation and never zeroes it", () => {
