@@ -2,7 +2,7 @@ import { createHash } from "node:crypto"
 import { lstat, mkdir, readFile, realpath, rename, unlink, writeFile } from "node:fs/promises"
 import { homedir } from "node:os"
 import { isAbsolute, join, resolve } from "node:path"
-import { EGM_PROFILES, EGM_UPSTREAM_REVISION } from "./integrations/egm.js"
+import { EGM_PROFILES, EGM_UPSTREAM_REVISION, egmEnabled } from "./integrations/egm.js"
 
 const GLOBAL_AGENT_IDS = Object.freeze([
   "harness-orchestrator",
@@ -81,7 +81,7 @@ async function createIfAbsent(path, content) {
  * New files are created; unchanged plugin-managed files are upgraded; files
  * with user edits or no ownership record are preserved.
  */
-export async function provisionGlobalHarnessAgents({ packageRoot, configDir, enableEgm = false }) {
+export async function provisionGlobalHarnessAgents({ packageRoot, configDir, enableEgm = egmEnabled() }) {
   if (!packageRoot || !isAbsolute(packageRoot)) throw new Error("packageRoot must be an absolute path.")
   if (!configDir || !isAbsolute(configDir)) throw new Error("configDir must be an absolute path.")
 
