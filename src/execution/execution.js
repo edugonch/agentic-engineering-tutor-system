@@ -1,5 +1,3 @@
-import { usesPlanningEstimates, epicExecutionRemaining } from "./time-policy.js"
-import { wuBudgetUsage } from "./wu-budget.js"
 // Durable execution controller. This is the Phase 0 seed of the control plane,
 // extended in Phase 2 into a recoverable execution machine.
 //
@@ -11,7 +9,7 @@ import { wuBudgetUsage } from "./wu-budget.js"
 //     re-acquire gap, not just the cross-holder zombie gap).
 //   - commits require a matching expected_revision (compare-and-swap).
 //   - an operation_id is either replayed (same hash) or conflicts (different hash).
-//   - new budget reservations are gated by an authorization ceiling: the ledger
+//   - time estimates are recorded for diagnostics, never admission ceilings
 //     may describe debt, but the controller may not authorize new debt.
 
 import { mkdir } from "node:fs/promises"
@@ -171,10 +169,11 @@ export async function createExecutionController({ root, dir, now = () => Date.no
       // Avoid billing the same worker interval through both phase and dispatch.
       if (["WU_COMPLETE", "COMPLETE"].includes(operation.operation_type) && state.budget.active_phase) throw new Error("Settle the active phase before completion")
       if (["WU_COMPLETE", "COMPLETE"].includes(operation.operation_type) && state.external_wait) throw new Error("Resolve the external wait before completion")
-      if (operation.operation_type === "PHASE_START" && operation.body?.source === "runtime.verification") {
-        const requested = operation.body.authorized_seconds
-        const available = usesPlanningEstimates(state) ? epicExecutionRemaining(state) : Math.min(deriveBudget(state.budget).available_seconds, wuBudgetUsage(state, state.wu?.wu_id).available_seconds ?? 0)
-        if (!Number.isFinite(requested) || requested <= 0 || requested > available) throw new Error("BLOCKED_BUDGET: verification allocation changed before admission")
+      // Verification timeout is a per-command safety bound, never a WU/Epic
+      // estimate ceiling. Validate positive bounded bookkeeping, not remaining time.
+      if (operation.operation_type === "PHASE_START" && operation.body?.source === "runtime.verification" &&
+          (!Number.isFinite(operation.body?.authorized_seconds) || operation.body.authorized_seconds <= 0)) {
+        throw new Error("Verification phase requires a finite positive check timeout estimate")
       }
       if (operation.operation_type === "PHASE_START" && operation.body?.phase === "ACTIVE" &&
           Object.values(state.dispatches).some(d => d.reservation_status === "reserved" && d.reserved_seconds > 0)) {
@@ -184,41 +183,11 @@ export async function createExecutionController({ root, dir, now = () => Date.no
         throw new Error("End the billable phase before reserving worker time.")
       }
 
-      // Budget authorization ceiling: the ledger may describe debt (over-budget
-      // history is reconstructible), but the controller may not authorize new
-      // debt. Only new reservations are gated; reconcile/phase billing are not.
-      if (operation.operation_type === "DISPATCH_RESERVE") {
-        const requested = operation.body?.reserved_seconds ?? 0
-        const available_seconds = usesPlanningEstimates(state) ? epicExecutionRemaining(state) : deriveBudget(state.budget).available_seconds
-        if ((usesPlanningEstimates(state) && available_seconds <= 0) || (requested > 0 && requested > available_seconds)) {
-          throw new Error(`BLOCKED_BUDGET: requested reservation ${requested} exceeds available ${available_seconds}.`)
-        }
-      }
-
-      // Admission only: historical reservations still replay unchanged.
-      // An amendment adds a WU ceiling without altering Epic accounting.
-      const wuId = state.dispatches[operation.body?.dispatch_id]?.wu_id ?? state.wu?.wu_id
-      const usage = wuId ? wuBudgetUsage(state, wuId) : null
-      if (!usesPlanningEstimates(state) && usage?.ceiling_seconds !== null && usage?.ceiling_seconds !== undefined) {
-        if (operation.operation_type === "DISPATCH_RESERVE" && (operation.body?.reserved_seconds ?? 0) > usage.available_seconds) {
-          throw new Error("WU_BUDGET_EXHAUSTED: reservation exceeds the amended WU allocation")
-        }
-        if (["DISPATCH_PREPARE", "DISPATCH_LAUNCH_CLAIM", "DISPATCH_LAUNCH"].includes(operation.operation_type) && usage.available_seconds < 0) {
-          throw new Error("WU_BUDGET_EXHAUSTED: amended WU allocation overdrawn")
-        }
-        if (operation.operation_type === "PHASE_START" && operation.body?.phase === "ACTIVE" && usage.available_seconds <= 0) {
-          throw new Error("WU_BUDGET_EXHAUSTED: no allocation for a new billable phase")
-        }
-      }
-
-      if (usesPlanningEstimates(state)) {
-        if (operation.operation_type === "BLOCK" && operation.body?.class === "BUDGET_EXHAUSTED" && epicExecutionRemaining(state) > 0) {
-          throw new Error("WU estimates are advisory: do not block or request a WU extension while Epic execution budget remains")
-        }
-        if (["DISPATCH_PREPARE", "DISPATCH_LAUNCH_CLAIM", "DISPATCH_LAUNCH"].includes(operation.operation_type) || (operation.operation_type === "PHASE_START" && operation.body?.phase === "ACTIVE")) {
-          const worker = state.dispatches[operation.body?.dispatch_id]
-          if (epicExecutionRemaining(state, { worker }) <= 0) throw new Error("BUDGET_EXHAUSTED: Epic allocation exhausted")
-        }
+      // Duration estimates are non-authoritative. We still refuse a new
+      // BUDGET_EXHAUSTED stop: there is no time-based execution hard limit.
+      // Historical time-block events remain replayable from their original log.
+      if (operation.operation_type === "BLOCK" && operation.body?.class === "BUDGET_EXHAUSTED") {
+        throw new Error("TIME_ESTIMATE_NOT_A_BLOCKER: WU/Epic durations are planning estimates; do not stop or request budget extension")
       }
 
       const event = {
