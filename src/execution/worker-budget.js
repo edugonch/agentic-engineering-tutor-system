@@ -1,15 +1,13 @@
 import { applicableAuthority } from "./process-recovery.js"
 import { tddGate } from "./tdd-preflight.js"
-import { usesPlanningEstimates, epicExecutionRemaining } from "./time-policy.js"
+import { epicExecutionRemaining } from "./time-policy.js"
 import { readdir } from "node:fs/promises"
 import { join } from "node:path"
 import { createExecutionController } from "./execution.js"
 
-// Planning estimates never interrupt a worker. Only the explicit Epic budget
-// remains an execution ceiling; legacy executions retain their old policy until
-// an audited owner-approved transition is recorded.
+// Durations are planning and observability estimates, not execution deadlines.
+// Preserve exact child ownership and recovery; never interrupt or block by time.
 export function createWorkerBudgetGuard(ctx, projectRoot, recovery, { now = () => Date.now() } = {}) {
-  const timers = new Map()
   const failures = []
   async function inspect(sessionID, agent) {
     if (!agent?.startsWith("harness-") || agent === "harness-orchestrator") return
@@ -40,37 +38,15 @@ export function createWorkerBudgetGuard(ctx, projectRoot, recovery, { now = () =
         }
         if (d.session_id !== sessionID || d.status !== "launched") continue
         const start = Date.parse(d.launch_claimed_at)
-        if (!Number.isFinite(start)) continue // legacy unknown interval stays conservatively reserved
-        const advisory = usesPlanningEstimates(state)
-        const remaining = advisory ? epicExecutionRemaining(state, { worker: d, nowMs: now() }) * 1000 : start + d.reserved_seconds * 1000 - now()
-        async function expire() {
-          const current = (await controller.snapshot()).state
-          if (current.dispatches[dispatchID]?.status !== "launched") return
-          if (usesPlanningEstimates(current) && epicExecutionRemaining(current, { worker: current.dispatches[dispatchID], nowMs: now() }) > 0) {
-            await inspect(sessionID, agent)
-            return
-          }
-          await ctx.session.interrupt({ sessionID, continue: false })
-          const lease = await controller.acquire(child.parentID)
-          const latest = await controller.snapshot()
-          if (!latest.state.blocker && latest.state.dispatches[dispatchID]?.reservation_status === "reserved") await controller.commit({ operation_id: `${e.name}:reservation-expired:${dispatchID}`, operation_type: "BLOCK",
-            body: { class: "BUDGET_EXHAUSTED", dispatch_id: dispatchID, budget_reason: advisory ? "epic_exhausted" : "reservation_expired", reason: advisory ? "Explicit Epic execution budget exhausted; WU estimate was not a cutoff" : `Dispatch ${dispatchID} reached its ${d.reserved_seconds}s reservation. Inspect terminal evidence and reconcile before allocating any remaining WU budget.` } },
-            { holder_session_id: child.parentID, expected_revision: latest.state.revision, lease_fencing_token: lease.fencing_token })
-        }
-        if (!timers.has(sessionID)) {
-          const timer = setTimeout(() => {
-            timers.delete(sessionID)
-            expire().catch(error => { failures.push(error.message); if (failures.length > 20) failures.shift() })
-          }, Math.max(1, Math.min(remaining, 2_147_483_647)))
-          timer.unref?.()
-          timers.set(sessionID, timer)
-        }
-        if (remaining <= 0) throw new Error(`HARNESS_BUDGET_EXHAUSTED: dispatch ${dispatchID} has no remaining ${advisory ? "Epic allocation" : "reservation"}`)
+        const nowMs = now()
+        const observed = Number.isFinite(start) ? Math.max(0, (nowMs - start) / 1000) : null
+        const remaining = epicExecutionRemaining(state, { worker: d, nowMs })
         return { execution_id: e.name, wu_id: state.wu?.wu_id, dispatch_id: dispatchID,
-          time_policy: advisory ? "planning_estimate" : "legacy_hard_limit",
-          remaining_execution_seconds: Math.max(0, Math.floor(remaining / 1000)),
-          remaining_reservation_seconds: Math.max(0, Math.floor((start + d.reserved_seconds * 1000 - now()) / 1000)),
-          estimate_exceeded: now() > start + d.reserved_seconds * 1000,
+          time_policy: "planning_estimate", enforced: false,
+          remaining_execution_seconds: Math.max(0, Math.floor(remaining)),
+          remaining_reservation_seconds: observed === null ? null : Math.max(0, Math.floor(d.reserved_seconds - observed)),
+          estimate_exceeded: observed !== null && observed > d.reserved_seconds,
+          estimate_overrun_seconds: observed === null ? null : Math.max(0, observed - d.reserved_seconds),
           contract: state.wu?.contract ? { source_hash: state.wu.contract.source_hash,
             verification_contract: state.wu.contract.verification_contract, process_obligations: state.wu.contract.process_obligations } : null,
           tdd_gate: tddGate(state),
@@ -79,6 +55,7 @@ export function createWorkerBudgetGuard(ctx, projectRoot, recovery, { now = () =
       }
     }
   }
-  return { inspect, failures: () => [...failures], release(sessionID) { clearTimeout(timers.get(sessionID)); timers.delete(sessionID) },
-    dispose() { for (const timer of timers.values()) clearTimeout(timer); timers.clear() } }
+  return { inspect, failures: () => [...failures],
+    release(_sessionID) { /* no deadline timer: child lifecycle is managed by dispatch state */ },
+    dispose() { /* no deadline timer */ } }
 }
