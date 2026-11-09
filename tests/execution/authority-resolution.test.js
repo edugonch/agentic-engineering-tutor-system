@@ -33,9 +33,6 @@ async function fixture(t) {
   await run("record_launch", { dispatch_id: "builder", launch_session_id: "ses_child" })
   await run("record_finish", { dispatch_id: "builder", result: "Partial branch; 49 passed, 3 failed; no historical RED" })
   await run("reconcile", { dispatch_id: "builder" })
-  const budgetStop = await run("block", { class: "BUDGET_EXHAUSTED", reason: "Budget approval required" })
-  await record({ artifact_type: "decision", artifact_id: "budget", content: `wu_budget_amendment: ${JSON.stringify({ execution_id: "E1", mandate_id: "M1", wu_id: "WU063", blocked_at_revision: budgetStop.blocker.at_revision, expected_used_seconds: 13500, additional_seconds: 500, epic_total_seconds: 86400 })}` })
-  await run("amend_wu_budget", { decision_artifact_id: "budget" })
   const blocked = await run("block", { class: "BLOCKED_AUTHORITY", reason: "Implementation preceded required RED" })
   const controller = await createExecutionController({ dir: join(root, ".harness", "execution", "controller", "E1") })
   const envelope = { execution_id: "E1", mandate_id: "M1", wu_id: "WU063", blocked_at_revision: blocked.blocker.at_revision, resolution: "Owner approved retrospective validation within remaining budget; full GREEN and fresh review required" }
@@ -43,14 +40,15 @@ async function fixture(t) {
   return { root, run, controller, envelope, decision }
 }
 
-test("approved retrospective recovery retains exactly 500 seconds and all owner conditions", async t => {
+test("approved retrospective recovery preserves work and authority without a time ceiling", async t => {
   const f = await fixture(t)
   await assert.rejects(f.run("clear_blocker", { resolution: "approved" }), /resolve_authority_blocker/)
   const a = await f.decision()
   const before = await f.controller.snapshot()
   const result = await f.run("resolve_authority_blocker", { decision_artifact_id: a.record_key })
   assert.equal(result.blocker, null)
-  assert.equal(result.wu_budget.available_seconds, 500)
+  assert.equal(result.budget.used_seconds, 13500)
+  assert.equal(result.budget.enforced, false)
   assert.match(result.authority_resolutions.WU063[0].decision_content, /No historical RED evidence exists/)
   assert.match(result.authority_resolutions.WU063[0].decision_content, /Correct all failures/)
   const after = await f.controller.snapshot()
@@ -59,8 +57,9 @@ test("approved retrospective recovery retains exactly 500 seconds and all owner 
   const replay = await f.run("resolve_authority_blocker", { decision_artifact_id: a.record_key })
   assert.equal(replay.commit_status, "replayed")
   assert.equal(replay.revision, result.revision)
-  await assert.rejects(f.run("reserve", { dispatch_id: "too-much", reserved_seconds: 501 }), /WU_BUDGET_EXHAUSTED/)
-  await f.run("reserve", { dispatch_id: "retrospective", reserved_seconds: 500 })
+  const resumed = await f.run("reserve", { dispatch_id: "retrospective", reserved_seconds: 99999 })
+  assert.equal(resumed.budget.estimate_exceeded, true)
+  await f.run("release", { dispatch_id: "retrospective" })
   await assert.rejects(f.run("complete_wu", { wu_id: "WU063", candidate_id: "nonexistent" }))
   await assert.rejects(f.run("activate_wu", { wu_id: "WU064", mandate_id: "M1" }), /not complete/)
   assert.equal((await f.run("verify")).passed, true)
@@ -97,7 +96,7 @@ test("rejects unapproved, prose-only, duplicate-key and modified authority artif
   await assert.rejects(f.run("resolve_authority_blocker", { decision_artifact_id: a.record_key }), /INTEGRITY/)
 })
 
-for (const cls of ["BLOCKED_PERMISSION", "BLOCKED_SECURITY", "BLOCKED_SCOPE", "BUDGET_EXHAUSTED", "BLOCKED_AUTHORITY"]) test(`old approval cannot remove a later ${cls} stop`, async t => {
+for (const cls of ["BLOCKED_PERMISSION", "BLOCKED_SECURITY", "BLOCKED_SCOPE", "BLOCKED_AUTHORITY"]) test(`old approval cannot remove a later ${cls} stop`, async t => {
   const f = await fixture(t)
   const a = await f.decision()
   await f.run("resolve_authority_blocker", { decision_artifact_id: a.record_key })
@@ -110,4 +109,13 @@ for (const cls of ["BLOCKED_PERMISSION", "BLOCKED_SECURITY", "BLOCKED_SCOPE", "B
     const retarget = await f.decision({ blocked_at_revision: blocked.blocker.at_revision }, { artifact_id: "retarget" })
     await assert.rejects(f.run("resolve_authority_blocker", { decision_artifact_id: retarget.record_key }), /exact active/)
   }
+})
+
+
+test("a time estimate may not create a new budget blocker, even after authority resolution", async t => {
+  const f = await fixture(t)
+  const approved = await f.decision()
+  await f.run("resolve_authority_blocker", { decision_artifact_id: approved.record_key })
+  await assert.rejects(f.run("block", { class: "BUDGET_EXHAUSTED", reason: "estimated duration reached" }), /TIME_ESTIMATE_NOT_A_BLOCKER/)
+  assert.equal((await f.run("status")).blocker, null)
 })
