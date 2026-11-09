@@ -61,22 +61,21 @@ test("a stale fencing token from the same holder is rejected (re-acquire gap)", 
   } finally { await rm(root, { recursive: true, force: true }) }
 })
 
-test("a reservation above the available budget is denied (hard ceiling)", async () => {
+test("a reservation above the planning estimate remains admissible", async () => {
   const root = await mkdtemp(join(tmpdir(), "harness-ctl-ceiling-"))
   try {
     const controller = await createExecutionController({ root })
     const lease = await controller.acquire("A")
     let rev = await sequence(controller, "A", lease.fencing_token, [MANDATE])
     rev = await sequence(controller, "A", lease.fencing_token, [["res-1", "DISPATCH_RESERVE", { dispatch_id: "d1", reserved_seconds: 80 }]], rev)
-    // available = 100 - 0 - 80 = 20; reserving 30 must be denied.
-    await assert.rejects(
-      controller.commit({ operation_id: "res-2", operation_type: "DISPATCH_RESERVE", body: { dispatch_id: "d2", reserved_seconds: 30 } }, { holder_session_id: "A", expected_revision: rev, lease_fencing_token: lease.fencing_token }),
-      /BLOCKED_BUDGET/,
-    )
+    // available estimate = 20, but another 30 seconds is only advisory.
+    await controller.commit({ operation_id: "res-2", operation_type: "DISPATCH_RESERVE", body: { dispatch_id: "d2", reserved_seconds: 30 } },
+      { holder_session_id: "A", expected_revision: rev, lease_fencing_token: lease.fencing_token })
+    assert.equal((await controller.budget()).available_seconds, -10)
   } finally { await rm(root, { recursive: true, force: true }) }
 })
 
-test("budget() exposes the derived authorization view (available/exhausted/overrun)", async () => {
+test("budget() exposes observed overruns but never blocks execution", async () => {
   const root = await mkdtemp(join(tmpdir(), "harness-ctl-budgetview-"))
   try {
     const controller = await createExecutionController({ root })
@@ -92,15 +91,16 @@ test("budget() exposes the derived authorization view (available/exhausted/overr
     assert.equal(b.used_seconds, 120)
     assert.equal(b.reserved_seconds, 0)
     assert.equal(b.available_seconds, -20)
-    assert.equal(b.exhausted, true)
+    assert.equal(b.exhausted, false)
+    assert.equal(b.enforced, false)
+    assert.equal(b.estimate_exceeded, true)
     assert.equal(b.overrun, true)
 
-    // Even though the ledger is over budget, a new reservation is still denied.
+    // Even after the estimate was exceeded, the same execution may continue.
     const snap = await controller.snapshot()
-    await assert.rejects(
-      controller.commit({ operation_id: "res-over", operation_type: "DISPATCH_RESERVE", body: { dispatch_id: "d9", reserved_seconds: 1 } }, { holder_session_id: "A", expected_revision: snap.state.revision, lease_fencing_token: lease.fencing_token }),
-      /BLOCKED_BUDGET/,
-    )
+    await controller.commit({ operation_id: "res-over", operation_type: "DISPATCH_RESERVE", body: { dispatch_id: "d9", reserved_seconds: 1 } },
+      { holder_session_id: "A", expected_revision: snap.state.revision, lease_fencing_token: lease.fencing_token })
+    assert.equal((await controller.snapshot()).state.dispatches.d9.status, "reserved")
   } finally { await rm(root, { recursive: true, force: true }) }
 })
 

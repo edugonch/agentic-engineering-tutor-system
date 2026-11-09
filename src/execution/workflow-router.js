@@ -61,7 +61,7 @@ export function routeExecution(state, { events = [] } = {}) {
   const budget = state.budget ?? {}
   const budgetRemaining = [budget.total_seconds, budget.used_seconds, budget.reserved_seconds]
     .every(Number.isFinite)
-    ? Math.max(0, budget.total_seconds - budget.used_seconds - budget.reserved_seconds)
+    ? budget.total_seconds - budget.used_seconds - budget.reserved_seconds // advisory; negative means over estimate
     : "UNKNOWN"
 
   let phase, nextAction
@@ -83,8 +83,6 @@ export function routeExecution(state, { events = [] } = {}) {
     phase = "BUILDING"; nextAction = "AWAIT_EXISTING_BUILDER"
   } else if (active.length) {
     phase = "BLOCKED"; nextAction = "INSPECT_EXISTING_DISPATCH_ONCE"
-  } else if (budgetRemaining === 0) {
-    phase = "BLOCKED"; nextAction = "STOP_EPIC_BUDGET"
   } else if (!wu) {
     phase = "READY"
     nextAction = nextWuId ? "ACTIVATE_NEXT_APPROVED_WU" : "CHECK_EPIC_TERMINAL_CONDITION"

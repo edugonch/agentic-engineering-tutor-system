@@ -32,7 +32,7 @@ const scenarios = [
   ["approved merge", s => ({ ...withCandidate(s), reviews: { C1: { verdict: "PASS" } } }), "MERGING", "APPLY_GOVERNED_MERGE_GATES"],
   ["verified merge", s => ({ ...withCandidate(s), reviews: { C1: { verdict: "PASS" } }, merge: { status: "VERIFIED", candidate_id: "C1" } }), "MERGING", "COMPLETE_WU"],
   ["tooling blocker", s => ({ ...s, blocker: { class: "BLOCKED_TOOLING", at_revision: 8 } }), "BLOCKED", "DIAGNOSE_ONCE_OR_STOP"],
-  ["budget exhausted", s => ({ ...s, budget: { total_seconds: 200, used_seconds: 200, reserved_seconds: 0 } }), "BLOCKED", "STOP_EPIC_BUDGET"],
+  ["time estimate exceeded", s => ({ ...s, budget: { total_seconds: 200, used_seconds: 220, reserved_seconds: 0 } }), "BUILDING", "LAUNCH_ONE_BUILDER"],
   ["completed WU", s => ({ ...s, wu: { wu_id: "W1", completed: true } }), "READY", "ACTIVATE_NEXT_APPROVED_WU"],
   ["completed Epic", s => ({ ...s, completed: true }), "DONE", "NONE"],
 ]

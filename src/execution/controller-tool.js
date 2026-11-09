@@ -637,7 +637,7 @@ export async function runExecutionController(projectRoot, input, candidateRegist
         nowMs: options.now_ms ?? Date.now(),
         runtimeLoadedAtMs: options.runtime_loaded_at_ms ?? null,
       }),
-      time_policy: state.time_policy?.mode ?? "LEGACY_HARD_LIMIT",
+      time_policy: "PLANNING_ESTIMATES_ONLY", time_budget_enforced: false,
       delivery_metrics: deliveryMetrics(state),
     }
   }
@@ -928,9 +928,16 @@ export async function runExecutionController(projectRoot, input, candidateRegist
       }
       throw new Error("clear_blocker requires an active blocker.")
     }
-    if (!RECOVERABLE_BLOCKER_CLASSES.has(blocker.class)) {
+    if (!RECOVERABLE_BLOCKER_CLASSES.has(blocker.class) && blocker.class !== "BUDGET_EXHAUSTED") {
       if (blocker.class === "BLOCKED_AUTHORITY") throw new Error("clear_blocker cannot clear non-recoverable blocker BLOCKED_AUTHORITY. Use resolve_authority_blocker with the exact owner-approved decision; no renewed approval is needed when already granted.")
-      throw new Error(`clear_blocker cannot clear non-recoverable blocker ${blocker.class}.${blocker.class === "BUDGET_EXHAUSTED" ? " If the owner authorized planning estimates, use adopt_planning_estimates with decision_artifact_id; legacy finite allocations use amend_wu_budget. Neither increases the Epic total." : ""}`)
+      throw new Error(`clear_blocker cannot clear non-recoverable blocker ${blocker.class}.`)
+    }
+    // Historical time-only blockers may be retired without a new owner decision.
+    // The state transition enforces exact revision and settled dispatches.
+    if (blocker.class === "BUDGET_EXHAUSTED" && (snap.state.budget.active_phase ||
+        snap.state.verification_phase || snap.state.external_wait ||
+        Object.values(snap.state.dispatches).some(d => !["released", "result_reconciled", "abandoned_reconciled"].includes(d.status)))) {
+      throw new Error("TIME_ESTIMATE_RECOVERY_UNSETTLED: settle the existing dispatches and phases before clearing this obsolete time stop")
     }
     const operationId = `${executionId}:clear-blocker:${blocker.at_revision}`
     const res = await controller.commit(

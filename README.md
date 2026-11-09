@@ -60,6 +60,10 @@ opencode plugin add 'git+https://github.com/edugonch/agentic-engineering-tutor-s
 
 Confirm the package appears with `opencode plugin list`. If it does not, inspect the resolved configuration with `opencode debug config` and review OpenCode startup errors. The package declares `main: ./index.js` as its server entry point and targets the OpenCode V2 plugin API (`@opencode/plugin`); it has no Claude Code or V1 implementation.
 
+## Duration estimates are not execution gates
+
+Epic total seconds, WU `active_seconds`, and dispatch `reserved_seconds` are **planning estimates for dividing work only**. Exceeding any of them never stops the builder, verification, reviewer or supervisor and never requires extra owner approval, an Epic rebase or another WU. Actual elapsed time and overruns remain available for diagnostics. Historical time-only `BUDGET_EXHAUSTED` stops can be safely retired after outstanding runtime side effects are settled. Real provider-account quota, security, permission, scope, candidate and verification failures remain enforceable. See [time-estimates-only operator note](docs/time-estimates-only.md).
+
 ## RED-first TDD enforcement (same Work Unit)
 
 For active Work Units with structured mandatory TDD, the Harness exposes `operational_status.tdd_gate` and blocks builder production edits and shell until a real behavioral RED is recorded. The first same-WU builder dispatch is test-only; the orchestrator freezes the test baseline, runs the declared check, records its failing receipt, and resumes production implementation in the same WU. There are **no automatic successor WUs, extra Epics or additional owner approvals** for this existing requirement. Missing-module failures do not count as behavioral RED, and past deviations remain visible rather than being rewritten. See [RED-first operator guide](docs/tdd-red-first.md).

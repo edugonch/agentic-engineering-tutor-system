@@ -140,7 +140,7 @@ test("controller prevents a third rapid orphan builder, without consuming the un
   assert.equal(risk.runtime_stability.abandoned_builder_dispatch_count, 2)
   assert.equal(risk.runtime_stability.launch_temporarily_blocked, true)
   assert.equal(risk.runtime_stability.interruption_cause, "UNVERIFIED")
-  assert.equal(risk.time_policy, "WU_PLANNING_ESTIMATES")
+  assert.equal(risk.time_policy, "PLANNING_ESTIMATES_ONLY")
   await run("reserve", { dispatch_id: "build-3", reserved_seconds: 1800 })
   const before = (await controller.snapshot()).state
   await assert.rejects(run("prepare_launch", {

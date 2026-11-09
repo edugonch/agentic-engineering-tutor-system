@@ -1,6 +1,4 @@
-import { usesPlanningEstimates, epicExecutionRemaining } from "./time-policy.js"
 import { randomUUID } from "node:crypto"
-import { wuBudgetUsage } from "./wu-budget.js"
 import { verificationContractHash } from "./verification-contract.js"
 
 // Verification inside a worker is covered by that worker's measured envelope.
@@ -23,14 +21,14 @@ export async function withVerificationBudget({ controller, candidate, check_id, 
     !runtimeSession?.parentID && (!runtimeSession || runtimeSession.id === session) &&
     Object.values(state.dispatches).every(d => ["released", "result_reconciled", "abandoned_reconciled"].includes(d.status))
   // This flag may only be set by the runtime after independent receipt checks.
-  // The check itself, its setup, immutable candidate and budget stay unchanged.
+  // The check itself, its setup, and immutable candidate stay unchanged.
   if (state.completed || state.wu?.completed || (state.blocker && !eligibleSetupRecovery)) {
     throw new Error(`Verification cannot start: ${state.blocker?.class ?? "execution completed"}`)
   }
   if (!contract || candidate.verification_contract?.source_wu_id !== state.wu.wu_id ||
       verificationContractHash(candidate.verification_contract) !== contract.verification_contract_hash)
     throw new Error("Verification candidate does not match the active WU contract")
-  const b = state.budget, wu = wuBudgetUsage(state, state.wu.wu_id)
+  const b = state.budget
   if (state.verification_phase) throw new Error("HARNESS_VERIFICATION_IN_PROGRESS: observe the existing verification before starting another")
   let worker = Object.values(state.dispatches).find(d => d.session_id === session && d.status === "launched")
   // While a subagent is running, the parent may not yet have persisted LAUNCH.
@@ -48,16 +46,13 @@ export async function withVerificationBudget({ controller, candidate, check_id, 
     worker = matches[0]
   }
   if (worker && worker.reservation_status !== "reserved") throw new Error("Verification requires an active worker reservation")
-  const claimed = worker ? Date.parse(worker.launch_claimed_at) : NaN
-  const elapsedPhase = b.active_phase === "ACTIVE" ? Math.max(0, Date.now() / 1000 - b.active_started_at) : 0
-  const available = usesPlanningEstimates(state) ? epicExecutionRemaining(state, { worker }) : worker ? worker.reserved_seconds - (Number.isFinite(claimed) ? Math.max(0, (Date.now() - claimed) / 1000) : 0)
-    : Math.min(b.total_seconds - b.used_seconds - b.reserved_seconds, wu.available_seconds ?? 0) - elapsedPhase
-  if (!Number.isFinite(available) || available <= 0) return { status: "BLOCKED_BUDGET", reason: "No authorized verification allocation remains" }
   const checks = candidate.verification_contract.commands.filter(check => !check_id || check.id === check_id)
   if (!checks.length) return { status: "BLOCKED_UNDECLARED_CHECK", check_id }
+  // Preserve individual frozen setup/check timeouts for safely bounded OS
+  // processes. They are not reduced by any WU/Epic planning estimate.
   const plannedMs = (candidate.verification_contract.setup ?? []).reduce((sum, step) => sum + (step.timeout_ms ?? 300000), 0)
     + Math.max(...checks.map(check => check.timeout_ms ?? 30000))
-  const authorized = Math.min(available, plannedMs / 1000)
+  const authorized = plannedMs / 1000
   const ownsPhase = !worker && !b.active_phase
   if (!worker && b.active_phase && b.active_phase !== "ACTIVE") throw new Error("End the waiting phase before running verification")
   const id = `verification-${session}-${context.id ?? randomUUID()}`
@@ -78,7 +73,7 @@ export async function withVerificationBudget({ controller, candidate, check_id, 
 }
 
 // An interrupted host has no trustworthy monotonic end measurement. Retain the
-// full authorized allocation, explicitly labelled; never invent a zero charge.
+// per-command timeout estimate, explicitly labelled; never invent a zero charge.
 // The command host monitors its original parent and kills its process group.
 export async function recoverVerificationPhase({ controller, session_id }) {
   const snap = await controller.snapshot(), phase = snap.state.verification_phase

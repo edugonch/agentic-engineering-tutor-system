@@ -64,7 +64,7 @@ test("whole plugin: Build transfers ownership without executing the stale call; 
     if (id === "d1") await f.run({ action: "release", dispatch_id: id })
   }
   const launch = { tool: "subagent", id: "call-child", sessionID: "ses_root", agent: "harness-orchestrator", input: { agent: "harness-builder" } }
-  assert.equal((await f.invoke("harness_check_execution_readiness", { wu_id: "WU-01" })).status, "BLOCKED_BUDGET")
+  assert.equal((await f.invoke("harness_check_execution_readiness", { wu_id: "WU-01" })).status, "READY")
   const verificationTool = f.definitions.get("harness_run_verification")
   f.definitions.delete("harness_run_verification")
   await assert.rejects(f.hooks.get("tool:execute.before")(launch), /LAUNCH_CAPABILITY_BLOCKED/)
@@ -125,7 +125,7 @@ test("plugin exposes loaded fingerprint and injects autonomy guard into root con
   const event = { sessionID: "ses_root", agent: "harness-orchestrator", system: [], options: {} }
   await f.hooks.get("session:context")(event)
   const guidance = event.system.map(p => p.text).join("\n")
-  assert.match(guidance, /WU_PLANNING_ESTIMATES/)
+  assert.match(guidance, /NON-BLOCKING PLANNING ESTIMATES/)
   assert.match(guidance, /inspect_authority_gap/)
   assert.match(guidance, /Do not ask the owner to create the technical design/)
 })

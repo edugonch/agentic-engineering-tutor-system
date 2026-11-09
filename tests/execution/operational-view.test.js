@@ -58,12 +58,12 @@ test("PASS retains merge gates and completion selects only declared successor", 
   assert.equal(projectOperationalView(x).next_wu_id, "WU-02");
   assert.equal(projectOperationalView(x).next_action, "ACTIVATE_NEXT_APPROVED_WU");
 });
-test("blocker, ambiguous dispatch, budget stop and unapproved mandate fail closed", () => {
+test("real blockers and ambiguous dispatches stop, but time estimates do not", () => {
   assert.equal(projectOperationalView(state({ blocker: { class: "BLOCKED_TOOLING", at_revision: 7 } })).phase, "BLOCKED");
   assert.equal(projectOperationalView(state({ dispatches: {
     d1: { wu_id: "WU-01", status: "ambiguous", expected_agent: "harness-builder" },
   } })).next_action, "INSPECT_EXISTING_DISPATCH_ONCE");
-  assert.equal(projectOperationalView(state({ budget: { total_seconds: 12, used_seconds: 12, reserved_seconds: 0 } })).phase, "BLOCKED");
+  assert.equal(projectOperationalView(state({ budget: { total_seconds: 12, used_seconds: 13, reserved_seconds: 0 } })).phase, "BUILDING");
   assert.equal(projectOperationalView(state({ completed: true })).phase, "DONE");
   assert.equal(projectOperationalView(state({ mandate: null })).next_action, "REQUIRE_APPROVED_EPIC");
 });

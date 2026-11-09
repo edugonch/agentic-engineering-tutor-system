@@ -26,19 +26,19 @@ async function fixture(t, planning = false) {
   return { c, commit, candidate: { verification_contract: contract } }
 }
 
-test("root verification charges measured duration, including failed checks, and cannot spend it again", async t => {
+test("root verification records elapsed overruns without shortening declared check timeout", async t => {
   const { c, candidate } = await fixture(t)
   let ticks = 0
   const args = { controller: c, candidate, context: { sessionID: "root" }, monotonic: () => (ticks++ % 2) * 6000 }
-  await withVerificationBudget({ ...args, run: async ({ budgetMs }) => { assert.equal(budgetMs, 10000); return { status: "FAIL" } } })
+  await withVerificationBudget({ ...args, run: async ({ budgetMs }) => { assert.equal(budgetMs, 30000); return { status: "FAIL" } } })
   let state = (await c.snapshot()).state
   assert.equal(state.budget.used_seconds, 6)
   assert.equal(wuBudgetUsage(state, "WU1").available_seconds, 4)
-  await assert.rejects(withVerificationBudget({ ...args, run: async ({ budgetMs }) => { assert.equal(budgetMs, 4000); throw new Error("cancelled") } }), /cancelled/)
+  await assert.rejects(withVerificationBudget({ ...args, run: async ({ budgetMs }) => { assert.equal(budgetMs, 30000); throw new Error("cancelled") } }), /cancelled/)
   state = (await c.snapshot()).state
   assert.equal(state.budget.used_seconds, 12) // observed overrun is retained, never hidden
   assert.equal(state.budget.active_phase, null)
-  assert.equal((await withVerificationBudget({ ...args, run: () => assert.fail("must not run") })).status, "BLOCKED_BUDGET")
+  assert.equal((await withVerificationBudget({ ...args, run: ({ budgetMs }) => { assert.equal(budgetMs, 30000); return { status: "PASS" } } })).status, "PASS")
 })
 
 test("verification cannot overlap itself, close the WU, or substitute the approved contract", async t => {
@@ -79,7 +79,7 @@ test("reviewer with exact live launch evidence uses its reservation without acqu
   const before = await c.snapshot()
   const args = { controller: c, candidate, context: { sessionID: "child" }, runtimeSession, launchEvidence }
   const result = await withVerificationBudget({ ...args, run: async ({ budgetMs }) => {
-    assert.ok(budgetMs > 0 && budgetMs <= 8000)
+    assert.equal(budgetMs, 30000) // worker reservation is advisory
     return { status: "PASS" }
   } })
   assert.equal(result.status, "PASS")
