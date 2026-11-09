@@ -107,7 +107,7 @@ export function routeExecution(state, { events = [] } = {}) {
         ? "WAIT_FOR_AUTHORIZED_EXTERNAL_MERGE" : "APPLY_GOVERNED_MERGE_GATES"
   } else if (candidateId && soloCandidateEligible(state, candidateId)) {
     phase = "VERIFYING"; nextAction = state.pr_binding?.candidate_id === candidateId
-      ? "MERGE_WITH_LIVE_CI_SOLO" : "BIND_PR_FOR_SOLO_CI"
+      ? "MERGE_WITH_LOCAL_VERIFICATION" : "BIND_PR_FOR_SOLO_LOCAL"
   } else if (candidateId) {
     phase = "VERIFYING"; nextAction = "VERIFY_THEN_INDEPENDENT_REVIEW"
   } else if (builderReconciled) {
