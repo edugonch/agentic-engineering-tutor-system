@@ -5,6 +5,7 @@ import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { provisionGlobalHarnessAgents, resolveOpenCodeConfigDir } from "../src/global-agent-provisioner.js"
 
+// Legacy provisioner fixtures contain only the five core agent templates, so EGM is explicitly disabled here.
 const ids = ["harness-orchestrator", "harness-builder", "harness-researcher", "harness-reviewer", "harness-designer"]
 
 async function fixture(t) {
@@ -29,7 +30,7 @@ test("resolves OpenCode global config directory with explicit and XDG overrides"
 
 test("creates primary orchestrator and four global specialist profiles and is idempotent", async (t) => {
   const { root, packageRoot, configDir } = await fixture(t)
-  const first = await provisionGlobalHarnessAgents({ packageRoot, configDir })
+  const first = await provisionGlobalHarnessAgents({ packageRoot, configDir, enableEgm: false })
   assert.deepEqual(first.created.sort(), ids.slice().sort())
   assert.equal(first.changed, true)
   for (const id of ids) {
@@ -38,18 +39,18 @@ test("creates primary orchestrator and four global specialist profiles and is id
   }
   assert.equal((await readFile(join(root, "opencode-config", "agents", ".agentic-harness-managed-agents.json"), "utf8")).includes("harness-builder"), true)
 
-  const second = await provisionGlobalHarnessAgents({ packageRoot, configDir })
+  const second = await provisionGlobalHarnessAgents({ packageRoot, configDir, enableEgm: false })
   assert.equal(second.changed, false)
   assert.deepEqual(second.unchanged.sort(), ids.slice().sort())
 })
 
 test("updates an unchanged managed profile when the installed plugin template changes", async (t) => {
   const { packageRoot, configDir } = await fixture(t)
-  await provisionGlobalHarnessAgents({ packageRoot, configDir })
+  await provisionGlobalHarnessAgents({ packageRoot, configDir, enableEgm: false })
   const source = join(packageRoot, "templates", ".opencode", "agents", "harness-builder.md")
   await writeFile(source, "---\ndescription: updated builder\nmode: subagent\n---\n\nUpdated prompt\n")
 
-  const result = await provisionGlobalHarnessAgents({ packageRoot, configDir })
+  const result = await provisionGlobalHarnessAgents({ packageRoot, configDir, enableEgm: false })
   assert.deepEqual(result.updated, ["harness-builder"])
   assert.match(await readFile(join(configDir, "agents", "harness-builder.md"), "utf8"), /Updated prompt/)
 })
@@ -60,7 +61,7 @@ test("preserves unmanaged and user-edited profiles instead of overwriting them",
   await mkdir(agentDir, { recursive: true })
   const custom = "---\ndescription: my builder\nmode: subagent\n---\n\ncustom prompt\n"
   await writeFile(join(agentDir, "harness-builder.md"), custom)
-  const first = await provisionGlobalHarnessAgents({ packageRoot, configDir })
+  const first = await provisionGlobalHarnessAgents({ packageRoot, configDir, enableEgm: false })
   assert.equal(await readFile(join(agentDir, "harness-builder.md"), "utf8"), custom)
   assert.ok(first.preserved.some((item) => item.id === "harness-builder"))
 
@@ -68,7 +69,7 @@ test("preserves unmanaged and user-edited profiles instead of overwriting them",
   const localEdit = `${await readFile(reviewerPath, "utf8")}\nOwner customization\n`
   await writeFile(reviewerPath, localEdit)
   await writeFile(join(packageRoot, "templates", ".opencode", "agents", "harness-reviewer.md"), "new upstream reviewer\n")
-  const second = await provisionGlobalHarnessAgents({ packageRoot, configDir })
+  const second = await provisionGlobalHarnessAgents({ packageRoot, configDir, enableEgm: false })
   assert.equal(await readFile(reviewerPath, "utf8"), localEdit)
   assert.ok(second.preserved.some((item) => item.id === "harness-reviewer"))
 })
@@ -80,7 +81,7 @@ test("refuses symlinked profile files", async (t) => {
   const outside = join(root, "outside.md")
   await writeFile(outside, "leave me alone\n")
   await symlink(outside, join(agentDir, "harness-builder.md"))
-  await assert.rejects(provisionGlobalHarnessAgents({ packageRoot, configDir }), /non-regular Harness agent file/)
+  await assert.rejects(provisionGlobalHarnessAgents({ packageRoot, configDir, enableEgm: false }), /non-regular Harness agent file/)
   assert.equal(await readFile(outside, "utf8"), "leave me alone\n")
 })
 
@@ -91,15 +92,15 @@ test("upgrades the shipped shell-denied orchestrator and preserves customized re
   assert.match(shipped, /action: shell\n    resource: "\*"\n    effect: allow/)
   const legacy = shipped.replace(/(action: shell\n    resource: "\*"\n    effect:) allow/, "$1 deny")
   await writeFile(source, legacy)
-  await provisionGlobalHarnessAgents({ packageRoot, configDir })
+  await provisionGlobalHarnessAgents({ packageRoot, configDir, enableEgm: false })
   await writeFile(source, shipped)
-  const upgraded = await provisionGlobalHarnessAgents({ packageRoot, configDir })
+  const upgraded = await provisionGlobalHarnessAgents({ packageRoot, configDir, enableEgm: false })
   assert.ok(upgraded.updated.includes("harness-orchestrator"))
   const target = join(configDir, "agents", "harness-orchestrator.md")
   assert.equal(await readFile(target, "utf8"), shipped)
   const customized = legacy + "\nOwner-specific restriction\n"
   await writeFile(target, customized)
-  const preserved = await provisionGlobalHarnessAgents({ packageRoot, configDir })
+  const preserved = await provisionGlobalHarnessAgents({ packageRoot, configDir, enableEgm: false })
   assert.ok(preserved.preserved.some(item => item.id === "harness-orchestrator"))
   assert.equal(await readFile(target, "utf8"), customized)
 })
