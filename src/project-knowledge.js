@@ -1228,8 +1228,16 @@ export async function findApprovedSoloDeliveryPolicy(projectRoot, artifactId) {
   const oldFields = ["execution_id","mandate_id","mode","eligible_wu_ids","ci_check"]
   const newFields = ["execution_id","mandate_id","mode","checks_by_wu"]
   const fields = policy?.mode === "SOLO_LOCAL" ? newFields : oldFields
+  // A local policy has one additional JSON object key per named WU. Count
+  // every key (including nested keys) to reject duplicate WU IDs instead of
+  // inadvertently rejecting every valid checks_by_wu object.
+  const localKeys = policy?.mode === "SOLO_LOCAL" &&
+    policy.checks_by_wu && typeof policy.checks_by_wu === "object" &&
+    !Array.isArray(policy.checks_by_wu) ? Object.keys(policy.checks_by_wu) : []
+  const expectedKeys = [...fields, ...localKeys]
   if (!policy || Array.isArray(policy) || typeof policy !== "object" ||
-      keys.length !== fields.length || new Set(keys).size !== fields.length ||
+      keys.length !== expectedKeys.length || new Set(keys).size !== expectedKeys.length ||
+      !expectedKeys.every(key => keys.includes(key)) ||
       !fields.every(field => keys.includes(field)) ||
       Object.keys(policy).length !== fields.length ||
       !fields.every(field => Object.hasOwn(policy, field)) ||
