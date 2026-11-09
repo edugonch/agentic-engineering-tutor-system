@@ -30,6 +30,17 @@ export function validateProcessObligations(value) {
   }
 }
 export const requiresTdd = state => state.wu?.contract?.process_obligations?.some?.(o => o?.kind === 'tdd' && o.required === true) ?? false
+
+// Structural loader errors are not behavioral RED. A deleted module or a
+// broken import cannot establish a failing product invariant by itself.
+// Apply equally to historical RED attempts and retrospective negative evidence.
+export function assertBehavioralNegativeReceipt(receipt) {
+  const output = receipt?.output
+  const text = String(output?.stderr ?? "") + "\\n" + String(output?.stdout ?? "")
+  if (/\\b(?:ERR_MODULE_NOT_FOUND|MODULE_NOT_FOUND|Cannot find module|Cannot find package|ModuleNotFoundError|No module named|ERR_UNKNOWN_FILE_EXTENSION)\\b/i.test(text)) {
+    throw new Error("PROCESS_NON_BEHAVIORAL_RED: missing module/import is not a functional RED; execute a check asserting a product invariant on the genuine baseline")
+  }
+}
 export function assertProcessAcceptance(state, candidateId) {
   const recovery = activeRecovery(state)
   if (recovery && (recovery.status !== 'ACCEPTED' || recovery.candidate_id !== candidateId)) throw new Error('PROCESS_RECOVERY_PENDING: independent process acceptance for this exact candidate is required')
