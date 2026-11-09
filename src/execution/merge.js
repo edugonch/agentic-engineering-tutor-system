@@ -11,6 +11,7 @@ import { createCandidateRegistry } from "./candidate-registry.js"
 import { candidateGitTree } from "./git-tree.js"
 import { canStartMerge, canVerifyExternalMerge } from "./state.js"
 import { ExternalWaitError } from "./external-errors.js"
+import { soloCandidateEligible, soloAccepted } from "./solo-delivery.js"
 
 function isSuccessConclusion(value) {
   return typeof value === "string" && value.toUpperCase() === "SUCCESS"
@@ -120,6 +121,43 @@ export async function runMergeCandidate(projectRoot, { candidate_id, adapter, se
   // A STARTED recovery cannot bypass an unresolved blocker (including when
   // the remote PR has already merged). The owner must resolve it first.
   if (state.blocker) throw new Error(`merge blocked: unresolved blocker ${state.blocker.class}.`)
+
+  // SOLO_CI is opt-in for exact owner-named low-risk WUs. The same merge
+  // command observes live GitHub CI for the exact bound PR and verifies the
+  // frozen candidate tree before appending a distinct acceptance receipt.
+  // Never manufacture a REVIEW PASS or trust the model's CI assertion.
+  if (!soloAccepted(state, candidate_id) && soloCandidateEligible(state, candidate_id) &&
+      state.reviews?.[candidate_id]?.verdict !== "PASS") {
+    if (state.reviews?.[candidate_id]?.verdict === "CHANGES_REQUIRED") {
+      throw new Error("SOLO_CI: an existing independent defect finding must be repaired before acceptance")
+    }
+    if (state.blocker) throw new Error("SOLO_CI: unresolved blocker must be repaired first")
+    const ciName = state.solo_delivery.policy.ci_check
+    const pr = await adapter.getPullRequest({ repository: binding.repository, pr_number: binding.pr_number })
+    if (pr.head_sha !== binding.head_sha || pr.base_sha !== binding.base_sha ||
+        pr.base_branch !== binding.base_branch) throw new Error("SOLO_CI: PR head/base changed")
+    if (pr.state !== "open" && !pr.merged) throw new Error("SOLO_CI: PR is closed without merge")
+    await verifyCandidateTree(projectRoot, candidate_id, adapter, binding)
+    const checks = await adapter.getChecks({ repository: binding.repository,
+      head_sha: binding.head_sha, check_names: [ciName] })
+    const check = checks.find(c => c.name === ciName)
+    if (!check || !isSuccessConclusion(check.conclusion)) {
+      if (!check || check.pending || String(check.conclusion).toUpperCase() === "PENDING") {
+        throw new ExternalWaitError("CI_PENDING", `SOLO_CI: ${ciName} is not yet successful for ${binding.head_sha}`)
+      }
+      throw new Error(`SOLO_CI: live required CI ${ciName} is ${check.conclusion}, not SUCCESS`)
+    }
+    const candidate = state.candidates[candidate_id]
+    await commitMerge(controller, session_id,
+      `${execution_id}:solo-ci:${candidate_id}:${binding.head_sha}:${state.solo_delivery.source_hash}`,
+      "SOLO_CI_ACCEPT", { candidate_id, head_sha: binding.head_sha,
+        candidate_hashes: { manifest_hash: candidate.manifest_hash, tree_hash: candidate.tree_hash },
+        source_hash: state.solo_delivery.source_hash,
+        ci_check: ciName, conclusion: "SUCCESS", basis: "LIVE_GITHUB_CI",
+        evidence_ref: JSON.stringify({ source: "github.adapter", check_name: ciName,
+          head_sha: binding.head_sha, run_id: check.run_id ?? null, app_id: check.app_id ?? null }) })
+    state = (await controller.snapshot()).state
+  }
 
   // A fresh start must pass the durable gate.
   if (!state.merge || (state.merge.status === "STARTED" && !state.blocker)) {
