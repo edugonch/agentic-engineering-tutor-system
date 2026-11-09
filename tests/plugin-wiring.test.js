@@ -203,7 +203,7 @@ test("live plugin hook blocks production edits before RED, permits only test pre
   await recordKnowledgeArtifact(f.root, {
     artifact_type: "work-unit", artifact_id: "WU-TDD", title: "WU-TDD", status: "PROPOSED",
     owner_confirmed: true, parent_refs: ["epic-tdd"],
-    content: 'Active-time limit: 120 seconds\\nexecution_contract: ' +
+    content: 'Active-time limit: 120 seconds\nexecution_contract: ' +
       JSON.stringify({
         active_seconds: 120, process_obligations: [{ kind: "tdd", required: true }],
         verification_contract: { commands: [{ id: "behavior", program: "node", args: ["test/seed.test.js"] }], environment: { network_policy: "UNRESTRICTED" } },
