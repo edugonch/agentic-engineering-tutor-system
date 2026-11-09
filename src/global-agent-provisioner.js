@@ -2,6 +2,7 @@ import { createHash } from "node:crypto"
 import { lstat, mkdir, readFile, realpath, rename, unlink, writeFile } from "node:fs/promises"
 import { homedir } from "node:os"
 import { isAbsolute, join, resolve } from "node:path"
+import { EGM_PROFILES, EGM_UPSTREAM_REVISION } from "./integrations/egm.js"
 
 const GLOBAL_AGENT_IDS = Object.freeze([
   "harness-orchestrator",
@@ -80,7 +81,7 @@ async function createIfAbsent(path, content) {
  * New files are created; unchanged plugin-managed files are upgraded; files
  * with user edits or no ownership record are preserved.
  */
-export async function provisionGlobalHarnessAgents({ packageRoot, configDir }) {
+export async function provisionGlobalHarnessAgents({ packageRoot, configDir, enableEgm = false }) {
   if (!packageRoot || !isAbsolute(packageRoot)) throw new Error("packageRoot must be an absolute path.")
   if (!configDir || !isAbsolute(configDir)) throw new Error("configDir must be an absolute path.")
 
@@ -93,9 +94,41 @@ export async function provisionGlobalHarnessAgents({ packageRoot, configDir }) {
   const nextFiles = { ...manifest.files }
   const result = { status: "ready", config_dir: canonicalConfig, created: [], updated: [], unchanged: [], preserved: [], errors: [] }
 
-  for (const id of GLOBAL_AGENT_IDS) {
-    const source = join(packageRoot, "templates", ".opencode", "agents", `${id}.md`)
-    const template = await readFile(source, "utf8")
+  const ids = enableEgm ? [...GLOBAL_AGENT_IDS, ...Object.keys(EGM_PROFILES)] : GLOBAL_AGENT_IDS
+  for (const id of ids) {
+    let template
+    if (Object.hasOwn(EGM_PROFILES, id)) {
+      const upstream = await readFile(join(packageRoot, "docs", "egm", "upstream", "agents", EGM_PROFILES[id].source), "utf8")
+      const originalPrompt = upstream.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, "")
+      template = `---
+description: Optional EGM read-only design reviewer. Not a Harness Work Unit candidate reviewer.
+mode: subagent
+permissions:
+  - action: edit
+    resource: "*"
+    effect: deny
+  - action: shell
+    resource: "*"
+    effect: deny
+  - action: subagent
+    resource: "*"
+    effect: deny
+---
+
+# EGM reviewer adapted for Harness OpenCode V2
+Derived from google/elephant-goldfish-model at ${EGM_UPSTREAM_REVISION} (Apache-2.0).
+The original persona is preserved under docs/egm/upstream/agents/.
+Use ONLY a newly delegated design target and standard. Do not fetch parent history, memory,
+other reviewer findings, or source material that was not required by the delegated task.
+You may read and glob only: the Harness tool boundary denies other operations and sensitive paths.
+If a required source is inaccessible, return NOT_REVIEWED. Do not claim test or WU PASS.
+Never write, delegate, run shell, modify approvals, or trigger a Harness execution tool.
+
+${originalPrompt}`
+    } else {
+      const source = join(packageRoot, "templates", ".opencode", "agents", `${id}.md`)
+      template = await readFile(source, "utf8")
+    }
     const target = join(agentDir, `${id}.md`)
     const current = await readRegularFile(target)
     const currentHash = current === null ? null : sha256(current)
