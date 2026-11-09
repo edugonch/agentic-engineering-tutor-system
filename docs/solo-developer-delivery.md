@@ -1,45 +1,43 @@
-# Solo Developer delivery — one small-clinic owner, CI-first execution
+# Solo Developer — entrega local sin autoridad de CI remoto
 
-The Harness formerly required **both** a full, often long local frozen verification run and an independent LLM reviewer before every WU merge, even for pure single-purpose functions. That architecture left ALFRAN E05-27-E blocked after GitHub had already run every check successfully: the local `jit-test` hit a 300-second limit, and the reviewer provider returned HTTP 400 before the first tool call.
+El antiguo modo `SOLO_CI` era un error de diseño: atribuía autoridad a GitHub Actions y producía esperas incluso cuando la evidencia local del cambio era suficiente. **Está deprecado para entregas nuevas.** Los eventos históricos se conservan y siguen siendo reproducibles; no se editan recibos ni decisiones anteriores.
 
-## What changes
+## Contrato efectivo
 
-For an existing owner-approved Epic, the owner may adopt **once**, via an indexed and hash-verified APPROVED decision, a delivery policy for *explicitly named low-risk WUs*. It does not convert all unknown work into low risk. The optional decision requires exactly one typed line:
+Para una WU de bajo riesgo, el propietario puede aprobar una sola política de `SOLO_LOCAL` con IDs exactos de WUs existentes y un conjunto pequeño de verificaciones locales **ya declaradas en el contrato de cada WU**. Esas verificaciones deben estar presentes como recibos inmutables `verify-<hash>`, ejecutados contra el candidato congelado y con resultado real PASS. La aceptación no se genera a partir de un texto del modelo ni de CI remoto.
 
-```text
-solo_delivery: {"execution_id":"alfran-epic05-delivery","mandate_id":"<EXACT_DURABLE_MANDATE_ID>","mode":"SOLO_CI","eligible_wu_ids":["E05-27-E"],"ci_check":"verify"}
-```
-
-Replace the mandate ID with the actual `status.mandate.mandate_id`. For future low-risk WUs, list all the approved low-risk WU IDs **in this one decision** when first adopting the policy (not a new approval on every WU). Do not include a WU that needs mandatory security, authentication, payments, clinical, schema/migration or concurrency review without the owner's explicit risk decision. Unknown or unlisted WUs retain strict review. A single-Epic policy cannot authorize another Epic or enlarge the WU sequence or budget.
-
-After the owner has approved and the decision has been recorded with the normal knowledge/index mechanism, invoke:
+Ejemplo de línea única en una nueva decisión aprobada, ligada al Epic:
 
 ```text
-harness_execution_controller(
-  action="adopt_solo_delivery",
-  execution_id="<EXACT_EXECUTION_ID>",
-  decision_artifact_id="<EXACT_APPROVED_DECISION_ID>",
-  response_mode="compact"
-)
+solo_delivery: {"execution_id":"alfran-epic05-delivery","mandate_id":"<MANDATO_REAL>","mode":"SOLO_LOCAL","checks_by_wu":{"E05-27-E":["<CHECK_LOCAL_REAL_1>","<CHECK_LOCAL_REAL_2>"]}}
 ```
 
-The controller pins the policy source hash immutably. There is no `owner_confirmed: true` input to bypass approval.
+Sustituir placeholders con `status.mandate.mandate_id` y los IDs exactos **ya existentes y realmente ejecutados** de E05-27-E. No inventar nombres de checks ni reducir silenciosamente el contrato. La autorización del propietario para acotar verificaciones debe quedar documentada; los cambios críticos no se declaran de bajo riesgo por inferencia.
 
-## Normal low-risk WU loop (no LLM reviewer)
+La decisión se registra mediante el mecanismo normal de conocimiento aprobado y se activa una vez mediante:
 
-1. Implement and freeze one candidate with only the approved WU scope. Record the candidate. If the implementation already exists, **reuse it**; do not launch another builder just to create receipts.
-2. Run the one GitHub Actions CI check explicitly named by the approved policy against the exact PR head. The approved CI route replaces a duplicate local full-suite run and mandatory model review **only** for this named low-risk WU. It never changes an old receipt into PASS or rewrites the frozen WU verification contract.
-3. Bind the candidate and exact PR `head_sha`/`base_sha` through the existing controller; then call `harness_merge_candidate(candidate_id)`. The merge tool reads the actual GitHub PR/checks, compares the immutable candidate tree with the PR, and requires live CI SUCCESS. On success it appends a distinct `SOLO_CI_ACCEPT` event with the candidate tree/manifest hashes, policy SHA, CI check name, exact head and remote evidence. This is **not** `RECORD_REVIEW:PASS`.
-4. The existing guarded merge proceeds with all original GitHub, dispatch, process, blocker, CI and permission gates. After remote merge verification, `complete_wu` closes the WU, recording the acceptance basis `SOLO_CI`.
-5. Continue the next already-declared WU. Batching, when previously owner-authorized, still requires its original independent review unless a separately implemented batch-specific trust policy exists; this initial policy deliberately covers individual low-risk WUs only.
+```text
+harness_execution_controller(action="adopt_solo_delivery", execution_id="alfran-epic05-delivery", decision_artifact_id="<ID_APROBADO>")
+```
 
-## What remains non-negotiable
+Si ya se había adoptado una antigua política `SOLO_CI`, se permite **solo** sustituirla por una nueva política aprobada `SOLO_LOCAL` para un subconjunto de las mismas WUs. El evento viejo permanece en el journal y no autoriza ninguna entrega nueva.
 
-- All mutations use the durable controller CAS/lease/fence; no fake model review, no invented test receipts, no rewrite of `events.ndjson` or budget.
-- Owner-selected WU ID, the approved mandate and process obligations must match. Existing process-red/recovery obligations remain in effect. Existing independent `CHANGES_REQUIRED` findings cannot be ignored.
-- Unsettled launches or active verification, a blocker, changed PR head/base/tree or non-success CI prevent the solo acceptance and merge.
-- No production deployment, database/clinical actions, permission changes, scope expansion, unapproved WU or newly created budget.
+## Flujo mínimo
 
-## ALFRAN E05-27-E continuation
+1. Reutilizar el candidato congelado de la WU. No lanzar otro builder si ya existe implementación. Corroborar el diff permitido.
+2. Comprobar que existen recibos PASS locales, íntegros y del mismo candidato/contrato para **cada check seleccionado por el propietario**. Si faltan, ejecutar solo esos checks con `harness_run_verification`, nunca toda una suite innecesaria.
+3. Vincular PR, HEAD y base exactos mediante `bind_pr`. Llamar `harness_merge_candidate` una vez. El motor reutiliza los recibos, registra `SOLO_LOCAL_ACCEPT` — **no un PASS falso de reviewer** — y valida árbol del candidato / PR / base antes de su merge governado.
+4. `complete_wu` solamente cuando el merge esté VERIFICADO, el estado limpio y sin dispatches pendientes; avanzar con la siguiente WU ya autorizada.
 
-The PR is [ALFRAN #246](https://github.com/edugonch/alfran-web-platform/pull/246), and GitHub workflow `verify` finished successfully on head `f1bae33e8925704b3b61ffd5c22e4f182f56e331`. With a correctly approved and adopted solo policy covering E05-27-E, no third reviewer with unchanged HTTP 400 or duplicate local 300-second `jit-test` is required. The local OpenCode controller still must bind the *actual recorded candidate* and exact PR/CI, pass any remaining process gates, execute the governed merge and record `complete_wu`. GitHub merge alone cannot mutate that local journal.
+## GitHub CI: sin autoridad
+
+- **Nunca llamar `getChecks` ni esperar GitHub Actions** como parte de `runMergeCandidate`, `runVerifyExternalMerge`, `observeMergeProgress` o `runRebindPR`.
+- `required_ci_checks`, `RECORD_CI` y recibos antiguos siguen siendo legibles como metadatos históricos, **sin bloquear nuevas entregas**. Pueden ser útiles para observabilidad, pero no conceden aceptación.
+- Verificar el HEAD, base, integridad del árbol y confirmación del merge **sí** sigue siendo necesario: son pruebas de qué código se integró, no de CI.
+- El modo ordinario sin `SOLO_LOCAL` sigue exigiendo una revisión independiente cuando así lo requiere su política. No se deshabilitan aprobación de alcance, control de acceso, pruebas reales, TDD obligatorio ni obligaciones de proceso.
+
+## E05-27-E
+
+Se conocen recibos locales PASS del test focalizado y varias verificaciones; el `jit-test` global sufrió un timeout. Para cerrar la WU, la nueva política debe nombrar una **selección verificable de checks locales previamente declarados** y usar sus recibos inmutables. El test focalizado 11/11 no puede registrarse artificialmente como un check que nunca estuvo declarado. Si los checks seleccionados no tienen recibos, ejecutar los checks admisibles y acotados. No volver a lanzar reviewer que falla HTTP 400 ni crear un nuevo builder.
+
+La integración definitiva se realiza en el OpenCode local, porque allí reside el controller `alfran-epic05-delivery`. Fusionar GitHub fuera de él no equivale a `complete_wu`.
