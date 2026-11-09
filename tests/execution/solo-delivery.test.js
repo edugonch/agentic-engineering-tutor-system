@@ -138,7 +138,7 @@ for (const [name, changes] of [
   const f = await fixture(t, changes)
   await bind(f)
   const a = adapter()
-  await assert.rejects(merge(f,a), /SOLO_LOCAL: missing PASS receipt/)
+  await assert.rejects(merge(f,a), /SOLO_LOCAL: missing (PASS receipt|local verification receipts)/)
   assert.equal((await f.state()).solo_acceptances, undefined)
   assert.equal(a.mergeCalls(), 0)
 })
