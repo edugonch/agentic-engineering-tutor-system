@@ -1,7 +1,5 @@
 import { expiredWait, terminalObservation } from "./external-observation.js"
-import { usesPlanningEstimates } from "./time-policy.js"
 import { stableHash } from "./serialize.js"
-import { wuBudgetUsage } from "./wu-budget.js"
 import { ExternalWaitError } from "./external-errors.js"
 export { ExternalWaitError }
 
@@ -40,9 +38,11 @@ export async function runWithExternalWait({ controller, session_id, operation, r
     await commit("EXTERNAL_OBSERVATION_RECOVER", { wait_id: expired.wait_id, operation, blocked_at_revision: state.blocker.at_revision, observation }, `${expired.wait_id}:observed:${stableHash(observation)}`)
     state = (await controller.snapshot()).state
   }
-  const wu = state.wu && wuBudgetUsage(state, state.wu.wu_id)
-  if (state.budget.total_seconds - state.budget.used_seconds <= 0 || (!usesPlanningEstimates(state) && wu?.ceiling_seconds != null && wu.used_seconds >= wu.ceiling_seconds))
-    throw new Error("BUDGET_EXHAUSTED: no authorized execution budget remains")
+  // Duration fields are estimates only. Do not block external operations
+  // (including the reconciliation of an already-merged PR) when the Epic/WU
+  // has exceeded its original time estimate. Authorization, blockers, dispatch
+  // settlement and remote-state checks remain enforced by the controller and
+  // merge gate, and remote waits retain their own technical deadlines.
   let wait = state.external_wait
   // The owner deprecated GitHub CI as an execution dependency. Close an
   // already-recorded CI_PENDING wait once through an audited controller event;
