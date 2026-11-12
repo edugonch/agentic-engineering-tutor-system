@@ -139,3 +139,67 @@ test('expired timeout recovery is read-only until terminal observation and never
   await commit('BLOCK', { class: 'BLOCKED_SECURITY', reason: 'new issue' })
   await assert.rejects(runWithExternalWait({ ...args, observe: async () => assert.fail('do not read for security bypass'), run: async () => mutations++ }), /BLOCKED_SECURITY/)
 })
+
+test("regression WU069: external merge reconciliation runs after Epic time estimate is exceeded", async t => {
+  const { c, commit } = await fixture(t)
+  await commit("PHASE_START", { phase: "ACTIVE", started_at: 0 })
+  await commit("PHASE_END", { ended_at: 130 })
+  const before = await c.snapshot()
+  assert.equal(before.state.budget.total_seconds, 100)
+  assert.equal(before.state.budget.used_seconds, 130)
+  assert.equal(before.state.blocker, null)
+  let remoteCalls = 0
+  const result = await runWithExternalWait({
+    controller: c, session_id: "root", operation: "harness_merge_candidate:cand-wu069",
+    run: async () => { remoteCalls++; return { status: "recovered_existing_merge", merge_commit_sha: "remote-merge" } },
+  })
+  assert.equal(result.status, "recovered_existing_merge")
+  assert.equal(remoteCalls, 1)
+  const after = await c.snapshot()
+  assert.equal(after.state.budget.used_seconds, 130)
+  assert.equal(after.state.blocker, null)
+  assert.deepEqual(after.events, before.events, "successful existing merge observation adds no time-authority or duplicate event")
+})
+
+test("regression: an exhausted time estimate does not prevent remote transient recovery", async t => {
+  const { c, commit } = await fixture(t)
+  await commit("PHASE_START", { phase: "ACTIVE", started_at: 0 })
+  await commit("PHASE_END", { ended_at: 150 })
+  let clock = Date.now(), calls = 0
+  const options = {
+    controller: c, session_id: "root", operation: "harness_merge_candidate:cand-wu069",
+    now: () => clock,
+  }
+  const pending = await runWithExternalWait({
+    ...options, run: async () => { calls++; throw new ExternalWaitError("REMOTE_TRANSIENT", "GitHub temporarily unavailable") },
+  })
+  assert.equal(pending.status, "WAITING_EXTERNAL")
+  assert.equal(calls, 1)
+  assert.equal((await c.snapshot()).state.blocker, null)
+  clock = Date.parse(pending.next_retry_at)
+  const success = await runWithExternalWait({
+    ...options, run: async () => { calls++; return { status: "recovered_existing_merge" } },
+  })
+  assert.equal(success.status, "recovered_existing_merge")
+  assert.equal(calls, 2)
+  const after = (await c.snapshot()).state
+  assert.equal(after.external_wait, null)
+  assert.equal(after.external_wait_history.at(-1).outcome, "RESOLVED")
+  assert.equal(after.budget.used_seconds, 150)
+})
+
+test("time-estimate overruns never bypass a real security or permission blocker", async t => {
+  for (const cls of ["BLOCKED_PERMISSION", "BLOCKED_SECURITY"]) {
+    const { c, commit } = await fixture(t)
+    await commit("PHASE_START", { phase: "ACTIVE", started_at: 0 })
+    await commit("PHASE_END", { ended_at: 150 })
+    await commit("BLOCK", { class: cls, reason: "real authorization failure" })
+    let called = false
+    await assert.rejects(runWithExternalWait({
+      controller: c, session_id: "root", operation: "harness_merge_candidate:cand-wu069",
+      run: async () => { called = true },
+    }), new RegExp(cls))
+    assert.equal(called, false)
+    assert.equal((await c.snapshot()).state.blocker.class, cls)
+  }
+})
