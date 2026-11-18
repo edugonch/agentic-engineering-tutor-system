@@ -335,3 +335,53 @@ test("an active builder must not be preempted by the stability rescheduler", asy
   assert.equal(timers.length, 0)
   assert.match([...f.prompts.values()][0].text, /Inspect\/recover the existing dispatch/)
 })
+
+test("E05-28..37: a settled interrupted builder, current root and valid journal resume without owner unblock", async t => {
+  const f = await fixture(t)
+  // This tests the complete append-only path, not merely a pure classification.
+  await f.commit("DISPATCH_RESERVE", { dispatch_id: "interrupted", reserved_seconds: 10 })
+  await f.commit("DISPATCH_PREPARE", { dispatch_id: "interrupted", expected_agent: "harness-builder" })
+  await f.commit("DISPATCH_LAUNCH", { dispatch_id: "interrupted", session_id: "ses_child" })
+  await f.commit("DISPATCH_FINISH", { dispatch_id: "interrupted", result: "interrupted" })
+  await f.commit("DISPATCH_RECONCILE", { dispatch_id: "interrupted", verdict: "FAIL", actual_consumption: 10 })
+  await f.commit("BLOCK", { class: "BLOCKED_TOOLING", reason: "interrupted runtime tool already reconciled" })
+  const before = (await f.c.snapshot()).state
+  assert.equal(before.blocker.class, "BLOCKED_TOOLING")
+  assert.equal(before.dispatches.interrupted.status, "result_reconciled")
+  assert.equal(await f.s.tick("E"), true)
+  const after = await f.c.snapshot()
+  assert.equal(after.state.blocker, null)
+  assert.equal(after.state.budget.used_seconds, before.budget.used_seconds)
+  assert.equal(after.state.dispatches.interrupted.status, "result_reconciled")
+  assert.equal(after.state.last_blocker_resolution.recovery_evidence.kind, "SETTLED_TOOLING_CONTINUATION")
+  const automaticClear = after.events.filter(e => e.operation_type === "CLEAR_BLOCKER" &&
+    e.body?.recovery_evidence?.kind === "SETTLED_TOOLING_CONTINUATION")
+  assert.equal(automaticClear.length, 1)
+  assert.equal(f.prompts.size, 1)
+  assert.match([...f.prompts.values()][0].text, /Continue execution E/)
+  // No duplicate clearance or prompt when the same supervisor wakes twice.
+  assert.equal(await f.s.tick("E"), false)
+  assert.equal((await f.c.snapshot()).events.filter(e =>
+    e.operation_type === "CLEAR_BLOCKER" && e.body?.recovery_evidence?.kind === "SETTLED_TOOLING_CONTINUATION").length, 1)
+})
+
+test("an unsettled child remains blocked even when the root runtime is healthy", async t => {
+  const f = await fixture(t)
+  await f.commit("DISPATCH_RESERVE", { dispatch_id: "live", reserved_seconds: 10 })
+  await f.commit("DISPATCH_PREPARE", { dispatch_id: "live", expected_agent: "harness-builder" })
+  await f.commit("DISPATCH_LAUNCH", { dispatch_id: "live", session_id: "ses_active" })
+  await f.commit("BLOCK", { class: "BLOCKED_TOOLING", reason: "unconfirmed child" })
+  assert.equal(await f.s.tick("E"), true) // one diagnosis, no relaunch
+  const snap = await f.c.snapshot()
+  assert.equal(snap.state.blocker.class, "BLOCKED_TOOLING")
+  assert.equal(snap.state.dispatches.live.status, "launched")
+  assert.equal(snap.events.filter(e => e.operation_type === "CLEAR_BLOCKER").length, 0)
+  assert.match([...f.prompts.values()][0].text, /One-time tooling diagnosis/)
+})
+
+test("an unrelated tooling claim without a settled worker is never auto-cleared", async t => {
+  const f = await fixture(t)
+  await f.commit("BLOCK", { class: "BLOCKED_TOOLING", reason: "verification setup failed" })
+  assert.equal(await f.s.tick("E"), true)
+  assert.equal((await f.c.snapshot()).state.blocker.class, "BLOCKED_TOOLING")
+})
