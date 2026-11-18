@@ -10,6 +10,7 @@ import { wuBudgetUsage } from "./wu-budget.js"
 import { assertBatchConfiguration, requireBatchCoverage } from "./wu-batch.js"
 import { validOrphanPendingProof } from "./orphan-read-evidence.js"
 import { acceptedForMerge, soloCandidateEligible, soloAccepted, validSoloPolicy, assertSoloAcceptanceEvent } from "./solo-delivery.js"
+import { inspectSettledToolingContinuation, SETTLED_TOOLING_EVIDENCE_KIND } from "./tooling-continuation.js"
 // State projection. state is derived, never canonical: events.ndjson is the
 // source of truth and every read replays it. This makes divergence between a
 // cached state file and the log impossible by construction.
@@ -129,6 +130,7 @@ export function initialState() {
     merge: null, // { status, candidate_id, repository, pr_number, expected_head_sha, expected_base_sha, started_at_revision, merge_commit_sha, merged_head_sha, verified_at_revision }
     blocker: null, // { class, reason, at_revision }
     checkpoint: null, // { operation_id, revision, note, wu_id, used_seconds }
+    tooling_continuations: {}, // wu_id -> count of governed, settled-launch retry grants
     completed: false,
     completion: null,
   }
@@ -883,6 +885,7 @@ export function applyEvent(previous, event, { historicalReplay = false } = {}) {
       if (d.reservation_status !== RESERVATION_STATUS.RESERVED) throw new Error(`Cannot release dispatch ${body.dispatch_id}: reservation already ${d.reservation_status}.`)
       const reserved = d.reserved_seconds
       d.status = DISPATCH_STATUS.RELEASED
+      d.released_at_revision = state.revision
       d.reservation_status = RESERVATION_STATUS.RELEASED
       state.budget.reserved_seconds -= reserved
       break
@@ -1204,6 +1207,20 @@ export function applyEvent(previous, event, { historicalReplay = false } = {}) {
       }
       if (typeof body.resolution !== "string" || body.resolution.trim().length === 0) {
         throw new Error("CLEAR_BLOCKER requires a non-empty resolution.")
+      }
+      // Replay-verifiable tooling recovery: no authority from error prose,
+      // check the exact WU, terminal dispatch set and bounded attempt number.
+      // The live runtime cooldown is separately checked at admission.
+      if (body.recovery_evidence?.kind === SETTLED_TOOLING_EVIDENCE_KIND) {
+        const plan = inspectSettledToolingContinuation(state, { requireRuntime: false })
+        const evidence = body.recovery_evidence
+        if (!plan.eligible || evidence.wu_id !== plan.wu_id ||
+            evidence.attempt !== plan.attempts + 1 ||
+            JSON.stringify(evidence.dispatch_ids) !== JSON.stringify(plan.dispatch_ids)) {
+          throw new Error("SETTLED_TOOLING_RECOVERY_EVIDENCE_MISMATCH: exact settled dispatches and bounded attempt required")
+        }
+        state.tooling_continuations ??= {}
+        state.tooling_continuations[plan.wu_id] = plan.attempts + 1
       }
       state.last_blocker_resolution = {
         class: state.blocker.class,
