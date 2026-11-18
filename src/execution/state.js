@@ -883,8 +883,15 @@ export function applyEvent(previous, event, { historicalReplay = false } = {}) {
       }
       if (d.reservation_status !== RESERVATION_STATUS.RESERVED) throw new Error(`Cannot release dispatch ${body.dispatch_id}: reservation already ${d.reservation_status}.`)
       const reserved = d.reserved_seconds
+      // A bare reservation cancelled before prepare is not evidence of a
+      // failed child launch; capture the original lifecycle stage on replay.
+      d.released_from_status = d.status
       d.status = DISPATCH_STATUS.RELEASED
       d.reservation_status = RESERVATION_STATUS.RELEASED
+      // Durable provenance for every historical and new never-launched release.
+      // This is reconstructed from the immutable event on replay; old journals
+      // need no migration or manual editing.
+      d.released_at_revision = state.revision
       state.budget.reserved_seconds -= reserved
       break
     }

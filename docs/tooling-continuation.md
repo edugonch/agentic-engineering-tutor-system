@@ -15,10 +15,14 @@ a **single audited `CLEAR_BLOCKER`** when every condition holds:
 
 - Exact active `BLOCKED_TOOLING` in an owner-approved Epic and live WU;
 - At least one `harness-builder` or `harness-reviewer` dispatch from
-  the current WU was either `released` **before launch claim** (a terminal
-  `reservation_status=released`, so no child was ever created), or was durably
-  **fenced and abandoned/reconciled**, with its reconciliation recorded within
-  20 revisions of the blocker;
+  the current WU was either `released` **after prepare and before launch claim**
+  (a terminal `reservation_status=released`, `released_from_status=pending_launch`,
+  no child created), or was durably **fenced and abandoned/reconciled**.
+  Both forms require terminal event provenance within 20 revisions of the exact
+  blocker. This provenance is projected from the original immutable journal,
+  including existing historical events. Merely reserving and cancelling an
+  unprepared dispatch, or releasing one long before an unrelated tooling fault,
+  never authorizes clearance;
 - All dispatches in the execution are `released`, `result_reconciled`,
   or `abandoned_reconciled`; no outstanding identity, active phase,
   verification, external wait or process repair;
