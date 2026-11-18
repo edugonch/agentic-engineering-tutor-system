@@ -3,10 +3,29 @@ import { stableHash } from "./serialize.js"
 import { isTechnicalWuContractBlocker } from "./jit-contract.js"
 import { isStaleWorktreeScopeBlocker } from "./scope-recovery.js"
 import { classifyContinuation } from "./workflow-router.js"
+// Progress hashes are part of the append-only supervisor protocol. Historical
+// SUPERVISOR_CONTINUE / SUPERVISOR_TURN_OBSERVED receipts were committed before
+// DISPATCH_RELEASE gained release-provenance fields (PR #100). Those derived
+// fields are needed for the safe tooling-recovery predicate, but must NOT
+// retroactively change previously committed progress hashes or cause a journal
+// replay to fail with "Continuation no longer eligible".
+//
+// Strip only these two non-semantic annotations from the hash projection.
+// Keep them in canonical state for recovery admission and evidence validation.
+// Do not weaken the supervisor's exact progress-hash comparisons.
+export function dispatchesForProgress(dispatches = {}) {
+  return Object.fromEntries(Object.entries(dispatches).map(([id, dispatch]) => {
+    if (!Object.hasOwn(dispatch, "released_from_status") &&
+        !Object.hasOwn(dispatch, "released_at_revision")) return [id, dispatch]
+    const { released_from_status: _from, released_at_revision: _revision, ...original } = dispatch
+    return [id, original]
+  }))
+}
+
 // Deliberately excludes checkpoints, blocker text, leases and revision counters.
 export function executionProgress(state) {
   return stableHash({ ...(state.process_policy ? { process_policy: state.process_policy, process_recoveries: state.process_recoveries } : {}), ...(state.process_red ? { process_red: state.process_red } : {}), ...(state.time_policy ? { time_policy: state.time_policy } : {}), mandate: state.mandate, wu: state.wu, budget: state.budget,
-    dispatches: state.dispatches, candidates: state.candidates, reviews: state.reviews,
+    dispatches: dispatchesForProgress(state.dispatches), candidates: state.candidates, reviews: state.reviews,
     ci: state.ci_evidence, binding: state.pr_binding, merge: state.merge, external_wait: state.external_wait })
 }
 export function recoveryAction(state) {
