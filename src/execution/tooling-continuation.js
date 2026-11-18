@@ -34,7 +34,7 @@ export function inspectSettledToolingContinuation(state, {
   // A failed frozen verification setup must be recovered by its dedicated
   // receipt-bound tool, never by an interrupted-builder continuation.
   if (state.verification_retry?.blocked_at_revision === blocker.at_revision ||
-      /(?:\\bsetup\\b|\\bnpm ci\\b|verification check|frozen check|\\bENOSPC\\b|\\bsecurity\\b|\\bpermission\\b|\\bcredential\\b|\\bauthority\\b)/i.test(blocker.reason ?? ""))
+      /(?:\bsetup\b|\bnpm ci\b|verification check|frozen check|\bENOSPC\b|\bsecurity\b|\bpermission\b|\bcredential\b|\bauthority\b)/i.test(blocker.reason ?? ""))
     return refuse("NOT_A_SETTLED_LAUNCH_INCIDENT")
 
   const previous = state.tooling_continuations?.[wuId] ?? 0
