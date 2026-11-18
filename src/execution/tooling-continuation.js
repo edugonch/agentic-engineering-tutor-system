@@ -43,7 +43,12 @@ export function inspectSettledToolingContinuation(state, {
 
   const nearby = Object.entries(state.dispatches ?? {}).filter(([, d]) => {
     if (d.wu_id !== wuId || !AGENTS.has(d.expected_agent) || !INTERRUPTED.has(d.status)) return false
-    const settledAt = d.status === "released" ? d.released_at_revision : d.reconciled?.at_revision
+    // An unclaimed RELEASED dispatch has no child side effect.
+    // Do not retroactively add a release revision to historical projections.
+    if (d.status === "released")
+      return d.reservation_status === "released" && !d.launch_call_id
+    // For a fenced abandonment, require its exact nearby settlement revision.
+    const settledAt = d.reconciled?.at_revision
     return Number.isSafeInteger(settledAt) && settledAt <= blocker.at_revision &&
       settledAt >= blocker.at_revision - 20
   }).map(([dispatchId]) => dispatchId).sort()
