@@ -130,7 +130,6 @@ export function initialState() {
     merge: null, // { status, candidate_id, repository, pr_number, expected_head_sha, expected_base_sha, started_at_revision, merge_commit_sha, merged_head_sha, verified_at_revision }
     blocker: null, // { class, reason, at_revision }
     checkpoint: null, // { operation_id, revision, note, wu_id, used_seconds }
-    tooling_continuations: {}, // wu_id -> count of governed, settled-launch retry grants
     completed: false,
     completion: null,
   }
@@ -885,7 +884,6 @@ export function applyEvent(previous, event, { historicalReplay = false } = {}) {
       if (d.reservation_status !== RESERVATION_STATUS.RESERVED) throw new Error(`Cannot release dispatch ${body.dispatch_id}: reservation already ${d.reservation_status}.`)
       const reserved = d.reserved_seconds
       d.status = DISPATCH_STATUS.RELEASED
-      d.released_at_revision = state.revision
       d.reservation_status = RESERVATION_STATUS.RELEASED
       state.budget.reserved_seconds -= reserved
       break
