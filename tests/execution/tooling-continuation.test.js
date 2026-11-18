@@ -17,9 +17,9 @@ function fixture() {
     reason: "Two interrupted builder launches after a client disconnection" }
   state.dispatches = {
     first: { wu_id: BATCH[0], expected_agent: "harness-builder",
-      status: "released", reservation_status: "released" },
+      status: "released", reservation_status: "released", released_at_revision: 2816 },
     second: { wu_id: BATCH[0], expected_agent: "harness-builder",
-      status: "released", reservation_status: "released" },
+      status: "released", reservation_status: "released", released_at_revision: 2818 },
   }
   return state
 }
@@ -114,4 +114,43 @@ test("bounded cost: a persistent failure does not cause indefinite automatic cle
   const falseSetup = fixture()
   falseSetup.blocker.reason = "npm ci setup timeout on frozen check"
   assert.equal(inspect(falseSetup).reason, "NOT_A_SETTLED_LAUNCH_INCIDENT")
+})
+
+test("unrelated old released dispatch cannot clear an independent tooling incident", () => {
+  const state = fixture()
+  state.dispatches.first.released_at_revision = 2700
+  state.dispatches.second.released_at_revision = 2701
+  assert.equal(inspect(state).reason, "NO_RECENT_SETTLED_INTERRUPTION")
+  assert.equal(inspect(state).eligible, false)
+  // An unproven release revision also cannot become authority.
+  delete state.dispatches.first.released_at_revision
+  delete state.dispatches.second.released_at_revision
+  assert.equal(inspect(state).reason, "NO_RECENT_SETTLED_INTERRUPTION")
+})
+
+test("a stale release plus one exact recent release provides only the recent evidence", () => {
+  const state = fixture()
+  state.dispatches.first.released_at_revision = 2700
+  const plan = inspect(state)
+  assert.equal(plan.eligible, true)
+  assert.deepEqual(plan.dispatch_ids, ["second"])
+})
+
+test("release provenance is reconstructed on replay; no backfill or mutable state file", () => {
+  let state = initialState()
+  state.mandate = { mandate_id: "M", authority_kind: "OWNER_APPROVED_EPIC" }
+  state.wu = { wu_id: "WU1", completed: false }
+  state.budget = { total_seconds: 100, used_seconds: 0, reserved_seconds: 0 }
+  state.revision = 1
+  const next = (operation_type, body) => {
+    state = applyEvent(state, {
+      operation_type, body,
+      previous_revision: state.revision,
+      next_revision: state.revision + 1,
+    })
+  }
+  next("DISPATCH_RESERVE", { dispatch_id: "unclaimed", reserved_seconds: 0 })
+  next("DISPATCH_RELEASE", { dispatch_id: "unclaimed" })
+  assert.equal(state.dispatches.unclaimed.released_at_revision, 3)
+  assert.equal(state.dispatches.unclaimed.status, "released")
 })
