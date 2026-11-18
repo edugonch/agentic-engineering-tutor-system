@@ -6,6 +6,8 @@ import { join } from "node:path"
 import { createExecutionController } from "../../src/execution/execution.js"
 import { createExecutionSupervisor } from "../../src/execution/supervisor.js"
 import { runExecutionController } from "../../src/execution/controller-tool.js"
+import { supervisorProgress, executionProgress } from "../../src/execution/progress.js"
+import { project } from "../../src/execution/state.js"
 
 async function fixture(t, planning = false) {
   const root = await mkdtemp(join(tmpdir(), "supervisor-"))
@@ -409,4 +411,65 @@ test("an active builder must not be preempted by the stability rescheduler", asy
   await supervisor.tick("E")
   assert.equal(timers.length, 0)
   assert.match([...f.prompts.values()][0].text, /Inspect\/recover the existing dispatch/)
+})
+
+test("ALFRAN historical SUPERVISOR_CONTINUE replay retains October hash after release-provenance upgrade", async t => {
+  const f = await fixture(t)
+  // The original October journal contained DISPATCH_RELEASE before #100
+  // added released_from_status and released_at_revision to its projection.
+  await f.commit("DISPATCH_RESERVE", { dispatch_id: "e0502-review-2", reserved_seconds: 10 })
+  await f.commit("DISPATCH_PREPARE", {
+    dispatch_id: "e0502-review-2", prepared_by_session_id: "ses_root",
+    expected_agent: "harness-reviewer", claim_required: true,
+  })
+  await f.commit("DISPATCH_RELEASE", { dispatch_id: "e0502-review-2" })
+
+  const before = (await f.c.snapshot()).state
+  const oldProjection = structuredClone(before)
+  delete oldProjection.dispatches["e0502-review-2"].released_from_status
+  delete oldProjection.dispatches["e0502-review-2"].released_at_revision
+
+  // This represents the exact October hash algorithm, not a bypass of
+  // progress checks during historicalReplay.
+  const octoberHash = supervisorProgress(oldProjection)
+  assert.equal(supervisorProgress(before), octoberHash)
+  assert.equal(executionProgress(before), executionProgress(oldProjection))
+  assert.equal(before.dispatches["e0502-review-2"].released_from_status, "pending_launch")
+  assert.equal(typeof before.dispatches["e0502-review-2"].released_at_revision, "number")
+
+  // The admission and replay guards must accept the unmodified old receipt.
+  const intent_id = "msg_harness_october_historic"
+  await f.commit("SUPERVISOR_CONTINUE", { intent_id, progress_hash: octoberHash, attempt: 1 })
+  await f.commit("SUPERVISOR_SENT", { intent_id })
+  await f.commit("SUPERVISOR_RECEIVED", {
+    intent_id, session_id: "ses_root", progress_hash: octoberHash,
+  })
+  await f.commit("SUPERVISOR_TURN_OBSERVED", { intent_id, progress_hash: octoberHash })
+
+  const snapshot = await f.c.snapshot()
+  const replayed = project(snapshot.events)
+  assert.equal(replayed.supervisor.intent.progress_hash, octoberHash)
+  assert.equal(replayed.supervisor.intent.turn_observed, true)
+  assert.equal(replayed.dispatches["e0502-review-2"].released_from_status, "pending_launch")
+  assert.deepEqual(replayed.dispatches, snapshot.state.dispatches)
+
+  // Real dispatch progress still changes the hash: no accidental relaxation
+  // of the supervisor's no-progress/duplicate-continuation protections.
+  const changed = structuredClone(replayed)
+  changed.dispatches["e0502-review-2"].status = "pending_launch"
+  assert.notEqual(supervisorProgress(changed), octoberHash)
+})
+
+test("derived release annotations alone cannot forge supervisor progress", async t => {
+  const f = await fixture(t)
+  await f.commit("DISPATCH_RESERVE", { dispatch_id: "old", reserved_seconds: 0 })
+  await f.commit("DISPATCH_RELEASE", { dispatch_id: "old" })
+  const state = (await f.c.snapshot()).state
+  const baseHash = supervisorProgress(state)
+  const changed = structuredClone(state)
+  changed.dispatches.old.released_at_revision = 99999
+  changed.dispatches.old.released_from_status = "pending_launch"
+  assert.equal(supervisorProgress(changed), baseHash)
+  changed.dispatches.old.reservation_status = "reserved"
+  assert.notEqual(supervisorProgress(changed), baseHash)
 })
