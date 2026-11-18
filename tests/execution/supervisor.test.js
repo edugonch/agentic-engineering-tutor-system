@@ -173,6 +173,35 @@ test("tooling blocker receives one non-billable diagnostic wake, then ordinary c
   assert.match(prompts[1].text, /Continue execution E from operational_status first/)
 })
 
+test("EPIC-05: supervisor clears settled interrupted launch once, then resumes same WU without new approval", async t => {
+  const f = await fixture(t)
+  await f.commit("DISPATCH_RESERVE", { dispatch_id: "e0528-build-1", reserved_seconds: 10 })
+  await f.commit("DISPATCH_PREPARE", { dispatch_id: "e0528-build-1",
+    expected_agent: "harness-builder", prepared_by_session_id: "ses_root", claim_required: true })
+  await f.commit("DISPATCH_RELEASE", { dispatch_id: "e0528-build-1" })
+  await f.commit("BLOCK", { class: "BLOCKED_TOOLING",
+    reason: "Builder session was interrupted; released launch never had a child" })
+  const before = (await f.c.snapshot()).state
+  assert.equal(before.blocker.class, "BLOCKED_TOOLING")
+  const sup = createExecutionSupervisor(f.ctx, f.root, {
+    now: () => Date.now(), runtimeStartedAtMs: Date.now() - 10 * 60 * 1000,
+  })
+  t.after(() => sup.dispose())
+  assert.equal(await sup.tick("E"), true)
+  const after = (await f.c.snapshot()).state
+  assert.equal(after.blocker, null)
+  assert.equal(after.tooling_continuations.WU1, 1)
+  assert.deepEqual(after.dispatches, before.dispatches)
+  assert.equal(after.budget.used_seconds, before.budget.used_seconds)
+  assert.equal(after.wu.wu_id, "WU1")
+  assert.equal(after.last_blocker_resolution.recovery_evidence.kind, "SETTLED_DISPATCH_CONTINUATION")
+  assert.equal(f.prompts.size, 1)
+  const next = [...f.prompts.values()][0].text
+  assert.match(next, /LAUNCH_ONE_BUILDER/)
+  assert.doesNotMatch(next, /One-time tooling diagnosis/)
+  assert.equal(await sup.tick("E"), false, "do not queue duplicate unacknowledged continuation")
+})
+
 test("authority and scope blockers never receive autonomous diagnostic wake", async t => {
   for (const cls of ["BLOCKED_AUTHORITY", "BLOCKED_SCOPE", "BLOCKED_SECURITY"]) {
     const f = await fixture(t)
