@@ -17,9 +17,9 @@ function fixture() {
     reason: "Two interrupted builder launches after a client disconnection" }
   state.dispatches = {
     first: { wu_id: BATCH[0], expected_agent: "harness-builder",
-      status: "released", released_at_revision: 2816 },
+      status: "released", reservation_status: "released" },
     second: { wu_id: BATCH[0], expected_agent: "harness-builder",
-      status: "released", released_at_revision: 2818 },
+      status: "released", reservation_status: "released" },
   }
   return state
 }
@@ -71,9 +71,12 @@ test("safety: ambiguous, active and unverified launch effects never auto-clear a
   noInterrupted.dispatches.second.status = "result_reconciled"
   assert.equal(inspect(noInterrupted).reason, "NO_RECENT_SETTLED_INTERRUPTION")
   const stale = fixture()
-  stale.dispatches.second.released_at_revision = 2700
-  stale.dispatches.first.released_at_revision = 2700
-  assert.equal(inspect(stale).eligible, false)
+  for (const d of Object.values(stale.dispatches)) {
+    d.status = "abandoned_reconciled"
+    d.reconciled = { at_revision: 2700 }
+    d.fence = { timestamp: new Date(NOW - 600000).toISOString() }
+  }
+  assert.equal(inspect(stale).reason, "NO_RECENT_SETTLED_INTERRUPTION")
 })
 
 test("safety: no bootstrap evidence or active orphan cooldown grants no automatic recovery", () => {
