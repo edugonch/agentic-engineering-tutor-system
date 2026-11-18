@@ -23,10 +23,24 @@ export function dispatchesForProgress(dispatches = {}) {
 }
 
 // Deliberately excludes checkpoints, blocker text, leases and revision counters.
-export function executionProgress(state) {
+function hashExecutionProgress(state, dispatches) {
   return stableHash({ ...(state.process_policy ? { process_policy: state.process_policy, process_recoveries: state.process_recoveries } : {}), ...(state.process_red ? { process_red: state.process_red } : {}), ...(state.time_policy ? { time_policy: state.time_policy } : {}), mandate: state.mandate, wu: state.wu, budget: state.budget,
-    dispatches: dispatchesForProgress(state.dispatches), candidates: state.candidates, reviews: state.reviews,
+    dispatches, candidates: state.candidates, reviews: state.reviews,
     ci: state.ci_evidence, binding: state.pr_binding, merge: state.merge, external_wait: state.external_wait })
+}
+export function executionProgress(state) {
+  return hashExecutionProgress(state, dispatchesForProgress(state.dispatches))
+}
+
+// Short-lived PR #100 runtime revisions also committed legitimate hashes with
+// the release annotations INCLUDED. Only historical journal replay may accept
+// this *exact* old algorithm. Fresh operations have one stable hash format.
+export function legacyExpandedExecutionProgress(state) {
+  return hashExecutionProgress(state, state.dispatches)
+}
+export function matchesNoProgressEvidence(state, recordedHash) {
+  return executionProgress(state) === recordedHash ||
+    legacyExpandedExecutionProgress(state) === recordedHash
 }
 export function recoveryAction(state) {
   if (state.completed) return { kind: "COMPLETE", action: "status" }
@@ -59,9 +73,19 @@ export function recoveryAction(state) {
       cls === "BLOCKED_AUTHORITY" ? "An applicable approved decision; reuse existing authorization" : "Resolve and verify the actual cause; preserve permissions and scope" }
 }
 
-export function supervisorProgress(state) {
+function supervisorHashFor(state, progress) {
   const { mode } = classifyContinuation(state)
   return mode === "ORDINARY"
-    ? executionProgress(state)
-    : stableHash({ phase: mode, progress: executionProgress(state), blocked_at_revision: state.blocker.at_revision })
+    ? progress
+    : stableHash({ phase: mode, progress, blocked_at_revision: state.blocker.at_revision })
+}
+export function supervisorProgress(state) {
+  return supervisorHashFor(state, executionProgress(state))
+}
+// Replay compatibility is checked against exactly two known, deterministic
+// algorithms. A mismatched WU, dispatch status, lease state, or evidence is not
+// authorized by the compatibility path. Do not use for fresh commits.
+export function historicalSupervisorProgressMatches(state, recordedHash) {
+  return supervisorProgress(state) === recordedHash ||
+    supervisorHashFor(state, legacyExpandedExecutionProgress(state)) === recordedHash
 }
