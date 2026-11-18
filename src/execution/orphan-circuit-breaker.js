@@ -5,7 +5,10 @@
 // by immediately starting new builders after every conservative settlement.
 // No ledger, authorization, worker or dispatch is changed by this assessment.
 export const ORPHAN_BUILDER_THRESHOLD = 2
-export const STABLE_RUNTIME_WINDOW_MS = 30 * 60 * 1000
+// Short anti-thrashing cooldown, not an assertion that future host restarts
+// are impossible. Exact child fencing and the durable three-attempt cap are
+// the real safeguards against duplicate work and runaway costs.
+export const STABLE_RUNTIME_WINDOW_MS = 90 * 1000
 
 export function inspectOrphanBuilderRisk(state, {
   nowMs = Date.now(), runtimeLoadedAtMs = null,
