@@ -14,10 +14,11 @@ The supervisor (or the operator using `recover_settled_tooling`) may record
 a **single audited `CLEAR_BLOCKER`** when every condition holds:
 
 - Exact active `BLOCKED_TOOLING` in an owner-approved Epic and live WU;
-- At least one nearby `harness-builder` or `harness-reviewer` launch from
-  that WU was either `released` **before launch claim**, or was durably
-  **fenced and abandoned/reconciled**; its journal settlement is within 20
-  revisions of the blocker;
+- At least one `harness-builder` or `harness-reviewer` dispatch from
+  the current WU was either `released` **before launch claim** (a terminal
+  `reservation_status=released`, so no child was ever created), or was durably
+  **fenced and abandoned/reconciled**, with its reconciliation recorded within
+  20 revisions of the blocker;
 - All dispatches in the execution are `released`, `result_reconciled`,
   or `abandoned_reconciled`; no outstanding identity, active phase,
   verification, external wait or process repair;
