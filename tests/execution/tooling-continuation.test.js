@@ -155,3 +155,31 @@ test("release provenance is reconstructed on replay; no backfill or mutable stat
   assert.equal(state.dispatches.unclaimed.released_from_status, "reserved")
   assert.equal(state.dispatches.unclaimed.status, "released")
 })
+
+test("an unprepared reservation released recently cannot masquerade as a failed worker launch", () => {
+  const state = fixture()
+  state.dispatches.first.released_from_status = "reserved"
+  state.dispatches.second.released_from_status = "reserved"
+  assert.equal(inspect(state).eligible, false)
+  assert.equal(inspect(state).reason, "NO_RECENT_SETTLED_INTERRUPTION")
+})
+
+test("a genuinely prepared, never-claimed launch release keeps precise replay provenance", () => {
+  let state = initialState()
+  state.revision = 10
+  state.mandate = { mandate_id: "M", authority_kind: "OWNER_APPROVED_EPIC" }
+  state.wu = { wu_id: "WU1", completed: false }
+  state.budget = { total_seconds: 100, used_seconds: 0, reserved_seconds: 0 }
+  const next = (operation_type, body) => {
+    state = applyEvent(state, {
+      operation_type, body,
+      previous_revision: state.revision, next_revision: state.revision + 1,
+    })
+  }
+  next("DISPATCH_RESERVE", { dispatch_id: "attempted", reserved_seconds: 0 })
+  next("DISPATCH_PREPARE", { dispatch_id: "attempted", expected_agent: "harness-builder" })
+  next("DISPATCH_RELEASE", { dispatch_id: "attempted" })
+  assert.equal(state.dispatches.attempted.released_at_revision, 13)
+  assert.equal(state.dispatches.attempted.released_from_status, "pending_launch")
+  assert.equal(state.dispatches.attempted.launch_call_id, undefined)
+})
