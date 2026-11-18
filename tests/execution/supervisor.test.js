@@ -6,8 +6,8 @@ import { join } from "node:path"
 import { createExecutionController } from "../../src/execution/execution.js"
 import { createExecutionSupervisor } from "../../src/execution/supervisor.js"
 import { runExecutionController } from "../../src/execution/controller-tool.js"
-import { supervisorProgress, executionProgress } from "../../src/execution/progress.js"
-import { project } from "../../src/execution/state.js"
+import { supervisorProgress, executionProgress, legacyExpandedExecutionProgress, historicalSupervisorProgressMatches } from "../../src/execution/progress.js"
+import { project, applyEvent } from "../../src/execution/state.js"
 
 async function fixture(t, planning = false) {
   const root = await mkdtemp(join(tmpdir(), "supervisor-"))
@@ -472,4 +472,80 @@ test("derived release annotations alone cannot forge supervisor progress", async
   assert.equal(supervisorProgress(changed), baseHash)
   changed.dispatches.old.reservation_status = "reserved"
   assert.notEqual(supervisorProgress(changed), baseHash)
+})
+
+test("PR #100 supervisor hashes replay only historically, not as new continuation authority", async t => {
+  const f = await fixture(t)
+  await f.commit("DISPATCH_RESERVE", { dispatch_id: "recent-review", reserved_seconds: 0 })
+  await f.commit("DISPATCH_PREPARE", {
+    dispatch_id: "recent-review", prepared_by_session_id: "ses_root",
+    expected_agent: "harness-reviewer", claim_required: true,
+  })
+  await f.commit("DISPATCH_RELEASE", { dispatch_id: "recent-review" })
+  const snapshot = await f.c.snapshot()
+  const state = snapshot.state
+  const expandedHash = legacyExpandedExecutionProgress(state)
+  assert.notEqual(expandedHash, supervisorProgress(state))
+  assert.equal(historicalSupervisorProgressMatches(state, expandedHash), true)
+
+  function event(previous, operation_type, body) {
+    return {
+      operation_type, body, previous_revision: previous.revision,
+      next_revision: previous.revision + 1,
+    }
+  }
+  const intent_id = "msg_harness_intermediate_v100"
+  const continueEvent = event(state, "SUPERVISOR_CONTINUE", {
+    intent_id, progress_hash: expandedHash, attempt: 1,
+  })
+  // New writes cannot choose the old expanded format. Historical validation
+  // accepts only the exact known algorithm for the original immutable event.
+  assert.throws(() => applyEvent(state, continueEvent), /Continuation no longer eligible/)
+  let replayed = applyEvent(state, continueEvent, { historicalReplay: true })
+  replayed = applyEvent(replayed, event(replayed, "SUPERVISOR_SENT", { intent_id }),
+    { historicalReplay: true })
+  replayed = applyEvent(replayed, event(replayed, "SUPERVISOR_RECEIVED", {
+    intent_id, session_id: "ses_root", progress_hash: expandedHash,
+  }), { historicalReplay: true })
+  replayed = applyEvent(replayed, event(replayed, "SUPERVISOR_TURN_OBSERVED", {
+    intent_id, progress_hash: expandedHash,
+  }), { historicalReplay: true })
+  assert.equal(replayed.supervisor.intent.turn_observed, true)
+  assert.equal(replayed.supervisor.intent.progress_hash, expandedHash)
+
+  const unrelated = structuredClone(state)
+  unrelated.dispatches["recent-review"].status = "launched"
+  assert.equal(historicalSupervisorProgressMatches(unrelated, expandedHash), false)
+})
+
+test("NO_PROGRESS blocker recorded with short-lived expanded hash remains uncleareable without real progress", async t => {
+  const f = await fixture(t)
+  await f.commit("DISPATCH_RESERVE", { dispatch_id: "old-review", reserved_seconds: 0 })
+  await f.commit("DISPATCH_RELEASE", { dispatch_id: "old-review" })
+  const state = (await f.c.snapshot()).state
+  const expanded = legacyExpandedExecutionProgress(state)
+  assert.notEqual(expanded, executionProgress(state))
+
+  const blocked = structuredClone(state)
+  blocked.blocker = {
+    class: "NO_PROGRESS", reason: "two acknowledged no-progress root turns",
+    at_revision: blocked.revision, progress_hash: expanded,
+  }
+  const clearEvent = {
+    operation_type: "CLEAR_BLOCKER",
+    previous_revision: blocked.revision, next_revision: blocked.revision + 1,
+    body: {
+      blocker_class: "NO_PROGRESS",
+      blocked_at_revision: blocked.revision,
+      resolution: "Only a new string; no real durable execution progress",
+    },
+  }
+  assert.throws(() => applyEvent(blocked, clearEvent),
+    /NO_PROGRESS requires new durable execution evidence/)
+  assert.throws(() => applyEvent(blocked, clearEvent, { historicalReplay: true }),
+    /NO_PROGRESS requires new durable execution evidence/)
+
+  const progressed = structuredClone(blocked)
+  progressed.dispatches["old-review"].status = "result_reconciled"
+  assert.equal(historicalSupervisorProgressMatches(progressed, expanded), false)
 })
