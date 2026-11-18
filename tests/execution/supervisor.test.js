@@ -5,6 +5,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createExecutionController } from "../../src/execution/execution.js"
 import { createExecutionSupervisor } from "../../src/execution/supervisor.js"
+import { runExecutionController } from "../../src/execution/controller-tool.js"
 
 async function fixture(t, planning = false) {
   const root = await mkdtemp(join(tmpdir(), "supervisor-"))
@@ -173,6 +174,55 @@ test("tooling blocker receives one non-billable diagnostic wake, then ordinary c
   assert.match(prompts[1].text, /Continue execution E from operational_status first/)
 })
 
+test("EPIC-05: direct tooling incident after a released launch does not block the Epic across turns", async t => {
+  const f = await fixture(t)
+  await f.commit("DISPATCH_RESERVE", { dispatch_id: "e0528-build-1", reserved_seconds: 10 })
+  await f.commit("DISPATCH_PREPARE", { dispatch_id: "e0528-build-1",
+    expected_agent: "harness-builder", prepared_by_session_id: "ses_root", claim_required: true })
+  await f.commit("DISPATCH_RELEASE", { dispatch_id: "e0528-build-1" })
+  const result = await runExecutionController(f.root, {
+    action: "block", execution_id: "E", session_id: "ses_root",
+    class: "BLOCKED_TOOLING", reason: "Interrupted before child creation",
+  }, undefined, { runtime_loaded_at_ms: Date.now() - 300000 })
+  assert.equal(result.tooling_continuation, "RECOVERED_SAME_TURN")
+  const state = (await f.c.snapshot()).state
+  assert.equal(state.blocker, null)
+  assert.equal(state.tooling_continuations.WU1, 1)
+  assert.equal(state.last_blocker_resolution.recovery_evidence.kind, "SETTLED_DISPATCH_CONTINUATION")
+  assert.equal(state.dispatches["e0528-build-1"].status, "released")
+  assert.equal(state.budget.reserved_seconds, 0)
+  assert.equal(state.budget.used_seconds, 0)
+})
+
+test("EPIC-05: supervisor clears settled interrupted launch once, then resumes same WU without new approval", async t => {
+  const f = await fixture(t)
+  await f.commit("DISPATCH_RESERVE", { dispatch_id: "e0528-build-1", reserved_seconds: 10 })
+  await f.commit("DISPATCH_PREPARE", { dispatch_id: "e0528-build-1",
+    expected_agent: "harness-builder", prepared_by_session_id: "ses_root", claim_required: true })
+  await f.commit("DISPATCH_RELEASE", { dispatch_id: "e0528-build-1" })
+  await f.commit("BLOCK", { class: "BLOCKED_TOOLING",
+    reason: "Builder session was interrupted; released launch never had a child" })
+  const before = (await f.c.snapshot()).state
+  assert.equal(before.blocker.class, "BLOCKED_TOOLING")
+  const sup = createExecutionSupervisor(f.ctx, f.root, {
+    now: () => Date.now(), runtimeStartedAtMs: Date.now() - 10 * 60 * 1000,
+  })
+  t.after(() => sup.dispose())
+  assert.equal(await sup.tick("E"), true)
+  const after = (await f.c.snapshot()).state
+  assert.equal(after.blocker, null)
+  assert.equal(after.tooling_continuations.WU1, 1)
+  assert.deepEqual(after.dispatches, before.dispatches)
+  assert.equal(after.budget.used_seconds, before.budget.used_seconds)
+  assert.equal(after.wu.wu_id, "WU1")
+  assert.equal(after.last_blocker_resolution.recovery_evidence.kind, "SETTLED_DISPATCH_CONTINUATION")
+  assert.equal(f.prompts.size, 1)
+  const next = [...f.prompts.values()][0].text
+  assert.match(next, /LAUNCH_ONE_BUILDER/)
+  assert.doesNotMatch(next, /One-time tooling diagnosis/)
+  assert.equal(await sup.tick("E"), false, "do not queue duplicate unacknowledged continuation")
+})
+
 test("authority and scope blockers never receive autonomous diagnostic wake", async t => {
   for (const cls of ["BLOCKED_AUTHORITY", "BLOCKED_SCOPE", "BLOCKED_SECURITY"]) {
     const f = await fixture(t)
@@ -313,7 +363,7 @@ test("stability hold auto-arms and resumes after due without a user message, eve
   let nowMs = Date.now()
   const timers = []
   const make = () => createExecutionSupervisor(f.ctx, f.root, {
-    now: () => nowMs, runtimeStartedAtMs: nowMs - 5 * 60000,
+    now: () => nowMs, runtimeStartedAtMs: nowMs - 30 * 1000,
     schedule: (fn, delay) => { const timer = { fn, delay }; timers.push(timer); return timer },
     cancel: timer => { timer.cancelled = true },
   })
@@ -321,7 +371,7 @@ test("stability hold auto-arms and resumes after due without a user message, eve
   assert.equal(await first.tick("E"), false)
   assert.equal(f.prompts.size, 0)
   assert.equal(timers.length, 1)
-  assert.ok(timers[0].delay > 20 * 60000)
+  assert.ok(timers[0].delay > 45 * 1000)
   first.dispose()
   assert.equal(timers[0].cancelled, true)
   const second = make()
@@ -329,7 +379,7 @@ test("stability hold auto-arms and resumes after due without a user message, eve
   await second.resume()
   assert.equal(timers.length, 2)
   assert.equal(f.prompts.size, 0)
-  nowMs += 31 * 60000
+  nowMs += 100 * 1000
   // The timer itself drives a new tick. It must re-read durable state, rather
   // than unconditionally invoking the builder or silently bypassing admission.
   timers[1].fn()

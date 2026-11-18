@@ -22,7 +22,7 @@ export function composeSupervisorPrompt({
   ].join(" ").replace("Derive_and_stage_next_wu_contract", "derive_and_stage_next_wu_contract")
   if (toolingTriage) return [
     `One-time tooling diagnosis for execution ${execution}, blocker at revision ${state.blocker.at_revision}.`,
-    "Read exact runtime/source facts and existing recovery audit once. harness_retry_blocked_verification applies ONLY to a frozen setup-timeout FAIL receipt, never to an undeclared setup command. Otherwise remain read-only and clear only independently repaired causes.",
+    "Read exact runtime/source facts and existing recovery audit once. Check operational_status.tooling_continuation before diagnosis: a nearby settled interrupted launch with no live effects qualifies for bounded audited recovery (automated by supervisor or recover_settled_tooling). harness_retry_blocked_verification applies ONLY to a frozen setup-timeout FAIL receipt. Never demand proof that a future restart cannot happen.",
     "Never start a new WU, reserve or launch a dispatch during this tooling diagnostic; preserve the blocker if proof is missing.",
     base,
   ].join(" ")

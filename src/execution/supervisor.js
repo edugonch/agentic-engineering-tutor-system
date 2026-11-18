@@ -10,6 +10,7 @@ import { supervisorProgress } from "./progress.js"
 import { stableHash } from "./serialize.js"
 import { classifyContinuation, hasPendingSupervisorDispatch, routeExecution } from "./workflow-router.js"
 import { inspectOrphanBuilderRisk } from "./orphan-circuit-breaker.js"
+import { inspectSettledToolingContinuation, settledToolingClearBody } from "./tooling-continuation.js"
 import { composeSupervisorPrompt } from "./supervisor-prompt.js"
 
 export function createExecutionSupervisor(ctx, projectRoot, {
@@ -74,10 +75,28 @@ export function createExecutionSupervisor(ctx, projectRoot, {
         }, `${execution}:clear-blocker:${blocker.at_revision}`)
         state = (await c.snapshot()).state
       }
-      const { toolingTriage, contractTriage, scopeTriage } = classifyContinuation(state)
+      let { toolingTriage, contractTriage, scopeTriage } = classifyContinuation(state)
       if (!session || state.completed || (state.blocker && !expiredWait(state) && !toolingTriage && !contractTriage && !scopeTriage) || state.mandate?.authority_kind !== "OWNER_APPROVED_EPIC") { disarm(execution); return false }
       const info = await identity(session)
       if (info.outcome !== "succeeded") { disarm(execution); return false } // never override cancellation or failure
+      // The controller's old one-shot diagnosis left settled, interrupted
+      // builder/reviewer attempts in a permanent tooling stop. An approved
+      // Epic needs no new owner authority for a bounded retry after all prior
+      // effects are durably settled. Recheck exact state in CLEAR_BLOCKER.
+      if (state.blocker?.class === "BLOCKED_TOOLING") {
+        const plan = inspectSettledToolingContinuation(state, {
+          nowMs: now(), runtimeLoadedAtMs: runtimeStartedAtMs,
+        })
+        if (plan.eligible) {
+          await commit(c, session, "CLEAR_BLOCKER", settledToolingClearBody(state, plan),
+            `${execution}:settled-tooling:${plan.blocked_at_revision}`)
+          state = (await c.snapshot()).state
+          ;({ toolingTriage, contractTriage, scopeTriage } = classifyContinuation(state))
+        } else if (plan.reason === "RUNTIME_COOLDOWN_ACTIVE") {
+          arm(execution, now() + plan.retry_after_seconds * 1000 + 100)
+          return false
+        }
+      }
       const obsoleteCiStop = expiredWait(state)
       if (obsoleteCiStop?.kind === "CI_PENDING") {
         await commit(c, session, "CLEAR_BLOCKER", {
