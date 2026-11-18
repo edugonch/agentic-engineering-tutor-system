@@ -22,8 +22,8 @@ export function composeSupervisorPrompt({
   ].join(" ").replace("Derive_and_stage_next_wu_contract", "derive_and_stage_next_wu_contract")
   if (toolingTriage) return [
     `One-time tooling diagnosis for execution ${execution}, blocker at revision ${state.blocker.at_revision}.`,
-    "Read exact runtime/source facts and existing recovery audit once. harness_retry_blocked_verification applies ONLY to a frozen setup-timeout FAIL receipt, never to an undeclared setup command. Otherwise remain read-only and clear only independently repaired causes.",
-    "Never start a new WU, reserve or launch a dispatch during this tooling diagnostic; preserve the blocker if proof is missing.",
+    "If every prior child is durably settled, a real worker attempt is recorded and the host root is live, use recover_settled_tooling to confirm journal invariants and resume the same WU. This is a bounded attempt, not proof of permanent host stability. harness_retry_blocked_verification is ONLY for a frozen setup-timeout FAIL receipt.",
+    "Never launch or reserve while a blocker remains or any previous child is unsettled. Preserve hard stops and unknown identities.",
     base,
   ].join(" ")
   const route = routeExecution(state)
