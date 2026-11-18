@@ -665,15 +665,9 @@ export async function runExecutionController(projectRoot, input, candidateRegist
       body.expected_agent = String(input.launch_agent)
       body.claim_required = true
       const { state } = await controller.snapshot()
-      if (body.expected_agent === "harness-builder") {
-        const risk = inspectOrphanBuilderRisk(state, {
-          nowMs: options.now_ms ?? Date.now(),
-          runtimeLoadedAtMs: options.runtime_loaded_at_ms ?? null,
-        })
-        if (risk.launch_temporarily_blocked) {
-          throw new Error(`RUNTIME_STABILITY_GUARD: ${risk.abandoned_builder_dispatch_count} previously abandoned builders in WU ${risk.wu_id}; runtime has not remained stable for the ${risk.retry_after_seconds}s evidence window. Do not consume another reservation or launch a competing child. Inspect the effective time_policy and host logs; this is a temporary guard, not proof that OpenCode restarted.`)
-        }
-      }
+      // No arbitrary elapsed-time launch ceiling: durable controller admission
+      // already rejects an unsettled/ambiguous sibling builder. Historical
+      // orphan risk is diagnostic, never an independent hard stop.
       if (body.expected_agent === 'harness-reviewer' && activeRecovery(state)) {
         const candidate = state.candidates[input.candidate_id]
         if (!candidate || candidate.wu_id !== state.wu.wu_id || candidate.superseded_by_contract) throw new Error('prepare_launch for process review requires the exact recorded candidate_id')
