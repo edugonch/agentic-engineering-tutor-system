@@ -2,7 +2,7 @@
 // session.context contains projected assistant.content tool entries, after the
 // last compaction only. Missing evidence is never proof of a failed launch.
 import { join } from "node:path"
-import { readdir } from "node:fs/promises"
+import { readFile, readdir } from "node:fs/promises"
 import { createExecutionController } from "./execution.js"
 import { stableHash } from "./serialize.js"
 import { findApprovedDispatchAbandonment, findApprovedOrphanRecoveryPolicy } from "../project-knowledge.js"
@@ -26,9 +26,18 @@ const key = (session, call) => JSON.stringify([session, call])
 
 
 /**
- * Fail-closed durable tool boundary. The journal fence is authoritative across
- * plugin restarts: no in-memory flag or old session outcome can unfence a child.
- * An unreadable existing controller is not assumed to be safe.
+ * Fail-closed durable tool boundary. The immutable journal remains authoritative
+ * across plugin restarts: no in-memory negative result can unfence a child.
+ *
+ * IMPORTANT: execute.before applies to *every* OpenCode tool (even a standalone
+ * builtin "build" agent calling pwd). Replaying every full, multi-thousand-event
+ * ALFRAN controller journal inside this hook can outlive the host's tool-call
+ * continuation eligibility, causing "Continuation no longer eligible" before
+ * shell/read ever runs. First do an exact session-ID byte prefilter of each
+ * journal; only a journal that could contain this session merits full validated
+ * replay. All committed fences record the exact child_session_id in that file.
+ * The file is re-read each time: an appended fence can never be hidden by an
+ * obsolete in-memory cache. Unreadable journals still fail closed.
  */
 export async function assertSessionNotOrphanFenced(projectRoot, sessionID) {
   if (!sessionID) throw new Error("ORPHAN_FENCE_IDENTITY_REQUIRED")
@@ -36,9 +45,17 @@ export async function assertSessionNotOrphanFenced(projectRoot, sessionID) {
   let executions
   try { executions = await readdir(dir, { withFileTypes: true }) }
   catch (error) { if (error.code === "ENOENT") return; throw error }
+  const needle = Buffer.from(JSON.stringify(sessionID))
   for (const entry of executions) {
     if (!entry.isDirectory()) continue
-    const controller = await createExecutionController({ dir: join(dir, entry.name) })
+    const executionDir = join(dir, entry.name)
+    let raw
+    try { raw = await readFile(join(executionDir, "events.ndjson")) }
+    catch (error) { if (error.code === "ENOENT") continue; throw error }
+    if (!raw.includes(needle)) continue
+    // A matching string might merely be a checkpoint or launch receipt, so
+    // only a fully verified projection of the canonical journal can deny tools.
+    const controller = await createExecutionController({ dir: executionDir })
     const { state } = await controller.snapshot()
     if (Object.values(state.dispatches).some(d => d.fence?.child_session_id === sessionID)) {
       throw new Error("ORPHAN_CHILD_FENCED: this child was abandoned and may not execute further tools")
