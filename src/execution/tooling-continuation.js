@@ -46,7 +46,8 @@ export function inspectSettledToolingContinuation(state, {
     // An unclaimed RELEASED dispatch has no child side effect.
     // Do not retroactively add a release revision to historical projections.
     if (d.status === "released")
-      return d.reservation_status === "released" && !d.launch_call_id &&
+      return d.reservation_status === "released" &&
+        d.released_from_status === "pending_launch" && !d.launch_call_id &&
         Number.isSafeInteger(d.released_at_revision) &&
         d.released_at_revision <= blocker.at_revision &&
         d.released_at_revision >= blocker.at_revision - 20
