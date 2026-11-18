@@ -108,7 +108,7 @@ test("fencing: fabricated evidence, stale WU or changed dispatch set cannot clea
 
 test("bounded cost: a persistent failure does not cause indefinite automatic clear/relaunch", () => {
   const state = fixture()
-  state.tooling_continuations[BATCH[0]] = MAX_SETTLED_TOOLING_CONTINUATIONS_PER_WU
+  state.tooling_continuations = { [BATCH[0]]: MAX_SETTLED_TOOLING_CONTINUATIONS_PER_WU }
   assert.equal(inspect(state).reason, "RETRY_CAP_REACHED")
   assert.equal(inspect(state).eligible, false)
   const falseSetup = fixture()
