@@ -860,6 +860,25 @@ export async function runExecutionController(projectRoot, input, candidateRegist
     if (cls === "BLOCKED_PROCESS" && input.process_kind !== "TDD_ORDER") throw new Error("Typed process deviation required")
     if (!reason) throw new Error("block requires reason (a human-readable explanation of the stop).")
     const res = await commitObservation(controller, holder, `${executionId}:block`, "BLOCK", { class: cls, reason, ...(input.authority_question ? { authority_question: input.authority_question } : {}), ...(cls === "BLOCKED_SCOPE" ? { scope_cause: input.scope_cause } : {}), ...(cls === "BLOCKED_PROCESS" ? { kind: input.process_kind } : {}) }, () => true, state => Boolean(state.blocker))
+    // Do not send the owner into another diagnostic loop for a never-launched
+    // or durably fenced worker. Record the original incident, then retire the
+    // exact blocker in the same tool turn if the runtime + journal prove it is
+    // safe to attempt the already-authorized WU again. A crash between these
+    // two commits is recoverable by the supervisor's identical CAS path.
+    if (cls === "BLOCKED_TOOLING") {
+      const recorded = await controller.snapshot()
+      const plan = inspectSettledToolingContinuation(recorded.state, {
+        nowMs: options.now_ms ?? Date.now(),
+        runtimeLoadedAtMs: options.runtime_loaded_at_ms ?? null,
+      })
+      if (plan.eligible) {
+        const cleared = await commitAction(controller, holder,
+          `${executionId}:settled-tooling:${plan.blocked_at_revision}`,
+          "CLEAR_BLOCKER", settledToolingClearBody(recorded.state, plan))
+        return { action, commit_status: cleared.status, tooling_continuation: "RECOVERED_SAME_TURN",
+          recovery: plan, ...(await summary(controller)) }
+      }
+    }
     return { action, commit_status: res.status, ...(await summary(controller)) }
   }
 
