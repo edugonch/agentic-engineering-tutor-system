@@ -45,6 +45,9 @@ export async function assertSessionNotOrphanFenced(projectRoot, sessionID) {
   let executions
   try { executions = await readdir(dir, { withFileTypes: true }) }
   catch (error) { if (error.code === "ENOENT") return; throw error }
+  // Only canonical ASCII OpenCode session IDs get the cheap negative path.
+  // Unexpected IDs retain the original full-projection, fail-closed behavior.
+  const canonicalID = /^ses_[A-Za-z0-9_-]+$/.test(sessionID)
   const needle = Buffer.from(JSON.stringify(sessionID))
   for (const entry of executions) {
     if (!entry.isDirectory()) continue
@@ -52,7 +55,7 @@ export async function assertSessionNotOrphanFenced(projectRoot, sessionID) {
     let raw
     try { raw = await readFile(join(executionDir, "events.ndjson")) }
     catch (error) { if (error.code === "ENOENT") continue; throw error }
-    if (!raw.includes(needle)) continue
+    if (canonicalID && !raw.includes(needle)) continue
     // A matching string might merely be a checkpoint or launch receipt, so
     // only a fully verified projection of the canonical journal can deny tools.
     const controller = await createExecutionController({ dir: executionDir })
