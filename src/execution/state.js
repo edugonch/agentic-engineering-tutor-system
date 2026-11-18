@@ -4,7 +4,7 @@ import { stableHash, sha256 } from "./serialize.js"
 import { PLANNING_ESTIMATES } from "./time-policy.js"
 import { isTechnicalWuContractBlocker } from "./jit-contract.js"
 import { validateContractCorrection } from "./contract-correction.js"
-import { executionProgress, supervisorProgress } from "./progress.js"
+import { executionProgress, supervisorProgress, historicalSupervisorProgressMatches, matchesNoProgressEvidence } from "./progress.js"
 import { isStaleWorktreeScopeBlocker } from "./scope-recovery.js"
 import { wuBudgetUsage } from "./wu-budget.js"
 import { assertBatchConfiguration, requireBatchCoverage } from "./wu-batch.js"
@@ -250,7 +250,9 @@ export function applyEvent(previous, event, { historicalReplay = false } = {}) {
       const contractTriage = isTechnicalWuContractBlocker(state.blocker) && (!state.wu || state.wu.completed)
       const scopeTriage = isStaleWorktreeScopeBlocker(state.blocker)
       if (!state.supervisor || (state.blocker && !expiredWait(state) && !toolingTriage && !contractTriage && !scopeTriage) ||
-          state.completed || supervisorProgress(state) !== body.progress_hash) throw new Error("Continuation no longer eligible")
+          state.completed || !(historicalReplay
+            ? historicalSupervisorProgressMatches(state, body.progress_hash)
+            : supervisorProgress(state) === body.progress_hash)) throw new Error("Continuation no longer eligible")
       const previous = state.supervisor.intent
       const attempt = body.attempt ?? 1
       if (!Number.isSafeInteger(attempt) || attempt < 1 || attempt > 2) throw new Error("Supervisor continuation attempt is invalid")
@@ -281,7 +283,9 @@ export function applyEvent(previous, event, { historicalReplay = false } = {}) {
     case "SUPERVISOR_TURN_OBSERVED": {
       const intent = state.supervisor?.intent
       if (!intent || intent.intent_id !== body.intent_id || !intent.sent || !intent.received || intent.turn_observed ||
-          intent.progress_hash !== body.progress_hash || supervisorProgress(state) !== intent.progress_hash) {
+          intent.progress_hash !== body.progress_hash || !(historicalReplay
+            ? historicalSupervisorProgressMatches(state, intent.progress_hash)
+            : supervisorProgress(state) === intent.progress_hash)) {
         throw new Error("Supervisor turn observation requires delivered same-progress root completion")
       }
       intent.turn_observed = true
@@ -1197,7 +1201,10 @@ export function applyEvent(previous, event, { historicalReplay = false } = {}) {
     }
 
     case "CLEAR_BLOCKER": {
-      if (state.blocker?.class === "NO_PROGRESS" && state.blocker.progress_hash === executionProgress(state)) throw new Error("NO_PROGRESS requires new durable execution evidence; a resolution string or checkpoint is insufficient")
+      if (state.blocker?.class === "NO_PROGRESS" &&
+          matchesNoProgressEvidence(state, state.blocker.progress_hash)) {
+        throw new Error("NO_PROGRESS requires new durable execution evidence; a resolution string or checkpoint is insufficient")
+      }
       if (!state.blocker) throw new Error("CLEAR_BLOCKER requires an active blocker.")
       const historicalTimeStop = state.blocker.class === "BUDGET_EXHAUSTED"
       if (!RECOVERABLE_BLOCKER_CLASSES.has(state.blocker.class) && !historicalTimeStop) {
