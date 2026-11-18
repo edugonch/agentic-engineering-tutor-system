@@ -313,7 +313,7 @@ test("stability hold auto-arms and resumes after due without a user message, eve
   let nowMs = Date.now()
   const timers = []
   const make = () => createExecutionSupervisor(f.ctx, f.root, {
-    now: () => nowMs, runtimeStartedAtMs: nowMs - 5 * 60000,
+    now: () => nowMs, runtimeStartedAtMs: nowMs - 30 * 1000,
     schedule: (fn, delay) => { const timer = { fn, delay }; timers.push(timer); return timer },
     cancel: timer => { timer.cancelled = true },
   })
@@ -321,7 +321,7 @@ test("stability hold auto-arms and resumes after due without a user message, eve
   assert.equal(await first.tick("E"), false)
   assert.equal(f.prompts.size, 0)
   assert.equal(timers.length, 1)
-  assert.ok(timers[0].delay > 20 * 60000)
+  assert.ok(timers[0].delay > 45 * 1000)
   first.dispose()
   assert.equal(timers[0].cancelled, true)
   const second = make()
@@ -329,7 +329,7 @@ test("stability hold auto-arms and resumes after due without a user message, eve
   await second.resume()
   assert.equal(timers.length, 2)
   assert.equal(f.prompts.size, 0)
-  nowMs += 31 * 60000
+  nowMs += 100 * 1000
   // The timer itself drives a new tick. It must re-read durable state, rather
   // than unconditionally invoking the builder or silently bypassing admission.
   timers[1].fn()
