@@ -275,7 +275,7 @@ test("no-progress retry cannot be committed without admitted and observed previo
   assert.equal((await f.c.snapshot()).state.blocker, null)
 })
 
-test("stability hold auto-arms and resumes after due without a user message, even after supervisor restart", async t => {
+test("two fenced and reconciled builders do not impose an arbitrary 30-minute cooldown", async t => {
   const f = await fixture(t)
   t.after(() => f.s.dispose())
   for (let i = 1; i <= 2; i++) {
@@ -310,34 +310,9 @@ test("stability hold auto-arms and resumes after due without a user message, eve
       dispatch_id, fence_generation: d.fence.generation,
     })
   }
-  let nowMs = Date.now()
-  const timers = []
-  const make = () => createExecutionSupervisor(f.ctx, f.root, {
-    now: () => nowMs, runtimeStartedAtMs: nowMs - 5 * 60000,
-    schedule: (fn, delay) => { const timer = { fn, delay }; timers.push(timer); return timer },
-    cancel: timer => { timer.cancelled = true },
-  })
-  const first = make()
-  assert.equal(await first.tick("E"), false)
-  assert.equal(f.prompts.size, 0)
-  assert.equal(timers.length, 1)
-  assert.ok(timers[0].delay > 20 * 60000)
-  first.dispose()
-  assert.equal(timers[0].cancelled, true)
-  const second = make()
-  t.after(() => second.dispose())
-  await second.resume()
-  assert.equal(timers.length, 2)
-  assert.equal(f.prompts.size, 0)
-  nowMs += 31 * 60000
-  // The timer itself drives a new tick. It must re-read durable state, rather
-  // than unconditionally invoking the builder or silently bypassing admission.
-  timers[1].fn()
-  for (let i = 0; i < 40 && !f.prompts.size; i++)
-    await new Promise(resolve => setTimeout(resolve, 10))
+  assert.equal(await f.s.tick("E"), true)
   assert.equal(f.prompts.size, 1)
-  assert.match([...f.prompts.values()][0].text, /Continue execution E from operational_status first/)
-  assert.equal((await f.c.snapshot()).state.wu.wu_id, "WU1")
+  assert.match([...f.prompts.values()][0].text, /Continue execution E/)
   assert.equal((await f.c.snapshot()).state.budget.used_seconds, 20)
 })
 
