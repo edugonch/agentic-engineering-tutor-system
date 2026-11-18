@@ -5,6 +5,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createExecutionController } from "../../src/execution/execution.js"
 import { createExecutionSupervisor } from "../../src/execution/supervisor.js"
+import { runExecutionController } from "../../src/execution/controller-tool.js"
 
 async function fixture(t, planning = false) {
   const root = await mkdtemp(join(tmpdir(), "supervisor-"))
@@ -384,4 +385,29 @@ test("an unrelated tooling claim without a settled worker is never auto-cleared"
   await f.commit("BLOCK", { class: "BLOCKED_TOOLING", reason: "verification setup failed" })
   assert.equal(await f.s.tick("E"), true)
   assert.equal((await f.c.snapshot()).state.blocker.class, "BLOCKED_TOOLING")
+})
+
+test("explicit recover_settled_tooling requires positive host root identity and exact journal proof", async t => {
+  const f = await fixture(t)
+  await f.commit("DISPATCH_RESERVE", { dispatch_id: "recovered", reserved_seconds: 10 })
+  await f.commit("DISPATCH_PREPARE", { dispatch_id: "recovered", expected_agent: "harness-builder" })
+  await f.commit("DISPATCH_LAUNCH", { dispatch_id: "recovered", session_id: "ses_child" })
+  await f.commit("DISPATCH_FINISH", { dispatch_id: "recovered", result: "interrupted" })
+  await f.commit("DISPATCH_RECONCILE", { dispatch_id: "recovered", verdict: "FAIL" })
+  await f.commit("BLOCK", { class: "BLOCKED_TOOLING", reason: "runtime execution interruption" })
+  const call = options => runExecutionController(f.root, {
+    action: "recover_settled_tooling", execution_id: "E", session_id: "ses_root",
+  }, undefined, options)
+  await assert.rejects(call({}), /ROOT_PROBE_REQUIRED/)
+  assert.equal((await f.c.snapshot()).state.blocker.class, "BLOCKED_TOOLING")
+  const recovered = await call({ runtime_root_observed: true })
+  assert.equal(recovered.status, "RECOVERED_SETTLED_TOOLING")
+  assert.equal(recovered.blocker, null)
+  assert.equal(recovered.recovery_evidence.kind, "SETTLED_TOOLING_CONTINUATION")
+  assert.equal(recovered.dispatches.find(d => d.dispatch_id === "recovered").status, "result_reconciled")
+  const journal = await f.c.snapshot()
+  assert.equal(journal.events.filter(e => e.operation_type === "CLEAR_BLOCKER").length, 1)
+  const second = await call({ runtime_root_observed: true })
+  assert.equal(second.status, "NOT_RECOVERABLE")
+  assert.equal(journal.events.length, (await f.c.snapshot()).events.length)
 })
