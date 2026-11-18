@@ -39,14 +39,15 @@ test("read-only risk report never attributes unknown cause to OpenCode restart",
 
 test("two recent aborted builders hold only new builder admission until observed runtime and cooldown stabilize", () => {
   const s = fixture()
-  const recent = inspectOrphanBuilderRisk(s, { nowMs: at, runtimeLoadedAtMs: at - 5 * 60000 })
+  const recent = inspectOrphanBuilderRisk(s, { nowMs: at, runtimeLoadedAtMs: at - 30 * 1000 })
   assert.equal(recent.launch_temporarily_blocked, true)
-  assert.equal(recent.retry_after_seconds, 30 * 60 - 5 * 60)
+  assert.equal(recent.retry_after_seconds, 60)
+  s.dispatches["build-3"].fence.timestamp = new Date(at - 30 * 1000).toISOString()
   const oldRuntimeRecentAbandon = inspectOrphanBuilderRisk(s, {
     nowMs: at, runtimeLoadedAtMs: at - STABLE_RUNTIME_WINDOW_MS * 2,
   })
   assert.equal(oldRuntimeRecentAbandon.launch_temporarily_blocked, true)
-  assert.equal(oldRuntimeRecentAbandon.retry_after_seconds, 22 * 60)
+  assert.equal(oldRuntimeRecentAbandon.retry_after_seconds, 60)
   const stable = inspectOrphanBuilderRisk(s, {
     nowMs: at + STABLE_RUNTIME_WINDOW_MS, runtimeLoadedAtMs: at - STABLE_RUNTIME_WINDOW_MS * 2,
   })
