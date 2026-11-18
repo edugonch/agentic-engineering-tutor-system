@@ -22,6 +22,17 @@ export function inspectToolingContinuity(state, events = []) {
   if (unsettled.length > 0)
     return { allowed: false, reason: "UNSETTLED_DISPATCH", dispatch_ids: unsettled }
 
+  // A generic prose BLOCKED_TOOLING note is not recovery evidence. Require
+  // at least one real, settled worker/reviewer attempt associated with this
+  // active WU, with a recorded launch identity or fenced abandonment. An empty
+  // controller or a setup-only failure is *not* enough to auto-clear.
+  const priorWorker = Object.values(state.dispatches ?? {}).some(d =>
+    d.wu_id === state.wu.wu_id &&
+    ["harness-builder", "harness-reviewer"].includes(d.expected_agent) &&
+    SETTLED.has(d.status) &&
+    (d.status === "abandoned_reconciled" || Boolean(d.session_id || d.launch_call_id)))
+  if (!priorWorker) return { allowed: false, reason: "NO_SETTLED_WORKER_ATTEMPT_PROVEN" }
+
   // No repeated recovery loop after two root resumptions that produced no
   // candidate/review/merge/WU progress. The owner can still clear a blocker
   // through the existing governed tool, with new evidence.
