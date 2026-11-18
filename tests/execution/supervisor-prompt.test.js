@@ -22,7 +22,8 @@ test("compact supervisor prompt preserves mandatory gating for four modes", () =
   }, toolingTriage: true })
   assert.match(tooling, /One-time tooling diagnosis/)
   assert.match(tooling, /harness_retry_blocked_verification/)
-  assert.match(tooling, /Never start a new WU, reserve or launch a dispatch/)
+  assert.match(tooling, /recover_settled_tooling/)
+  assert.match(tooling, /Never launch or reserve while a blocker remains/)
   const contract = composeSupervisorPrompt({ execution, state: {
     ...normal(), blocker: { class: "BLOCKED_AUTHORITY", at_revision: 19 },
   }, contractTriage: true })
