@@ -5,6 +5,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createExecutionController } from "../../src/execution/execution.js"
 import { createExecutionSupervisor } from "../../src/execution/supervisor.js"
+import { runExecutionController } from "../../src/execution/controller-tool.js"
 
 async function fixture(t, planning = false) {
   const root = await mkdtemp(join(tmpdir(), "supervisor-"))
@@ -171,6 +172,26 @@ test("tooling blocker receives one non-billable diagnostic wake, then ordinary c
   const prompts = [...f.prompts.values()]
   assert.equal(prompts.length, 2)
   assert.match(prompts[1].text, /Continue execution E from operational_status first/)
+})
+
+test("EPIC-05: direct tooling incident after a released launch does not block the Epic across turns", async t => {
+  const f = await fixture(t)
+  await f.commit("DISPATCH_RESERVE", { dispatch_id: "e0528-build-1", reserved_seconds: 10 })
+  await f.commit("DISPATCH_PREPARE", { dispatch_id: "e0528-build-1",
+    expected_agent: "harness-builder", prepared_by_session_id: "ses_root", claim_required: true })
+  await f.commit("DISPATCH_RELEASE", { dispatch_id: "e0528-build-1" })
+  const result = await runExecutionController(f.root, {
+    action: "block", execution_id: "E", session_id: "ses_root",
+    class: "BLOCKED_TOOLING", reason: "Interrupted before child creation",
+  }, undefined, { runtime_loaded_at_ms: Date.now() - 300000 })
+  assert.equal(result.tooling_continuation, "RECOVERED_SAME_TURN")
+  const state = (await f.c.snapshot()).state
+  assert.equal(state.blocker, null)
+  assert.equal(state.tooling_continuations.WU1, 1)
+  assert.equal(state.last_blocker_resolution.recovery_evidence.kind, "SETTLED_DISPATCH_CONTINUATION")
+  assert.equal(state.dispatches["e0528-build-1"].status, "released")
+  assert.equal(state.budget.reserved_seconds, 0)
+  assert.equal(state.budget.used_seconds, 0)
 })
 
 test("EPIC-05: supervisor clears settled interrupted launch once, then resumes same WU without new approval", async t => {
