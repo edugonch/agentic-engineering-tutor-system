@@ -46,7 +46,10 @@ export function inspectSettledToolingContinuation(state, {
     // An unclaimed RELEASED dispatch has no child side effect.
     // Do not retroactively add a release revision to historical projections.
     if (d.status === "released")
-      return d.reservation_status === "released" && !d.launch_call_id
+      return d.reservation_status === "released" && !d.launch_call_id &&
+        Number.isSafeInteger(d.released_at_revision) &&
+        d.released_at_revision <= blocker.at_revision &&
+        d.released_at_revision >= blocker.at_revision - 20
     // For a fenced abandonment, require its exact nearby settlement revision.
     const settledAt = d.reconciled?.at_revision
     return Number.isSafeInteger(settledAt) && settledAt <= blocker.at_revision &&
