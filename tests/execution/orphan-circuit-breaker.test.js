@@ -37,21 +37,15 @@ test("read-only risk report never attributes unknown cause to OpenCode restart",
   assert.deepEqual(s.dispatches["build-2"].fence, { timestamp: new Date(at - 12 * 60000).toISOString() })
 })
 
-test("two recent aborted builders hold only new builder admission until observed runtime and cooldown stabilize", () => {
-  const s = fixture()
-  const recent = inspectOrphanBuilderRisk(s, { nowMs: at, runtimeLoadedAtMs: at - 5 * 60000 })
-  assert.equal(recent.launch_temporarily_blocked, true)
-  assert.equal(recent.retry_after_seconds, 30 * 60 - 5 * 60)
-  const oldRuntimeRecentAbandon = inspectOrphanBuilderRisk(s, {
-    nowMs: at, runtimeLoadedAtMs: at - STABLE_RUNTIME_WINDOW_MS * 2,
-  })
-  assert.equal(oldRuntimeRecentAbandon.launch_temporarily_blocked, true)
-  assert.equal(oldRuntimeRecentAbandon.retry_after_seconds, 22 * 60)
-  const stable = inspectOrphanBuilderRisk(s, {
-    nowMs: at + STABLE_RUNTIME_WINDOW_MS, runtimeLoadedAtMs: at - STABLE_RUNTIME_WINDOW_MS * 2,
-  })
-  assert.equal(stable.launch_temporarily_blocked, false)
-  assert.equal(stable.retry_after_seconds, 0)
+test("reconciled orphan history is diagnostic, never an arbitrary 30-minute execution ceiling", () => {
+  const state = fixture()
+  for (const runtimeAge of [1000, 5 * 60000, STABLE_RUNTIME_WINDOW_MS * 2]) {
+    const report = inspectOrphanBuilderRisk(state, { nowMs: at, runtimeLoadedAtMs: at - runtimeAge })
+    assert.equal(report.abandoned_builder_dispatch_count, 2)
+    assert.equal(report.repeated_interruption_pattern, true)
+    assert.equal(report.launch_temporarily_blocked, false)
+    assert.equal(report.retry_after_seconds, 0)
+  }
 })
 
 test("normal, reviewer-only, historical-WU and completed execution are not blocked", () => {
@@ -65,17 +59,18 @@ test("normal, reviewer-only, historical-WU and completed execution are not block
   assert.equal(inspectOrphanBuilderRisk(complete, { nowMs: at, runtimeLoadedAtMs: at - 1000 }).launch_temporarily_blocked, false)
 })
 
-test("a rebooted plugin does not infer that elapsed wall clock before boot is stable uptime", () => {
-  const s = fixture()
+test("plugin reload does not fabricate restart evidence or block by historical uptime", () => {
   const after = at + STABLE_RUNTIME_WINDOW_MS * 2
-  const result = inspectOrphanBuilderRisk(s, { nowMs: after, runtimeLoadedAtMs: after - 1000 })
-  assert.equal(result.launch_temporarily_blocked, true)
-  assert.equal(result.retry_after_seconds, Math.ceil((STABLE_RUNTIME_WINDOW_MS - 1000) / 1000))
-  const invalid = inspectOrphanBuilderRisk(s, { nowMs: at, runtimeLoadedAtMs: at + 100 })
+  const result = inspectOrphanBuilderRisk(fixture(), { nowMs: after, runtimeLoadedAtMs: after - 1000 })
+  assert.equal(result.launch_temporarily_blocked, false)
+  assert.equal(result.retry_after_seconds, 0)
+  assert.equal(result.runtime_uptime_seconds, 1)
+  assert.equal(result.interruption_cause, "UNVERIFIED")
+  const invalid = inspectOrphanBuilderRisk(fixture(), { nowMs: at, runtimeLoadedAtMs: at + 100 })
   assert.equal(invalid.launch_temporarily_blocked, undefined)
 })
 
-test("controller prevents a third rapid orphan builder, without consuming the unlaunched reservation", async t => {
+test("settled orphans allow new builder but an unsettled sibling still blocks duplicates", async t => {
   const root = await mkdtemp(join(tmpdir(), "harness-orphan-breaker-"))
   t.after(() => rm(root, { recursive: true, force: true }))
   const execution_id = "risk-E1", session_id = "ses_root", epic_id = "EPIC-RISK", wu_id = "W1"
@@ -138,21 +133,25 @@ test("controller prevents a third rapid orphan builder, without consuming the un
     now_ms: Date.now(), runtime_loaded_at_ms: Date.now() - 1000,
   })
   assert.equal(risk.runtime_stability.abandoned_builder_dispatch_count, 2)
-  assert.equal(risk.runtime_stability.launch_temporarily_blocked, true)
+  assert.equal(risk.runtime_stability.launch_temporarily_blocked, false)
   assert.equal(risk.runtime_stability.interruption_cause, "UNVERIFIED")
   assert.equal(risk.time_policy, "PLANNING_ESTIMATES_ONLY")
   await run("reserve", { dispatch_id: "build-3", reserved_seconds: 1800 })
-  const before = (await controller.snapshot()).state
-  await assert.rejects(run("prepare_launch", {
+  await run("prepare_launch", {
     dispatch_id: "build-3", launch_agent: "harness-builder",
-  }, { now_ms: Date.now(), runtime_loaded_at_ms: Date.now() - 1000 }), /RUNTIME_STABILITY_GUARD/)
-  const after = (await controller.snapshot()).state
-  assert.equal(after.revision, before.revision)
-  assert.equal(after.dispatches["build-3"].status, "reserved")
-  assert.equal(after.budget.reserved_seconds, 1800)
+  }, { now_ms: Date.now(), runtime_loaded_at_ms: Date.now() - 1000 })
+  assert.equal((await controller.snapshot()).state.dispatches["build-3"].status, "pending_launch")
+
+  await run("reserve", { dispatch_id: "build-4", reserved_seconds: 1800 })
+  await assert.rejects(run("prepare_launch", {
+    dispatch_id: "build-4", launch_agent: "harness-builder",
+  }), /HARNESS_UNSETTLED_BUILDER/)
+  const preserved = (await controller.snapshot()).state
+  assert.equal(preserved.dispatches["build-4"].status, "reserved")
+  assert.equal(preserved.dispatches["build-3"].status, "pending_launch")
+  await run("release", { dispatch_id: "build-4" })
   await run("release", { dispatch_id: "build-3" })
   const cleared = (await controller.snapshot()).state
-  assert.equal(cleared.dispatches["build-3"].status, "released")
   assert.equal(cleared.budget.reserved_seconds, 0)
   assert.equal(cleared.budget.used_seconds, 3600)
 })
