@@ -1,13 +1,13 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { mkdtemp, rm } from "node:fs/promises"
+import { mkdtemp, mkdir, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { recordKnowledgeArtifact, findApprovedOrphanRecoveryPolicy } from "../../src/project-knowledge.js"
 import { createExecutionSupervisor } from "../../src/execution/supervisor.js"
 import { runExecutionController, claimDispatchLaunch } from "../../src/execution/controller-tool.js"
 import { createExecutionController } from "../../src/execution/execution.js"
-import { createSessionRecovery } from "../../src/execution/session-recovery.js"
+import { createSessionRecovery, assertSessionNotOrphanFenced } from "../../src/execution/session-recovery.js"
 import { isLiteralReadOnlyGrep, isApprovedReadOnlyShellGrep, isApprovedReadOnlyShellInspection, classifyOrphanReadTools, pendingReadsNotExpanded, validOrphanPendingProof } from "../../src/execution/orphan-read-evidence.js"
 import { seedWuContract } from "./wu-fixture.js"
 
@@ -607,4 +607,51 @@ test("invalid autonomous policy produces one durable refusal and never abandons 
   assert.equal(second.events.filter(e => e.operation_type === "ORPHAN_AUTO_TRIAGE").length, 1)
   assert.equal(second.state.budget.reserved_seconds, 1800)
   supervisor.dispose()
+})
+
+test("OpenCode built-in agent tool calls do not replay unrelated ALFRAN execution journals", async t => {
+  const f = await fixture(t)
+  // The CLI may select the stock build agent in the same Location as a
+  // multi-WU Harness controller. Its fresh session has no fenced child ID.
+  // Ordinary pwd/read must reach the tool rather than spending the entire
+  // host continuation eligibility window replaying unrelated controller state.
+  for (let i = 0; i < 20; i++)
+    await assertSessionNotOrphanFenced(f.root, "ses_builtin_build_unrelated")
+  // The actual original orchestrator parent also appears throughout the
+  // journal, but must not be mistaken for the exact fenced child.
+  await assertSessionNotOrphanFenced(f.root, parentID)
+})
+
+test("the global tool hook preserves durable fences after a cold plugin reload", async t => {
+  const f = await fixture(t, { pending: [] })
+  const before = (await f.controller.snapshot()).state.revision
+  await assertSessionNotOrphanFenced(f.root, childID)
+  const recovered = await f.recovery.recoverOrphan(f.call)
+  assert.equal(recovered.status, "ABANDONED_RECONCILED")
+  await assert.rejects(
+    assertSessionNotOrphanFenced(f.root, childID),
+    /ORPHAN_CHILD_FENCED/,
+  )
+  await assertSessionNotOrphanFenced(f.root, "ses_new_builtin_build")
+  // A read-only admission guard may not alter a historical journal.
+  assert.ok((await f.controller.snapshot()).state.revision > before)
+})
+
+test("a journal containing the session ID in a harmless checkpoint is not a false fence", async t => {
+  const f = await fixture(t)
+  await f.invoke("checkpoint", { checkpoint_id: "session-mentioned",
+    note: "Observed unrelated session ses_check_only in host logs" })
+  await assertSessionNotOrphanFenced(f.root, "ses_check_only")
+})
+
+test("unreadable controller data fails closed instead of silently allowing a tool", async t => {
+  const root = await mkdtemp(join(tmpdir(), "orphan-fence-broken-journal-"))
+  t.after(() => rm(root, { force: true, recursive: true }))
+  const dir = join(root, ".harness", "execution", "controller", "broken")
+  await mkdir(dir, { recursive: true })
+  await mkdir(join(dir, "events.ndjson"))
+  await assert.rejects(
+    assertSessionNotOrphanFenced(root, "ses_any"),
+    /EISDIR|illegal operation on a directory|read/i,
+  )
 })
