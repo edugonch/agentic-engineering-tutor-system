@@ -152,5 +152,6 @@ test("release provenance is reconstructed on replay; no backfill or mutable stat
   next("DISPATCH_RESERVE", { dispatch_id: "unclaimed", reserved_seconds: 0 })
   next("DISPATCH_RELEASE", { dispatch_id: "unclaimed" })
   assert.equal(state.dispatches.unclaimed.released_at_revision, 3)
+  assert.equal(state.dispatches.unclaimed.released_from_status, "reserved")
   assert.equal(state.dispatches.unclaimed.status, "released")
 })
