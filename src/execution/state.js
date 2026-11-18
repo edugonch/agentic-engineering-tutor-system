@@ -885,6 +885,10 @@ export function applyEvent(previous, event, { historicalReplay = false } = {}) {
       const reserved = d.reserved_seconds
       d.status = DISPATCH_STATUS.RELEASED
       d.reservation_status = RESERVATION_STATUS.RELEASED
+      // Durable provenance for every historical and new never-launched release.
+      // This is reconstructed from the immutable event on replay; old journals
+      // need no migration or manual editing.
+      d.released_at_revision = state.revision
       state.budget.reserved_seconds -= reserved
       break
     }
