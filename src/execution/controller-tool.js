@@ -40,6 +40,7 @@ import { compileMandateDerivedWu, inspectMandateDerivedWu, isTechnicalWuContract
 import { inspectAuthorityGap } from "./authority-triage.js"
 import { wuBudgetUsage } from "./wu-budget.js"
 import { inspectOrphanBuilderRisk } from "./orphan-circuit-breaker.js"
+import { inspectSettledToolingContinuation, settledToolingClearBody } from "./tooling-continuation.js"
 import { deliveryMetrics } from "./delivery-metrics.js"
 import { stableHash } from "./serialize.js"
 import { batchHash, requireBatchCoverage, MAX_WU_BATCH_SIZE } from "./wu-batch.js"
@@ -637,6 +638,10 @@ export async function runExecutionController(projectRoot, input, candidateRegist
         nowMs: options.now_ms ?? Date.now(),
         runtimeLoadedAtMs: options.runtime_loaded_at_ms ?? null,
       }),
+      tooling_continuation: inspectSettledToolingContinuation(state, {
+        nowMs: options.now_ms ?? Date.now(),
+        runtimeLoadedAtMs: options.runtime_loaded_at_ms ?? null,
+      }),
       time_policy: "PLANNING_ESTIMATES_ONLY", time_budget_enforced: false,
       delivery_metrics: deliveryMetrics(state),
     }
@@ -812,6 +817,21 @@ export async function runExecutionController(projectRoot, input, candidateRegist
   }
 
   if (action === "audit_recovery") return auditRecovery(controller)
+
+  if (action === "recover_settled_tooling") {
+    // Explicit one-shot fallback when the supervisor is not bound or its
+    // previous root session ended. Uses the SAME CAS/proof/cap as supervisor.
+    const snap = await controller.snapshot()
+    const plan = inspectSettledToolingContinuation(snap.state, {
+      nowMs: options.now_ms ?? Date.now(),
+      runtimeLoadedAtMs: options.runtime_loaded_at_ms ?? null,
+    })
+    if (!plan.eligible) return { action, status: "NOT_SAFE_TO_RECOVER", recovery: plan, ...(await summary(controller)) }
+    const body = settledToolingClearBody(snap.state, plan)
+    const res = await commitAction(controller, holder,
+      `${executionId}:settled-tooling:${plan.blocked_at_revision}`, "CLEAR_BLOCKER", body)
+    return { action, commit_status: res.status, recovery: plan, ...(await summary(controller)) }
+  }
 
   if (action === "block") {
     const cls = String(input.class ?? "")
