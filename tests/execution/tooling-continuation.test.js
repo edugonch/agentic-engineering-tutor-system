@@ -19,7 +19,7 @@ function fixture() {
     first: { wu_id: BATCH[0], expected_agent: "harness-builder",
       status: "released", reservation_status: "released", released_from_status: "pending_launch", released_at_revision: 2816 },
     second: { wu_id: BATCH[0], expected_agent: "harness-builder",
-      status: "released", reservation_status: "released", released_at_revision: 2818 },
+      status: "released", reservation_status: "released", released_from_status: "pending_launch", released_at_revision: 2818 },
   }
   return state
 }
