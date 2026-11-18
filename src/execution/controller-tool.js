@@ -40,6 +40,7 @@ import { compileMandateDerivedWu, inspectMandateDerivedWu, isTechnicalWuContract
 import { inspectAuthorityGap } from "./authority-triage.js"
 import { wuBudgetUsage } from "./wu-budget.js"
 import { inspectOrphanBuilderRisk } from "./orphan-circuit-breaker.js"
+import { inspectToolingContinuity } from "./tooling-continuity.js"
 import { deliveryMetrics } from "./delivery-metrics.js"
 import { stableHash } from "./serialize.js"
 import { batchHash, requireBatchCoverage, MAX_WU_BATCH_SIZE } from "./wu-batch.js"
@@ -889,6 +890,36 @@ export async function runExecutionController(projectRoot, input, candidateRegist
       holder_session_id: holder, expected_revision: snap.state.revision, lease_fencing_token: lease.fencing_token,
     })
     return { action, commit_status: result.status, recovery_proof: proof, ...(await summary(controller)) }
+  }
+
+  if (action === "recover_settled_tooling") {
+    // A model-supplied claim of restored network/session health is never
+    // sufficient. Only the OpenCode host can provide this observation.
+    if (options.runtime_root_observed !== true)
+      throw new Error("TOOLING_CONTINUITY_ROOT_PROBE_REQUIRED: live root identity not confirmed")
+    const snap = await controller.snapshot()
+    const eligibility = inspectToolingContinuity(snap.state, snap.events)
+    if (!eligibility.allowed)
+      return { action, status: "NOT_RECOVERABLE", reason: eligibility.reason,
+        ...(await summary(controller)) }
+    const journal = await verify(controller)
+    if (!journal.passed) throw new Error("TOOLING_CONTINUITY_JOURNAL_INVALID: refuse autonomous clearance")
+    const blocker = snap.state.blocker
+    const body = {
+      blocker_class: "BLOCKED_TOOLING", blocked_at_revision: blocker.at_revision,
+      resolution: "Settled worker evidence, live root identity and invariant replay verified; bounded retry, not an assertion of permanent host stability",
+      recovery_evidence: {
+        kind: "SETTLED_TOOLING_CONTINUATION", execution_id: executionId,
+        wu_id: eligibility.wu_id, blocker_revision: blocker.at_revision,
+        prior_resumes: eligibility.prior_resumes, runtime_session_id: holder,
+        proof: "ROOT_SESSION_OBSERVED_AND_CONTROLLER_VERIFY_PASS",
+      },
+    }
+    const res = await commitAction(controller, holder,
+      `${executionId}:clear-blocker:${blocker.at_revision}`, "CLEAR_BLOCKER", body)
+    return { action, status: "RECOVERED_SETTLED_TOOLING",
+      commit_status: res.status, recovery_evidence: body.recovery_evidence,
+      ...(await summary(controller)) }
   }
 
   if (action === "clear_blocker") {
