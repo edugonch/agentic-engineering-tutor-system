@@ -11,6 +11,8 @@ import { stableHash } from "./serialize.js"
 import { classifyContinuation, hasPendingSupervisorDispatch, routeExecution } from "./workflow-router.js"
 import { inspectOrphanBuilderRisk } from "./orphan-circuit-breaker.js"
 import { composeSupervisorPrompt } from "./supervisor-prompt.js"
+import { inspectToolingContinuity } from "./tooling-continuity.js"
+import { verify as verifyController } from "./controller-inspection.js"
 
 export function createExecutionSupervisor(ctx, projectRoot, {
   enabled = true, now = () => Date.now(), schedule = setTimeout, cancel = clearTimeout,
@@ -58,7 +60,7 @@ export function createExecutionSupervisor(ctx, projectRoot, {
     running.add(execution)
     try {
       const c = await controller(execution)
-      let { state } = await c.snapshot()
+      let { state, events } = await c.snapshot()
       const session = state.supervisor?.session_id
       // Existing BUDGET_EXHAUSTED events remain immutable history, but time
       // estimates no longer justify a stop. Retire only that exact blocker after
@@ -74,7 +76,7 @@ export function createExecutionSupervisor(ctx, projectRoot, {
         }, `${execution}:clear-blocker:${blocker.at_revision}`)
         state = (await c.snapshot()).state
       }
-      const { toolingTriage, contractTriage, scopeTriage } = classifyContinuation(state)
+      let { toolingTriage, contractTriage, scopeTriage } = classifyContinuation(state)
       if (!session || state.completed || (state.blocker && !expiredWait(state) && !toolingTriage && !contractTriage && !scopeTriage) || state.mandate?.authority_kind !== "OWNER_APPROVED_EPIC") { disarm(execution); return false }
       const info = await identity(session)
       if (info.outcome !== "succeeded") { disarm(execution); return false } // never override cancellation or failure
@@ -86,6 +88,35 @@ export function createExecutionSupervisor(ctx, projectRoot, {
           recovery_evidence: { wait_id: obsoleteCiStop.wait_id, kind: "CI_DEPRECATED_NON_AUTHORITATIVE" },
         }, `${obsoleteCiStop.wait_id}:clear:CI_DEPRECATED`)
         state = (await c.snapshot()).state
+      }
+      // Tooling interruption is not owner authority, a security failure or WU
+      // rejection. Once all dispatches are durably settled and the live root
+      // identity plus journal invariant check pass, resume the same approved WU
+      // via a CAS-fenced, append-only clearance. A two-attempt no-product-
+      // progress limit prevents an outage from generating unbounded launches.
+      // Unlike a fixed 30-minute timer, this responds to actual durable facts.
+      if (state.blocker?.class === "BLOCKED_TOOLING") {
+        const continuity = inspectToolingContinuity(state, events)
+        if (continuity.allowed) {
+          const invariant = await verifyController(c)
+          if (invariant.passed) {
+            const blocker = state.blocker
+            await commit(c, session, "CLEAR_BLOCKER", {
+              blocker_class: blocker.class, blocked_at_revision: blocker.at_revision,
+              resolution: "Runtime root reachable; dispatches settled; durable invariants PASS. Bounded continuation, not proof of permanent network health.",
+              recovery_evidence: {
+                kind: "SETTLED_TOOLING_CONTINUATION",
+                execution_id: execution, wu_id: continuity.wu_id,
+                blocker_revision: blocker.at_revision,
+                prior_resumes: continuity.prior_resumes,
+                runtime_session_id: session,
+                proof: "ROOT_SESSION_SUCCEEDED_AND_CONTROLLER_VERIFY_PASS",
+              },
+            }, `${execution}:clear-blocker:${blocker.at_revision}`)
+            ;({ state, events } = await c.snapshot())
+            ;({ toolingTriage, contractTriage, scopeTriage } = classifyContinuation(state))
+          }
+        }
       }
       // Explicit opt-in only: the named policy must be an indexed, hash-verified
       // owner APPROVED bounded recovery decision. This never operates on an
@@ -147,20 +178,9 @@ export function createExecutionSupervisor(ctx, projectRoot, {
           }
         }
       }
-      // The stability guard is a *timed dependency*, not a permanent
-      // blocker. Observe the same risk as prepare_launch before sending a
-      // prompt that would only reserve/reject a worker. Restore this timer on
-      // supervisor.resume() after restart, and recheck all durable gates at
-      // the due time. No builder is launched by this timer.
-      const route = routeExecution(state)
-      const stability = inspectOrphanBuilderRisk(state, {
-        nowMs: now(), runtimeLoadedAtMs: runtimeStartedAtMs,
-      })
-      if (route.nextAction === "LAUNCH_ONE_BUILDER" &&
-          stability.launch_temporarily_blocked) {
-        arm(execution, now() + stability.retry_after_seconds * 1000 + 100)
-        return false
-      }
+      // Previously settled builder interruptions are diagnostic only. The
+      // controller already fences competing/unsettled builders and identities;
+      // an elapsed-time cooldown adds no duplicate-effect protection.
       const unsettled = hasPendingSupervisorDispatch(state)
       // The root may inspect/recover existing work but cannot start duplicates;
       // public controller admission enforces those limits.
