@@ -184,6 +184,16 @@ The final predeclared WU must prove integrated Epic acceptance/closure (or be ex
 
 Full-Epic continuation never widens scope or automates deploys, production migrations, secrets, destructive actions, or dynamic WU creation.
 
+## Project governance gates
+
+A project may make the real `init`/`approve_mandate` and `complete` actions
+execute its own deterministic gate by committing a `harness.config.json` at the
+project root. `complete` runs the configured closure command against the final
+candidate SHA before committing `COMPLETE`; a non-zero exit, timeout or missing
+identity fails closed and no completion event is written. Without the file the
+Harness behaves exactly as before. See
+[docs/project-governance-gates.md](docs/project-governance-gates.md).
+
 ## Development
 
 ```sh

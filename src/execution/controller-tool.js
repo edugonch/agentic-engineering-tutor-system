@@ -48,6 +48,7 @@ import { applyEvent } from "./state.js"
 import { createExecutionController } from "./execution.js"
 import { createCandidateRegistry } from "./candidate-registry.js"
 import { readVerificationReceipt } from "./verification-results.js"
+import { loadProjectGovernance, runProjectGovernanceGate } from "./project-governance.js"
 import { findApprovedProcessPolicy, findApprovedTimePolicy, findApprovedEpic, findApprovedWuBudgetAmendment, findApprovedAuthorityResolution, verifyDeclaredWorkUnits, readWorkUnitDefinition, findApprovedSoloDeliveryPolicy } from "../project-knowledge.js"
 import { DISPATCH_STATUS, RESERVATION_STATUS, MANDATE_AUTHORITY, RECOVERABLE_BLOCKER_CLASSES } from "./constants.js"
 
@@ -135,6 +136,17 @@ export async function runExecutionController(projectRoot, input, candidateRegist
     const mandateId = String(input.mandate_id ?? `${executionId}-MANDATE-001`)
     const mandateRevision = String(input.mandate_revision ?? "rev-0")
     const totalSeconds = Number(input.total_seconds ?? 60)
+    const initSnap = await controller.snapshot()
+    const priorInit = initSnap.events.find(e => e.operation_id === `${executionId}:mandate`)
+    const epicId = input.epic_id === undefined || input.epic_id === null
+      ? (initSnap.state.mandate?.epic_id ?? priorInit?.body?.epic_id ?? null)
+      : String(input.epic_id)
+    const governance = priorInit ? null : await loadProjectGovernance(projectRoot)
+    const activationReceipt = priorInit
+      ? (priorInit.body.governance ?? null)
+      : await runProjectGovernanceGate({
+          projectRoot, phase: "activation", epicId, executionId, mandateId, config: governance,
+        })
     const res = await commitAction(controller, holder, `${executionId}:mandate`, "MANDATE_APPROVE", {
       execution_id: `${executionId}:exec`,
       mandate_id: mandateId,
@@ -142,8 +154,10 @@ export async function runExecutionController(projectRoot, input, candidateRegist
       max_wus: Number(input.max_wus ?? 4),
       total_seconds: totalSeconds,
       authority_kind: MANDATE_AUTHORITY.PROBE,
+      ...(epicId ? { epic_id: epicId } : {}),
+      ...(activationReceipt ? { governance: activationReceipt } : {}),
     })
-    return { action, commit_status: res.status, ...(await summary(controller)) }
+    return { action, commit_status: res.status, ...(activationReceipt ? { governance: activationReceipt } : {}), ...(await summary(controller)) }
   }
 
   if (action === "approve_mandate") {
@@ -154,7 +168,17 @@ export async function runExecutionController(projectRoot, input, candidateRegist
     if (epic.mandate.wu_sequence?.length) {
       await verifyDeclaredWorkUnits(projectRoot, epic, epic.mandate.wu_sequence)
     }
-    const priorApproval = (await controller.snapshot()).events.find(e => e.operation_id === `${executionId}:mandate`)
+    const mandateSnap = await controller.snapshot()
+    const priorApproval = mandateSnap.events.find(e => e.operation_id === `${executionId}:mandate`)
+    const epicId = input.epic_id === undefined || input.epic_id === null
+      ? (mandateSnap.state.mandate?.epic_id ?? priorApproval?.body?.epic_id ?? null)
+      : String(input.epic_id)
+    const governance = priorApproval ? null : await loadProjectGovernance(projectRoot)
+    const activationReceipt = priorApproval
+      ? (priorApproval.body.governance ?? null)
+      : await runProjectGovernanceGate({
+          projectRoot, phase: "activation", epicId, executionId, mandateId, config: governance,
+        })
     const body = {
       ...(!priorApproval || priorApproval.body.time_policy ? { time_policy: priorApproval?.body.time_policy ?? PLANNING_ESTIMATES } : {}),
       execution_id: `${executionId}:exec`,
@@ -168,10 +192,12 @@ export async function runExecutionController(projectRoot, input, candidateRegist
       source_artifact_id: epic.source_id,
       source_record_key: epic.record_key,
       source_hash: epic.sha256,
+      ...(epicId ? { epic_id: epicId } : {}),
+      ...(activationReceipt ? { governance: activationReceipt } : {}),
       ...(epic.mandate.wu_sequence?.length ? { wu_sequence: epic.mandate.wu_sequence } : {}),
     }
     const res = await commitAction(controller, holder, `${executionId}:mandate`, "MANDATE_APPROVE", body)
-    return { action, commit_status: res.status, source_artifact_id: epic.source_id, source_hash: epic.sha256, ...(await summary(controller)) }
+    return { action, commit_status: res.status, source_artifact_id: epic.source_id, source_hash: epic.sha256, ...(activationReceipt ? { governance: activationReceipt } : {}), ...(await summary(controller)) }
   }
 
   if (action === "adopt_solo_delivery") {
@@ -269,6 +295,7 @@ export async function runExecutionController(projectRoot, input, candidateRegist
       source_record_key: epic.record_key,
       source_hash: epic.sha256,
       source_revision: epic.source_revision,
+      ...(input.epic_id ? { epic_id: String(input.epic_id) } : {}),
     }
     const res = await controller.commit(
       { operation_id: operationId, operation_type: "MANDATE_AMEND", body },
@@ -1030,8 +1057,34 @@ export async function runExecutionController(projectRoot, input, candidateRegist
   }
 
   if (action === "complete") {
-    const res = await commitAction(controller, holder, `${executionId}:complete`, "COMPLETE", { result: input.result ?? null })
-    return { action, commit_status: res.status, ...(await summary(controller)) }
+    // Epic closure is gated by an optional project-configured command. The gate
+    // runs before any COMPLETE event is committed, so a failure cannot be
+    // recorded as success and cannot be skipped by the agent. A retry after a
+    // successful close reuses the original receipt instead of failing a replay.
+    const snap = await controller.snapshot()
+    if (snap.state.completed) {
+      return {
+        action,
+        commit_status: "replayed",
+        ...(snap.state.completion?.governance ? { governance: snap.state.completion.governance } : {}),
+        ...(await summary(controller)),
+      }
+    }
+    const governance = await loadProjectGovernance(projectRoot)
+    const closureReceipt = await runProjectGovernanceGate({
+      projectRoot,
+      phase: "closure",
+      epicId: snap.state.mandate?.epic_id ?? null,
+      executionId,
+      mandateId: snap.state.mandate?.mandate_id ?? null,
+      state: snap.state,
+      config: governance,
+    })
+    const res = await commitAction(controller, holder, `${executionId}:complete`, "COMPLETE", {
+      result: input.result ?? null,
+      ...(closureReceipt ? { governance: closureReceipt } : {}),
+    })
+    return { action, commit_status: res.status, ...(closureReceipt ? { governance: closureReceipt } : {}), ...(await summary(controller)) }
   }
 
   if (action === "reconcile") {

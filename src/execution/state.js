@@ -332,6 +332,12 @@ export function applyEvent(previous, event, { historicalReplay = false } = {}) {
         merge_policy: body.merge_policy ?? "none",
         required_ci_checks: body.required_ci_checks ?? [],
       }
+      if (body.epic_id !== undefined && body.epic_id !== null) {
+        if (typeof body.epic_id !== "string" || !/^[A-Za-z0-9._:-]+$/.test(body.epic_id)) {
+          throw new Error("MANDATE_APPROVE: epic_id must be a non-empty canonical identifier.")
+        }
+        state.mandate.epic_id = body.epic_id
+      }
       if (!MERGE_POLICIES.includes(state.mandate.merge_policy)) {
         throw new Error(`MANDATE_APPROVE: unknown merge_policy ${state.mandate.merge_policy}.`)
       }
@@ -407,6 +413,18 @@ export function applyEvent(previous, event, { historicalReplay = false } = {}) {
       }
       if (!body.source_artifact_id || !body.source_record_key || !body.source_hash) {
         throw new Error("MANDATE_AMEND requires source_artifact_id, source_record_key, and source_hash.")
+      }
+
+      // epic_id is durable metadata, not policy. It may be filled in once for an
+      // existing mandate but never silently changed.
+      if (body.epic_id !== undefined && body.epic_id !== null) {
+        if (typeof body.epic_id !== "string" || !/^[A-Za-z0-9._:-]+$/.test(body.epic_id)) {
+          throw new Error("MANDATE_AMEND: epic_id must be a non-empty canonical identifier.")
+        }
+        if (state.mandate.epic_id && state.mandate.epic_id !== body.epic_id) {
+          throw new Error("MANDATE_AMEND cannot change an existing epic_id.")
+        }
+        state.mandate.epic_id = body.epic_id
       }
 
       state.mandate.merge_policy = nextPolicy
@@ -1555,7 +1573,7 @@ export function applyEvent(previous, event, { historicalReplay = false } = {}) {
         }
       }
       state.completed = true
-      state.completion = { result: body.result ?? null, at_revision: state.revision }
+      state.completion = { result: body.result ?? null, governance: body.governance ?? null, at_revision: state.revision }
       break
     }
 

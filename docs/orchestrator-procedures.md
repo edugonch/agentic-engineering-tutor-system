@@ -205,6 +205,7 @@ A full-Epic execution mandate authorizes **continuation through a finite story t
 - If the sequence ends before the terminal condition is met, stop `EPIC_REBASE_REQUIRED`. The owner may approve a rebase that replaces the remaining plan as a new finite sequence; execution itself cannot extend the chapter.
 - The final predeclared WU must include the integrated closure evidence (or explicitly be the terminal closure WU) needed to prove the whole Epic outcome, reconcile project state, and prepare tracker closure.
 - Call controller action `complete` only after the final predeclared WU is durably complete and the Epic terminal condition is proven. Verify controller `completed=true`; only then close the external Epic issue/state.
+- If the project commits a `harness.config.json` with Epic governance commands, pass its canonical `epic_id` to `init`/`approve_mandate`. The configured activation/closure gate runs automatically against the final candidate SHA; a failure is a hard stop and no `COMPLETE` event is written. Never edit the config, drop obligations or bypass `complete` to obtain success. The gate receipt is stored in the event body.
 
 This does not authorize automatic deploys, production migrations, secrets changes, destructive operations, scope expansion, or dynamic WU creation. Those retain their existing gates.
 
