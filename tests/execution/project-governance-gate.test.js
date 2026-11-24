@@ -166,7 +166,9 @@ test("arguments are passed as argv, never interpreted by a shell", async () => {
 test("real complete action runs the closure gate and records an auditable receipt", async () => {
   await withRoot(async (root) => {
     await writeConfig(root, { epicClosureCommand: { program: "node", args: ["-e", CLOSURE_STATUS] } })
-    await completedExecution(root)
+    const original = await readFile(join(root, "harness.config.json"))
+    const pinned = createHash("sha256").update(original).digest("hex")
+    await completedExecution(root, { closureRequired: true, governanceConfigSha256: pinned })
     const result = await runExecutionController(root, { action: "complete", execution_id: "E1", session_id: "root" })
     assert.equal(result.commit_status, "committed")
     assert.equal(result.governance.gate, "epic-closure")
@@ -259,6 +261,21 @@ test("a closure gate approved with the mandate cannot be silently disabled later
       runExecutionController(root, { action: "complete", execution_id: "E1", session_id: "root" }),
       (error) => error.code === "EPIC_CLOSURE_GATE_DISABLED",
     )
+  })
+})
+
+test("mandate approval pins a configured closure gate config hash", async () => {
+  await withRoot(async (root) => {
+    await writeConfig(root, {
+      epicActivationCommand: { program: "node", args: ["-e", "process.exit(0)"], require_candidate_sha: false },
+      epicClosureCommand: { program: "node", args: ["-e", "process.exit(0)"] },
+    })
+    const original = await readFile(join(root, "harness.config.json"))
+    const pinned = createHash("sha256").update(original).digest("hex")
+    await runExecutionController(root, { action: "init", execution_id: "E1", session_id: "root", total_seconds: 100, epic_id: "EPIC-TEST" })
+    const mandate = (await events(root)).find((event) => event.operation_type === "MANDATE_APPROVE")
+    assert.equal(mandate.body.governance_closure_required, true)
+    assert.equal(mandate.body.governance_config_sha256, pinned)
   })
 })
 
