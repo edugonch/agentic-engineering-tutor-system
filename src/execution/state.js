@@ -341,6 +341,9 @@ export function applyEvent(previous, event, { historicalReplay = false } = {}) {
       if (body.governance_closure_required !== undefined) {
         state.mandate.governance_closure_required = Boolean(body.governance_closure_required)
       }
+      if (body.governance_config_sha256 !== undefined) {
+        state.mandate.governance_config_sha256 = body.governance_config_sha256 ?? null
+      }
       if (!MERGE_POLICIES.includes(state.mandate.merge_policy)) {
         throw new Error(`MANDATE_APPROVE: unknown merge_policy ${state.mandate.merge_policy}.`)
       }

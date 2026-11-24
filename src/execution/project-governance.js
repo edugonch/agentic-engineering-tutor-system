@@ -150,7 +150,9 @@ function expand(value, vars) {
     return String(resolved)
   })
   // A mistyped/case-mismatched placeholder must not be passed through literally.
-  const residual = expanded.match(/\{[^}]+\}/)
+  // Only identifier-shaped braces are considered placeholders, so literal JSON
+  // or regex braces in an argument are allowed.
+  const residual = expanded.match(/\{[A-Za-z_][A-Za-z0-9_]*\}/)
   if (residual) {
     throw governanceError("EPIC_GATE_UNKNOWN_PLACEHOLDER", `Unresolved governance command placeholder ${residual[0]}.`)
   }

@@ -150,6 +150,9 @@ export async function runExecutionController(projectRoot, input, candidateRegist
     const closureRequired = priorInit
       ? Boolean(priorInit.body.governance_closure_required)
       : Boolean(governance?.closure)
+    const pinnedConfigSha = priorInit
+      ? (priorInit.body.governance_config_sha256 ?? null)
+      : (closureRequired ? (governance?.sha256 ?? null) : null)
     const res = await commitAction(controller, holder, `${executionId}:mandate`, "MANDATE_APPROVE", {
       execution_id: `${executionId}:exec`,
       mandate_id: mandateId,
@@ -159,6 +162,7 @@ export async function runExecutionController(projectRoot, input, candidateRegist
       authority_kind: MANDATE_AUTHORITY.PROBE,
       ...(epicId ? { epic_id: epicId } : {}),
       ...(closureRequired ? { governance_closure_required: true } : {}),
+      ...(pinnedConfigSha ? { governance_config_sha256: pinnedConfigSha } : {}),
       ...(activationReceipt ? { governance: activationReceipt } : {}),
     })
     return { action, commit_status: res.status, ...(activationReceipt ? { governance: activationReceipt } : {}), ...(await summary(controller)) }
@@ -190,6 +194,9 @@ export async function runExecutionController(projectRoot, input, candidateRegist
     const closureRequired = priorApproval
       ? Boolean(priorApproval.body.governance_closure_required)
       : Boolean(governance?.closure)
+    const pinnedConfigSha = priorApproval
+      ? (priorApproval.body.governance_config_sha256 ?? null)
+      : (closureRequired ? (governance?.sha256 ?? null) : null)
     const body = {
       ...(!priorApproval || priorApproval.body.time_policy ? { time_policy: priorApproval?.body.time_policy ?? PLANNING_ESTIMATES } : {}),
       execution_id: `${executionId}:exec`,
@@ -205,6 +212,7 @@ export async function runExecutionController(projectRoot, input, candidateRegist
       source_hash: epic.sha256,
       ...(epicId ? { epic_id: epicId } : {}),
       ...(closureRequired ? { governance_closure_required: true } : {}),
+      ...(pinnedConfigSha ? { governance_config_sha256: pinnedConfigSha } : {}),
       ...(activationReceipt ? { governance: activationReceipt } : {}),
       ...(epic.mandate.wu_sequence?.length ? { wu_sequence: epic.mandate.wu_sequence } : {}),
     }
@@ -1083,11 +1091,20 @@ export async function runExecutionController(projectRoot, input, candidateRegist
       }
     }
     const governance = await loadProjectGovernance(projectRoot)
-    if (snap.state.mandate?.governance_closure_required && !governance.closure) {
-      throw governanceError(
-        "EPIC_CLOSURE_GATE_DISABLED",
-        "The mandate was approved with a closure gate, but harness.config.json no longer enables one. Restore the gate; do not close the Epic.",
-      )
+    if (snap.state.mandate?.governance_closure_required) {
+      if (!governance.closure) {
+        throw governanceError(
+          "EPIC_CLOSURE_GATE_DISABLED",
+          "The mandate was approved with a closure gate, but harness.config.json no longer enables one. Restore the gate; do not close the Epic.",
+        )
+      }
+      const pinnedConfigSha = snap.state.mandate.governance_config_sha256
+      if (pinnedConfigSha && governance.sha256 !== pinnedConfigSha) {
+        throw governanceError(
+          "EPIC_GATE_CONFIG_DRIFT",
+          "harness.config.json changed after the mandate approved its closure gate. Re-approve the gate or restore the approved content; do not close the Epic.",
+        )
+      }
     }
     const closureReceipt = await runProjectGovernanceGate({
       projectRoot,

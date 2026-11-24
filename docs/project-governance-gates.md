@@ -73,6 +73,7 @@ On success the gate receipt is embedded in the committed event body under
 {
   "gate": "epic-closure",
   "config_path": "<project>/harness.config.json",
+  "config_sha256": "...",
   "command": ["npm", "run", "governance:epic-coverage", "--", "--closure", "EPIC-02"],
   "epic_id": "EPIC-02",
   "candidate_id": "cand-...",
@@ -80,7 +81,11 @@ On success the gate receipt is embedded in the committed event body under
   "merge_commit_sha": "<40-char sha>",
   "final_wu_id": "WU-...",
   "exit_code": 0,
+  "timed_out": false,
+  "truncated": false,
   "ok": true,
+  "timeout_ms": 120000,
+  "require_candidate_sha": true,
   "duration_ms": 1234,
   "stdout_sha256": "...",
   "stderr_sha256": "...",
@@ -91,13 +96,26 @@ On success the gate receipt is embedded in the committed event body under
 The command also receives `HARNESS_EPIC_ID`, `HARNESS_EXECUTION_ID`,
 `HARNESS_MANDATE_ID`, `HARNESS_CANDIDATE_ID`, `HARNESS_CANDIDATE_SHA`,
 `HARNESS_MERGE_COMMIT_SHA`, `HARNESS_FINAL_WU_ID`, `HARNESS_GATE_PHASE` and
-`HARNESS_GOVERNANCE_GATE=1` in its environment.
+`HARNESS_GOVERNANCE_GATE=1` in its environment. The process environment is
+inherited; the gate must not print secrets.
+
+Only the hashes (not stdout/stderr content) are durable. The command argv is
+durable in the event body, so never put secrets in gate arguments.
+
+## Config pinning
+
+When a closure gate is configured at approval, the controller persists
+`governance_closure_required` and the config `sha256`. `complete` fails closed
+with `EPIC_GATE_CONFIG_DRIFT` if the working-tree config changed after approval,
+and with `EPIC_CLOSURE_GATE_DISABLED` if the closure gate is removed. A genuine
+gate change requires a new approved mandate/amendment, not an in-place edit.
 
 ## Failure codes
 
 - `EPIC_GATE_CONFIG_UNREADABLE` / `EPIC_GATE_CONFIG_INVALID`
 - `EPIC_GATE_MISSING_EPIC_ID` / `EPIC_GATE_MISSING_CANDIDATE_SHA`
-- `EPIC_GATE_UNKNOWN_PLACEHOLDER`
+- `EPIC_GATE_UNKNOWN_PLACEHOLDER` / `EPIC_GATE_PHASE_INVALID`
+- `EPIC_CLOSURE_GATE_DISABLED` / `EPIC_GATE_CONFIG_DRIFT`
 - `EPIC_ACTIVATION_GATE_FAILED` / `EPIC_CLOSURE_GATE_FAILED` (carry
   `gate_receipt` for diagnostics)
 

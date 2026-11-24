@@ -3,6 +3,7 @@
 import test from "node:test"
 import assert from "node:assert/strict"
 import { existsSync } from "node:fs"
+import { createHash } from "node:crypto"
 import { mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -36,7 +37,7 @@ async function events(root, executionId = "E1") {
 
 // Build a durable, fully-completed single-WU execution (the terminal WU is done
 // and a human merge is recorded) without touching any real project.
-async function completedExecution(root, { epicId = "EPIC-TEST", headSha = sha("a"), mergeSha = sha("b"), closureRequired = false } = {}) {
+async function completedExecution(root, { epicId = "EPIC-TEST", headSha = sha("a"), mergeSha = sha("b"), closureRequired = false, governanceConfigSha256 = null } = {}) {
   const dir = join(root, ".harness", "execution", "controller", "E1")
   const c = await createExecutionController({ dir })
   const commit = async (type, body) => {
@@ -52,6 +53,7 @@ async function completedExecution(root, { epicId = "EPIC-TEST", headSha = sha("a
     source_record_key: "record", source_hash: "hash",
     wu_sequence: ["WU1"], merge_policy: "human", ...(epicId ? { epic_id: epicId } : {}),
     ...(closureRequired ? { governance_closure_required: true } : {}),
+    ...(governanceConfigSha256 ? { governance_config_sha256: governanceConfigSha256 } : {}),
   })
   await commit("WU_ACTIVATE", { wu_id: "WU1", mandate_id: "M1" })
   await commit("DISPATCH_RESERVE", { dispatch_id: "d1", reserved_seconds: 10 })
@@ -150,7 +152,9 @@ test("gate failures, missing identity and stale/mismatched candidates are reject
 test("arguments are passed as argv, never interpreted by a shell", async () => {
   await withRoot(async (root) => {
     const payload = "a b; touch pwned; $(touch pwned2)"
-    await writeConfig(root, { epicClosureCommand: { program: "node", args: ["-e", "process.stdout.write(process.argv.slice(1).join('|'))", payload] } })
+    // Literal JSON braces are not placeholders; only identifier-shaped braces are.
+    const script = 'const v=JSON.parse(\'{"ok":1}\').ok; process.exit(v===1?0:1)'
+    await writeConfig(root, { epicClosureCommand: { program: "node", args: ["-e", script, payload] } })
     const governance = await loadProjectGovernance(root)
     const receipt = await runProjectGovernanceGate({ projectRoot: root, phase: "closure", epicId: "EPIC-TEST", state: { merge: { merge_commit_sha: sha("b") } }, config: governance })
     assert.equal(receipt.ok, true)
@@ -254,6 +258,31 @@ test("a closure gate approved with the mandate cannot be silently disabled later
     await assert.rejects(
       runExecutionController(root, { action: "complete", execution_id: "E1", session_id: "root" }),
       (error) => error.code === "EPIC_CLOSURE_GATE_DISABLED",
+    )
+  })
+})
+
+test("a gate config rewritten after approval is rejected as drift", async () => {
+  await withRoot(async (root) => {
+    await writeConfig(root, { epicClosureCommand: { program: "node", args: ["-e", CLOSURE_STATUS] } })
+    const original = await readFile(join(root, "harness.config.json"))
+    const pinned = createHash("sha256").update(original).digest("hex")
+    await completedExecution(root, { closureRequired: true, governanceConfigSha256: pinned })
+    // Replace the approved gate with a no-op that always passes.
+    await writeConfig(root, { epicClosureCommand: { program: "node", args: ["-e", "process.exit(0)"] } })
+    await assert.rejects(
+      runExecutionController(root, { action: "complete", execution_id: "E1", session_id: "root" }),
+      (error) => error.code === "EPIC_GATE_CONFIG_DRIFT",
+    )
+  })
+})
+
+test("an unknown gate phase is rejected before command selection", async () => {
+  await withRoot(async (root) => {
+    const config = { path: join(root, "harness.config.json"), sha256: null, activation: null, closure: null }
+    await assert.rejects(
+      runProjectGovernanceGate({ projectRoot: root, phase: "bogus", epicId: "EPIC-X", config }),
+      (error) => error.code === "EPIC_GATE_PHASE_INVALID",
     )
   })
 })
