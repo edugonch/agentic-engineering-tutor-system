@@ -110,6 +110,11 @@ test("plugin setup completes without waiting for a hung agent.reload", async t =
     ])
     assert.ok(fixture.definitions.has("harness_execution_controller"))
     assert.ok(fixture.definitions.has("harness_check_agent_readiness"))
+    // The real tool schema must expose the project-governance Epic identity;
+    // otherwise additionalProperties:false strips it before execute().
+    const controller = fixture.definitions.get("harness_execution_controller")
+    assert.equal(controller.input.additionalProperties, false)
+    assert.equal(controller.input.properties.epic_id.type, "string")
   } finally {
     clearTimeout(timeout)
   }

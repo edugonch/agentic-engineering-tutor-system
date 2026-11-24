@@ -977,8 +977,7 @@ function parseExecutionMandate(content) {
       // sequence authority. When present it is finite, unique, ordered, and may
       // never exceed max_wus.
       let wuSequence
-      if (mandate.wu_sequence !== undefined && mandate.wu_sequence !== null) {
-        if (!Array.isArray(mandate.wu_sequence) || mandate.wu_sequence.length === 0) return null
+      if (mandate.wu_sequence !== undefined && mandate.wu_sequence !== null) {        if (!Array.isArray(mandate.wu_sequence) || mandate.wu_sequence.length === 0) return null
         if (mandate.wu_sequence.length > mandate.max_wus) return null
         const seenWus = new Set()
         wuSequence = []
@@ -990,12 +989,21 @@ function parseExecutionMandate(content) {
         }
       }
 
+      // Optional canonical Epic identity. When present it is the hard binding
+      // the controller uses to reject an execution that claims a different Epic.
+      let epicId
+      if (mandate.epic_id !== undefined) {
+        if (typeof mandate.epic_id !== "string" || !/^[A-Za-z0-9._:-]{1,64}$/.test(mandate.epic_id)) return null
+        epicId = mandate.epic_id
+      }
+
       return {
         max_wus: mandate.max_wus,
         total_seconds: mandate.total_seconds,
         merge_policy: mergePolicy,
         required_ci_checks: requiredCiChecks,
         ...(wuSequence ? { wu_sequence: wuSequence } : {}),
+        ...(epicId ? { epic_id: epicId } : {}),
       }
     }
     return null

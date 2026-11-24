@@ -15,6 +15,7 @@ export { deriveRequirements, evaluateReadiness, budgetStatus, checkExecutionRead
 export { createExecutionController } from "./execution.js"
 export { runContinuationProbe } from "./probe.js"
 export { runExecutionController, claimDispatchLaunch } from "./controller-tool.js"
+export { loadProjectGovernance, resolveClosureCandidate, runProjectGovernanceGate } from "./project-governance.js"
 export { createLaunchBindingRegistry, findPendingLaunchBinding } from "./launch-binding.js"
 export { createGitHubMergePort, createFakeMergePort } from "./merge-port.js"
 export { candidateGitTree } from "./git-tree.js"

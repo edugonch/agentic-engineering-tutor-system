@@ -3,16 +3,18 @@
 import test from "node:test"
 import assert from "node:assert/strict"
 import { existsSync } from "node:fs"
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createExecutionController } from "../../src/execution/execution.js"
 import { runExecutionController } from "../../src/execution/controller-tool.js"
+import { applyEvent, initialState } from "../../src/execution/state.js"
 import {
   loadProjectGovernance,
   resolveClosureCandidate,
   runProjectGovernanceGate,
 } from "../../src/execution/project-governance.js"
+import { recordKnowledgeArtifact } from "../../src/project-knowledge.js"
 
 const sha = (c) => c.repeat(40)
 const CLOSURE_STATUS = "process.exit(process.env.HARNESS_EPIC_ID === 'EPIC-TEST' ? 0 : 1)"
@@ -34,7 +36,7 @@ async function events(root, executionId = "E1") {
 
 // Build a durable, fully-completed single-WU execution (the terminal WU is done
 // and a human merge is recorded) without touching any real project.
-async function completedExecution(root, { epicId = "EPIC-TEST", headSha = sha("a"), mergeSha = sha("b") } = {}) {
+async function completedExecution(root, { epicId = "EPIC-TEST", headSha = sha("a"), mergeSha = sha("b"), closureRequired = false } = {}) {
   const dir = join(root, ".harness", "execution", "controller", "E1")
   const c = await createExecutionController({ dir })
   const commit = async (type, body) => {
@@ -49,6 +51,7 @@ async function completedExecution(root, { epicId = "EPIC-TEST", headSha = sha("a
     authority_kind: "OWNER_APPROVED_EPIC", source_artifact_id: "epic-test",
     source_record_key: "record", source_hash: "hash",
     wu_sequence: ["WU1"], merge_policy: "human", ...(epicId ? { epic_id: epicId } : {}),
+    ...(closureRequired ? { governance_closure_required: true } : {}),
   })
   await commit("WU_ACTIVATE", { wu_id: "WU1", mandate_id: "M1" })
   await commit("DISPATCH_RESERVE", { dispatch_id: "d1", reserved_seconds: 10 })
@@ -83,6 +86,17 @@ test("malformed or unsafe config fails closed instead of silently disabling the 
     await assert.rejects(loadProjectGovernance(root), /program must be a non-empty string/)
     await writeFile(join(root, "harness.config.json"), JSON.stringify({ governance: { epicClosureCommand: { program: "node", args: [1] } } }))
     await assert.rejects(loadProjectGovernance(root), /args must be an array of strings/)
+    await writeFile(join(root, "harness.config.json"), JSON.stringify({ governance: { epicClosureCmd: { program: "node" } } }))
+    await assert.rejects(loadProjectGovernance(root), /unknown key governance.epicClosureCmd/)
+    await writeFile(join(root, "harness.config.json"), JSON.stringify({ governance: { epicClosureCommand: null } }))
+    await assert.rejects(loadProjectGovernance(root), /cannot be null/)
+    await writeFile(join(root, "harness.config.json"), JSON.stringify({ governance: { epicClosureCommand: { program: "node", extra: 1 } } }))
+    await assert.rejects(loadProjectGovernance(root), /unknown key governance.epicClosureCommand.extra/)
+    const real = join(root, "real-config.json")
+    await writeFile(real, JSON.stringify({ governance: {} }))
+    await rm(join(root, "harness.config.json"), { force: true })
+    await symlink(real, join(root, "harness.config.json"))
+    await assert.rejects(loadProjectGovernance(root), /must be a regular file/)
   })
 })
 
@@ -98,6 +112,9 @@ test("closure gate runs in the project root with durable Epic and candidate iden
     assert.equal(receipt.epic_id, "EPIC-TEST")
     assert.equal(receipt.candidate_sha, sha("b"))
     assert.match(receipt.stdout_sha256, /^[a-f0-9]{64}$/)
+    assert.match(receipt.config_sha256, /^[a-f0-9]{64}$/)
+    assert.equal(receipt.timeout_ms, 30000)
+    assert.equal(receipt.stdout_tail, undefined)
     assert.ok(receipt.checked_at)
   })
 })
@@ -109,7 +126,8 @@ test("gate failures, missing identity and stale/mismatched candidates are reject
     const state = { mandate: { wu_sequence: ["WU1"] }, merges: { c1: { merge_commit_sha: sha("b") } }, pr_binding: { candidate_id: "c1", head_sha: sha("a") } }
     await assert.rejects(
       runProjectGovernanceGate({ projectRoot: root, phase: "closure", epicId: "EPIC-TEST", state, config: governance }),
-      (error) => error.code === "EPIC_CLOSURE_GATE_FAILED" && error.gate_receipt.exit_code === 1,
+      (error) => error.code === "EPIC_CLOSURE_GATE_FAILED" && error.gate_receipt.exit_code === 1 &&
+        typeof error.gate_diagnostic.stderr_tail === "string" && error.gate_receipt.stderr_tail === undefined,
     )
     await assert.rejects(
       runProjectGovernanceGate({ projectRoot: root, phase: "closure", epicId: null, state, config: governance }),
@@ -136,7 +154,6 @@ test("arguments are passed as argv, never interpreted by a shell", async () => {
     const governance = await loadProjectGovernance(root)
     const receipt = await runProjectGovernanceGate({ projectRoot: root, phase: "closure", epicId: "EPIC-TEST", state: { merge: { merge_commit_sha: sha("b") } }, config: governance })
     assert.equal(receipt.ok, true)
-    assert.equal(receipt.stdout_tail, payload)
     assert.equal(existsSync(join(root, "pwned")), false)
     assert.equal(existsSync(join(root, "pwned2")), false)
   })
@@ -226,4 +243,77 @@ test("activation gate runs on mandate approval and rejects a failing mandate", a
     )
     await assert.rejects(readFile(join(root, ".harness", "execution", "controller", "E2", "events.ndjson")), /ENOENT/)
   })
+})
+
+test("a closure gate approved with the mandate cannot be silently disabled later", async () => {
+  await withRoot(async (root) => {
+    await writeConfig(root, { epicClosureCommand: { program: "node", args: ["-e", CLOSURE_STATUS] } })
+    await completedExecution(root, { closureRequired: true })
+    // Simulate an agent removing/neutering the config after approval.
+    await writeConfig(root, {})
+    await assert.rejects(
+      runExecutionController(root, { action: "complete", execution_id: "E1", session_id: "root" }),
+      (error) => error.code === "EPIC_CLOSURE_GATE_DISABLED",
+    )
+  })
+})
+
+test("epic_id is bound to the approved Epic artifact", async () => {
+  await withRoot(async (root) => {
+    await writeConfig(root, { epicActivationCommand: { program: "node", args: ["-e", "process.exit(0)"], require_candidate_sha: false } })
+    await recordKnowledgeArtifact(root, {
+      artifact_type: "epic", artifact_id: "epic-001", title: "Test Epic",
+      content: 'test epic\n execution_mandate: {"max_wus":1,"total_seconds":100,"epic_id":"EPIC-A"}',
+      status: "APPROVED", owner_confirmed: true, source_refs: ["https://example.com/epic"],
+    })
+    await assert.rejects(
+      runExecutionController(root, { action: "approve_mandate", execution_id: "E1", session_id: "root", epic_artifact_id: "epic-001", epic_id: "EPIC-B" }),
+      /EPIC_ID_MISMATCH/,
+    )
+    const ok = await runExecutionController(root, { action: "approve_mandate", execution_id: "E1", session_id: "root", epic_artifact_id: "epic-001" })
+    assert.equal(ok.commit_status, "committed")
+    assert.equal((await events(root)).find((event) => event.operation_type === "MANDATE_APPROVE").body.epic_id, "EPIC-A")
+  })
+})
+
+test("placeholder typos and timeouts fail closed", async () => {
+  await withRoot(async (root) => {
+    await writeConfig(root, { epicClosureCommand: { program: "node", args: ["-e", "process.exit(0)", "{Epic_Id}"] } })
+    const bad = await loadProjectGovernance(root)
+    await assert.rejects(
+      runProjectGovernanceGate({ projectRoot: root, phase: "closure", epicId: "EPIC-TEST", state: { merge: { merge_commit_sha: sha("b") } }, config: bad }),
+      (error) => error.code === "EPIC_GATE_UNKNOWN_PLACEHOLDER",
+    )
+    await writeConfig(root, { epicClosureCommand: { program: "node", args: ["-e", "setTimeout(() => {}, 5000)"], timeout_ms: 50 } })
+    const slow = await loadProjectGovernance(root)
+    await assert.rejects(
+      runProjectGovernanceGate({ projectRoot: root, phase: "closure", epicId: "EPIC-TEST", state: { merge: { merge_commit_sha: sha("b") } }, config: slow }),
+      (error) => error.code === "EPIC_CLOSURE_GATE_FAILED" && error.gate_receipt.timed_out === true,
+    )
+  })
+})
+
+test("MANDATE_AMEND fills an absent epic_id once and never changes it", () => {
+  const event = (state, type, body) => ({
+    sequence: state.revision + 1, event_id: `e${state.revision + 1}`,
+    operation_id: `o${state.revision + 1}:${type}`, operation_type: type,
+    operation_hash: "h", body, previous_revision: state.revision,
+    next_revision: state.revision + 1, fencing_token: 1,
+    timestamp: "2026-01-01T00:00:00.000Z",
+  })
+  let state = initialState()
+  state = applyEvent(state, event(state, "MANDATE_APPROVE", {
+    mandate_id: "M", max_wus: 1, total_seconds: 100, authority_kind: "OWNER_APPROVED_EPIC",
+    source_artifact_id: "a", source_record_key: "r", source_hash: "h",
+  }))
+  const amend = (epicId) => event(state, "MANDATE_AMEND", {
+    mandate_id: "M", max_wus: 1, total_seconds: 100,
+    expected_merge_policy: "none", expected_required_ci_checks: [],
+    merge_policy: "none", required_ci_checks: [],
+    source_artifact_id: "a", source_record_key: "r", source_hash: "h",
+    epic_id: epicId,
+  })
+  state = applyEvent(state, amend("EPIC-A"))
+  assert.equal(state.mandate.epic_id, "EPIC-A")
+  assert.throws(() => applyEvent(state, amend("EPIC-B")), /cannot change an existing epic_id/)
 })

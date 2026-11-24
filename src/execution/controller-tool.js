@@ -48,7 +48,7 @@ import { applyEvent } from "./state.js"
 import { createExecutionController } from "./execution.js"
 import { createCandidateRegistry } from "./candidate-registry.js"
 import { readVerificationReceipt } from "./verification-results.js"
-import { loadProjectGovernance, runProjectGovernanceGate } from "./project-governance.js"
+import { governanceError, loadProjectGovernance, runProjectGovernanceGate } from "./project-governance.js"
 import { findApprovedProcessPolicy, findApprovedTimePolicy, findApprovedEpic, findApprovedWuBudgetAmendment, findApprovedAuthorityResolution, verifyDeclaredWorkUnits, readWorkUnitDefinition, findApprovedSoloDeliveryPolicy } from "../project-knowledge.js"
 import { DISPATCH_STATUS, RESERVATION_STATUS, MANDATE_AUTHORITY, RECOVERABLE_BLOCKER_CLASSES } from "./constants.js"
 
@@ -147,6 +147,9 @@ export async function runExecutionController(projectRoot, input, candidateRegist
       : await runProjectGovernanceGate({
           projectRoot, phase: "activation", epicId, executionId, mandateId, config: governance,
         })
+    const closureRequired = priorInit
+      ? Boolean(priorInit.body.governance_closure_required)
+      : Boolean(governance?.closure)
     const res = await commitAction(controller, holder, `${executionId}:mandate`, "MANDATE_APPROVE", {
       execution_id: `${executionId}:exec`,
       mandate_id: mandateId,
@@ -155,6 +158,7 @@ export async function runExecutionController(projectRoot, input, candidateRegist
       total_seconds: totalSeconds,
       authority_kind: MANDATE_AUTHORITY.PROBE,
       ...(epicId ? { epic_id: epicId } : {}),
+      ...(closureRequired ? { governance_closure_required: true } : {}),
       ...(activationReceipt ? { governance: activationReceipt } : {}),
     })
     return { action, commit_status: res.status, ...(activationReceipt ? { governance: activationReceipt } : {}), ...(await summary(controller)) }
@@ -170,15 +174,22 @@ export async function runExecutionController(projectRoot, input, candidateRegist
     }
     const mandateSnap = await controller.snapshot()
     const priorApproval = mandateSnap.events.find(e => e.operation_id === `${executionId}:mandate`)
-    const epicId = input.epic_id === undefined || input.epic_id === null
-      ? (mandateSnap.state.mandate?.epic_id ?? priorApproval?.body?.epic_id ?? null)
-      : String(input.epic_id)
+    const artifactEpicId = epic.mandate.epic_id ?? null
+    const requestedEpicId = input.epic_id === undefined || input.epic_id === null ? null : String(input.epic_id)
+    if (artifactEpicId && requestedEpicId && artifactEpicId !== requestedEpicId) {
+      throw new Error(`EPIC_ID_MISMATCH: the approved Epic artifact declares ${artifactEpicId}, not ${requestedEpicId}.`)
+    }
+    const epicId = requestedEpicId ?? artifactEpicId
+      ?? (mandateSnap.state.mandate?.epic_id ?? priorApproval?.body?.epic_id ?? null)
     const governance = priorApproval ? null : await loadProjectGovernance(projectRoot)
     const activationReceipt = priorApproval
       ? (priorApproval.body.governance ?? null)
       : await runProjectGovernanceGate({
           projectRoot, phase: "activation", epicId, executionId, mandateId, config: governance,
         })
+    const closureRequired = priorApproval
+      ? Boolean(priorApproval.body.governance_closure_required)
+      : Boolean(governance?.closure)
     const body = {
       ...(!priorApproval || priorApproval.body.time_policy ? { time_policy: priorApproval?.body.time_policy ?? PLANNING_ESTIMATES } : {}),
       execution_id: `${executionId}:exec`,
@@ -193,6 +204,7 @@ export async function runExecutionController(projectRoot, input, candidateRegist
       source_record_key: epic.record_key,
       source_hash: epic.sha256,
       ...(epicId ? { epic_id: epicId } : {}),
+      ...(closureRequired ? { governance_closure_required: true } : {}),
       ...(activationReceipt ? { governance: activationReceipt } : {}),
       ...(epic.mandate.wu_sequence?.length ? { wu_sequence: epic.mandate.wu_sequence } : {}),
     }
@@ -1071,6 +1083,12 @@ export async function runExecutionController(projectRoot, input, candidateRegist
       }
     }
     const governance = await loadProjectGovernance(projectRoot)
+    if (snap.state.mandate?.governance_closure_required && !governance.closure) {
+      throw governanceError(
+        "EPIC_CLOSURE_GATE_DISABLED",
+        "The mandate was approved with a closure gate, but harness.config.json no longer enables one. Restore the gate; do not close the Epic.",
+      )
+    }
     const closureReceipt = await runProjectGovernanceGate({
       projectRoot,
       phase: "closure",

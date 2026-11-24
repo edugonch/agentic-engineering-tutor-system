@@ -338,6 +338,9 @@ export function applyEvent(previous, event, { historicalReplay = false } = {}) {
         }
         state.mandate.epic_id = body.epic_id
       }
+      if (body.governance_closure_required !== undefined) {
+        state.mandate.governance_closure_required = Boolean(body.governance_closure_required)
+      }
       if (!MERGE_POLICIES.includes(state.mandate.merge_policy)) {
         throw new Error(`MANDATE_APPROVE: unknown merge_policy ${state.mandate.merge_policy}.`)
       }

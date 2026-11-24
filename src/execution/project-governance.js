@@ -18,7 +18,7 @@
 //
 // Projects without this file keep the previous behavior exactly.
 import { createHash } from "node:crypto"
-import { readFile } from "node:fs/promises"
+import { lstat, readFile } from "node:fs/promises"
 import { join } from "node:path"
 import process from "node:process"
 import { runCommand } from "./verification.js"
@@ -26,8 +26,10 @@ import { runCommand } from "./verification.js"
 export const PROJECT_GOVERNANCE_CONFIG = "harness.config.json"
 const MAX_TIMEOUT_MS = 86_400_000
 const DEFAULT_TIMEOUT_MS = 120_000
+const GOVERNANCE_KEYS = new Set(["epicActivationCommand", "epicClosureCommand"])
+const COMMAND_KEYS = new Set(["program", "args", "timeout_ms", "require_candidate_sha"])
 
-function governanceError(code, message, extra = {}) {
+export function governanceError(code, message, extra = {}) {
   const error = new Error(message)
   error.name = "HarnessGovernanceError"
   error.code = code
@@ -37,9 +39,17 @@ function governanceError(code, message, extra = {}) {
 }
 
 function normalizeCommand(raw, name, configPath) {
-  if (raw === undefined || raw === null) return null
+  if (raw === undefined) return null
+  if (raw === null) {
+    throw governanceError("EPIC_GATE_CONFIG_INVALID", `${PROJECT_GOVERNANCE_CONFIG}: governance.${name} cannot be null; omit the key to disable it.`, { config_path: configPath })
+  }
   if (typeof raw !== "object" || Array.isArray(raw)) {
     throw governanceError("EPIC_GATE_CONFIG_INVALID", `${PROJECT_GOVERNANCE_CONFIG}: governance.${name} must be an object.`, { config_path: configPath })
+  }
+  for (const key of Object.keys(raw)) {
+    if (!COMMAND_KEYS.has(key)) {
+      throw governanceError("EPIC_GATE_CONFIG_INVALID", `${PROJECT_GOVERNANCE_CONFIG}: unknown key governance.${name}.${key}.`, { config_path: configPath })
+    }
   }
   if (typeof raw.program !== "string" || raw.program.trim().length === 0) {
     throw governanceError("EPIC_GATE_CONFIG_INVALID", `${PROJECT_GOVERNANCE_CONFIG}: governance.${name}.program must be a non-empty string.`, { config_path: configPath })
@@ -52,6 +62,9 @@ function normalizeCommand(raw, name, configPath) {
   if (!Number.isSafeInteger(timeout) || timeout < 1 || timeout > MAX_TIMEOUT_MS) {
     throw governanceError("EPIC_GATE_CONFIG_INVALID", `${PROJECT_GOVERNANCE_CONFIG}: governance.${name}.timeout_ms must be a positive integer within 24 hours.`, { config_path: configPath })
   }
+  if (raw.require_candidate_sha !== undefined && typeof raw.require_candidate_sha !== "boolean") {
+    throw governanceError("EPIC_GATE_CONFIG_INVALID", `${PROJECT_GOVERNANCE_CONFIG}: governance.${name}.require_candidate_sha must be a boolean.`, { config_path: configPath })
+  }
   return {
     program: raw.program.trim(),
     args: [...args],
@@ -62,34 +75,46 @@ function normalizeCommand(raw, name, configPath) {
 
 // Reads and validates the optional project config. A missing file is the
 // explicit backward-compatible "no gates" state. A present-but-malformed file
-// fails closed so an editing mistake can never silently disable the gate.
+// (including unknown keys, explicit null commands or a symlink) fails closed so
+// an editing mistake can never silently disable the gate.
 export async function loadProjectGovernance(projectRoot) {
   const configPath = join(projectRoot, PROJECT_GOVERNANCE_CONFIG)
-  let text
+  let info
   try {
-    text = await readFile(configPath, "utf8")
+    info = await lstat(configPath)
   } catch (error) {
-    if (error?.code === "ENOENT") return { path: null, activation: null, closure: null }
+    if (error?.code === "ENOENT") return { path: null, sha256: null, activation: null, closure: null }
     throw governanceError("EPIC_GATE_CONFIG_UNREADABLE", `Cannot read ${PROJECT_GOVERNANCE_CONFIG}: ${error?.message ?? error}`, { config_path: configPath })
   }
+  if (!info.isFile() || info.isSymbolicLink()) {
+    throw governanceError("EPIC_GATE_CONFIG_INVALID", `${PROJECT_GOVERNANCE_CONFIG} must be a regular file, not a symlink or special file.`, { config_path: configPath })
+  }
+  const bytes = await readFile(configPath)
   let parsed
   try {
-    parsed = JSON.parse(text)
+    parsed = JSON.parse(bytes.toString("utf8"))
   } catch (error) {
     throw governanceError("EPIC_GATE_CONFIG_INVALID", `${PROJECT_GOVERNANCE_CONFIG} is not valid JSON: ${error?.message ?? error}`, { config_path: configPath })
   }
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     throw governanceError("EPIC_GATE_CONFIG_INVALID", `${PROJECT_GOVERNANCE_CONFIG} must contain a JSON object.`, { config_path: configPath })
   }
+  const sha256 = createHash("sha256").update(bytes).digest("hex")
   const governance = parsed.governance
-  if (governance === undefined || governance === null) {
-    return { path: configPath, activation: null, closure: null }
+  if (governance === undefined) {
+    return { path: configPath, sha256, activation: null, closure: null }
   }
-  if (typeof governance !== "object" || Array.isArray(governance)) {
+  if (!governance || typeof governance !== "object" || Array.isArray(governance)) {
     throw governanceError("EPIC_GATE_CONFIG_INVALID", `${PROJECT_GOVERNANCE_CONFIG}: governance must be an object.`, { config_path: configPath })
+  }
+  for (const key of Object.keys(governance)) {
+    if (!GOVERNANCE_KEYS.has(key)) {
+      throw governanceError("EPIC_GATE_CONFIG_INVALID", `${PROJECT_GOVERNANCE_CONFIG}: unknown key governance.${key}. A typo must not silently disable the gate.`, { config_path: configPath })
+    }
   }
   return {
     path: configPath,
+    sha256,
     activation: normalizeCommand(governance.epicActivationCommand, "epicActivationCommand", configPath),
     closure: normalizeCommand(governance.epicClosureCommand, "epicClosureCommand", configPath),
   }
@@ -114,7 +139,7 @@ export function resolveClosureCandidate(state) {
 }
 
 function expand(value, vars) {
-  return value.replace(/\{([a-z_]+)\}/g, (match, key) => {
+  const expanded = value.replace(/\{([a-z_]+)\}/g, (match, key) => {
     if (!Object.prototype.hasOwnProperty.call(vars, key)) {
       throw governanceError("EPIC_GATE_UNKNOWN_PLACEHOLDER", `Unknown governance command placeholder ${match}; supported: ${Object.keys(vars).sort().join(", ")}.`)
     }
@@ -124,10 +149,12 @@ function expand(value, vars) {
     }
     return String(resolved)
   })
-}
-
-function sha256(value) {
-  return createHash("sha256").update(value ?? "").digest("hex")
+  // A mistyped/case-mismatched placeholder must not be passed through literally.
+  const residual = expanded.match(/\{[^}]+\}/)
+  if (residual) {
+    throw governanceError("EPIC_GATE_UNKNOWN_PLACEHOLDER", `Unresolved governance command placeholder ${residual[0]}.`)
+  }
+  return expanded
 }
 
 function tail(value, limit = 4000) {
@@ -137,8 +164,8 @@ function tail(value, limit = 4000) {
 
 // Runs the configured gate for one phase. Returns an auditable receipt on
 // success, null when no gate is configured, and throws a fail-closed error
-// (carrying the receipt) when the command is missing a required input, cannot
-// start, times out or exits non-zero.
+// (carrying the receipt and a non-durable diagnostic) when the command is
+// missing a required input, cannot start, times out or exits non-zero.
 export async function runProjectGovernanceGate({
   projectRoot,
   phase,
@@ -148,10 +175,12 @@ export async function runProjectGovernanceGate({
   state = null,
   config,
 }) {
+  if (phase !== "activation" && phase !== "closure") {
+    throw governanceError("EPIC_GATE_PHASE_INVALID", `Unknown governance gate phase: ${phase}.`)
+  }
   if (!config) return null
   const command = phase === "activation" ? config.activation : config.closure
   if (!command) return null
-  if (phase !== "activation" && phase !== "closure") throw governanceError("EPIC_GATE_PHASE_INVALID", `Unknown governance gate phase: ${phase}.`)
   if (typeof epicId !== "string" || epicId.trim().length === 0) {
     throw governanceError("EPIC_GATE_MISSING_EPIC_ID", "The configured Epic governance gate requires a canonical epic_id on the mandate.")
   }
@@ -189,6 +218,7 @@ export async function runProjectGovernanceGate({
   const receipt = {
     gate: phase === "activation" ? "epic-activation" : "epic-closure",
     config_path: config.path,
+    config_sha256: config.sha256 ?? null,
     command: [program, ...args],
     epic_id: epicId,
     execution_id: executionId,
@@ -199,12 +229,13 @@ export async function runProjectGovernanceGate({
     final_wu_id: candidate.final_wu_id,
     exit_code: result.exitCode ?? null,
     timed_out: Boolean(result.timedOut),
+    truncated: Boolean(result.truncated),
     ok: Boolean(result.ok),
+    timeout_ms: command.timeout_ms,
+    require_candidate_sha: command.require_candidate_sha,
     duration_ms: result.durationMs ?? null,
-    stdout_sha256: sha256(result.stdout),
-    stderr_sha256: sha256(result.stderr),
-    stdout_tail: tail(result.stdout),
-    stderr_tail: tail(result.stderr),
+    stdout_sha256: createHash("sha256").update(result.stdout ?? "").digest("hex"),
+    stderr_sha256: createHash("sha256").update(result.stderr ?? "").digest("hex"),
     checked_at: checkedAt,
   }
   if (!result.ok) {
@@ -216,7 +247,13 @@ export async function runProjectGovernanceGate({
     throw governanceError(
       phase === "activation" ? "EPIC_ACTIVATION_GATE_FAILED" : "EPIC_CLOSURE_GATE_FAILED",
       `Epic ${phase} gate failed for ${epicId}: ${reason}.`,
-      { gate_receipt: receipt, next_safe_action: "Repair the project governance evidence; do not activate or complete the Epic until the gate passes." },
+      {
+        gate_receipt: receipt,
+        // Not persisted in the event body: diagnostics may contain operator
+        // environment details. Only the hashes above are durable.
+        gate_diagnostic: { stdout_tail: tail(result.stdout), stderr_tail: tail(result.stderr) },
+        next_safe_action: "Repair the project governance evidence; do not activate or complete the Epic until the gate passes.",
+      },
     )
   }
   return receipt
